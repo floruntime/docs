@@ -5,21 +5,10 @@ description: What is Flo and why it exists.
 
 Flo is a distributed runtime that unifies **streams**, **key-value storage**, **queues**, **time-series**, **durable actions**, and **workflow orchestration** in a single binary. Instead of stitching together separate systems for each concern, Flo provides all six as primitives over one Raft-replicated log — with a single connection, consistent durability, and zero integration overhead.
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│             Layer 3: Orchestration                          │
-│   Workflows · Plans · Signals · Timers                      │
-├─────────────────────────────────────────────────────────────┤
-│             Layer 2: Durable Execution + Processing         │
-│   Actions · Workers · Stream Processing · WASM Operators    │
-├─────────────────────────────────────────────────────────────┤
-│             Layer 1: Core Primitives                        │
-│   Streams · KV · Queues · Time-Series                       │
-├─────────────────────────────────────────────────────────────┤
-│             Layer 0: Unified Append Log + Raft Consensus    │
-│   The log IS the database                                   │
-└─────────────────────────────────────────────────────────────┘
-```
+- **Layer 3 — Orchestration**: Workflows
+- **Layer 2 — Execution**: Actions · Workers · Stream Processing · WASM Operators
+- **Layer 1 — Primitives**: Streams · KV · Queues · Time-Series
+- **Layer 0 — Foundation**: Unified Append Log · Raft Consensus
 
 ## Why Flo?
 

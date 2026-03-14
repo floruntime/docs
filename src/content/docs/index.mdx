@@ -1,0 +1,62 @@
+---
+title: Flo Documentation
+description: The Universal Distributed Runtime — Streams, KV, Queues, Time-Series, Actions, Workflows, and Stream Processing in a single binary.
+template: splash
+hero:
+  tagline: Streams, KV, Queues, Time-Series, Actions, Workflows, and Stream Processing — unified in a single binary. Thread-per-shard. Zero dependencies.
+  image:
+    dark: ../../assets/logo-dark.svg
+    light: ../../assets/logo-light.svg
+  actions:
+    - text: Get Started
+      link: /getting-started/introduction/
+      icon: right-arrow
+      variant: primary
+    - text: Install
+      link: /getting-started/installation/
+      variant: minimal
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+## Primitives
+
+<CardGrid>
+  <Card title="Key-Value" icon="pencil">
+    Hash-indexed KV with MVCC, TTL, and atomic operations.
+    [Read more →](/primitives/kv/)
+  </Card>
+  <Card title="Streams" icon="right-arrow">
+    Ordered append logs with consumer groups, offsets, and retention.
+    [Read more →](/primitives/streams/)
+  </Card>
+  <Card title="Queues" icon="list-format">
+    Priority queues with leases, dead-letter, and exactly-once delivery.
+    [Read more →](/primitives/queues/)
+  </Card>
+  <Card title="Time-Series" icon="seti:clock">
+    Columnar storage with FloQL and InfluxDB line protocol compatibility.
+    [Read more →](/primitives/time-series/)
+  </Card>
+</CardGrid>
+
+## Orchestration
+
+<CardGrid>
+  <Card title="Actions" icon="rocket">
+    Durable execution with automatic retries, timeouts, and dead-letter handling.
+    [Read more →](/orchestration/actions/)
+  </Card>
+  <Card title="Workers" icon="setting">
+    Long-running consumers that poll for action invocations and report results.
+    [Read more →](/orchestration/workers/)
+  </Card>
+  <Card title="Workflows" icon="random">
+    Multi-step orchestration with signals, timers, and circuit breakers.
+    [Read more →](/orchestration/workflows/)
+  </Card>
+  <Card title="Stream Processing" icon="bars">
+    Real-time stateful pipelines with windowing, checkpointing, and WASM operators.
+    [Read more →](/orchestration/processing/)
+  </Card>
+</CardGrid>

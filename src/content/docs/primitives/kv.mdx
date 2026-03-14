@@ -1,0 +1,460 @@
+---
+title: Key-Value
+description: Strongly consistent, versioned key-value storage with CAS, TTL, blocking gets, and namespace isolation.
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+Flo's KV store provides strongly consistent key-value storage backed by the Unified Append Log. Every write is Raft-replicated across the cluster before being acknowledged. Reads go directly to the local projection — no Raft round-trip, no cross-node hops for single-key lookups.
+
+## Core Concepts
+
+### Versioned Writes
+
+Every mutation to a key creates a new **version**. The version number is the Raft log index at which the write was committed. This means versions are globally ordered and monotonically increasing across all keys.
+
+Put responses include the new version number, which you can use for subsequent CAS updates:
+
+```bash
+flo kv set counter "1"           # → version=1
+flo kv set counter "2" --cas 1   # → version=2 (succeeds)
+flo kv set counter "3" --cas 1   # → error: Version mismatch
+```
+
+### Namespace Isolation
+
+Keys live inside **namespaces**. The default namespace is used when no `-n` flag is provided. Keys with the same name in different namespaces are fully independent — they have separate values, versions, and TTLs.
+
+```bash
+# Create namespaces
+flo ns create staging
+flo ns create production
+
+# Same key, different namespaces
+flo kv set db_url "postgres://staging" -n staging
+flo kv set db_url "postgres://prod"    -n production
+
+# Each returns its own value
+flo kv get db_url -n staging      # → postgres://staging
+flo kv get db_url -n production   # → postgres://prod
+```
+
+Deleting or overwriting a key in one namespace has no effect on the same key in other namespaces. Conditional flags like `--nx` are also per-namespace — a key can be "new" in one namespace while already existing in another.
+
+## Operations
+
+### Put
+
+```bash
+flo kv set mykey "hello world"
+```
+
+| Flag | Description |
+|------|-------------|
+| `--ttl <seconds>` | Expire after N seconds (0 = no expiry) |
+| `--nx` | Only set if the key does **not** already exist |
+| `--xx` | Only set if the key **does** already exist |
+| `--cas <version>` | Only set if the current version matches exactly |
+| `-n <namespace>` | Target namespace |
+| `-r <routing-key>` | Explicit shard routing key for co-location |
+
+`--nx` and `--xx` are mutually exclusive. `--cas` cannot be combined with `--nx`.
+
+**CAS version 0** has a special meaning: it asserts the key must not exist yet. This is equivalent to `--nx` but expressed as a version constraint.
+
+### Get
+
+```bash
+flo kv get mykey
+flo kv get mykey --format json   # includes version number
+```
+
+| Flag | Description |
+|------|-------------|
+| `--wait <ms>` | Wait until the key exists, then return (0 = wait forever) |
+| `--block <ms>` | Wait for the **next version change**, even if the key already exists (0 = forever) |
+| `--format <fmt>` | Output format: `json`, `table`, `raw` |
+| `-n <namespace>` | Target namespace |
+| `-r <routing-key>` | Explicit shard routing key |
+
+`--wait` and `--block` serve different purposes:
+
+- **`--wait`** is for coordination — one process creates a key, another waits for it to appear. If the key already exists, it returns immediately.
+- **`--block`** is for watching — subscribe to the next change on an existing key. Even if the key exists now, it waits for a newer version.
+
+```bash
+# Process A: wait for a result to appear
+flo kv get job:result --wait 30000
+
+# Process B: watch for config changes
+flo kv get config:feature-flags --block 0
+```
+
+### Delete
+
+```bash
+flo kv delete mykey
+```
+
+Aliases: `del`. Deleting a non-existent key returns a not-found error.
+
+| Flag | Description |
+|------|-------------|
+| `-n <namespace>` | Target namespace |
+| `-r <routing-key>` | Explicit shard routing key |
+
+### List / Scan
+
+```bash
+flo kv list                      # all keys
+flo kv list --prefix "user:"     # prefix filter
+flo kv list --limit 50           # cap results
+```
+
+Aliases: `ls`, `scan`.
+
+| Flag | Description |
+|------|-------------|
+| `--prefix <p>` / `-p` | Filter by key prefix |
+| `--limit <n>` / `-l` | Max keys to return (default: 100, max: 1,000) |
+| `-n <namespace>` | Target namespace |
+
+List walks **all shards** — keys are returned regardless of which shard they hash to. The prefix filter is applied on each shard locally before results are merged.
+
+### Version History
+
+```bash
+flo kv history mykey
+flo kv history mykey --limit 5
+```
+
+Aliases: `hist`. Returns previous values with version numbers and timestamps. History for a non-existent key returns an error.
+
+| Flag | Description |
+|------|-------------|
+| `--limit <n>` / `-l` | Max entries (default: 10) |
+| `-n <namespace>` | Target namespace |
+
+Flo maintains a bounded version chain per key (default depth: 64). Oldest versions are evicted when the chain is full. Deletes create tombstone entries — prior versions remain queryable through history even after deletion.
+
+## TTL (Time-to-Live)
+
+Set an expiration on keys:
+
+```bash
+flo kv set session:abc '{"user":"alice"}' --ttl 3600
+```
+
+The key expires 3600 seconds after the write. Expired keys return `(nil)` on get, as if they were never written. Setting `--ttl 0` explicitly means "no expiration."
+
+Overwriting a key **resets its TTL**. If you set a key with `--ttl 60` and then overwrite it without a TTL flag, the new value has no expiration:
+
+```bash
+flo kv set temp "short-lived" --ttl 5   # expires in 5s
+flo kv set temp "permanent"             # TTL cleared
+```
+
+TTL combines with conditional flags. A common pattern is `--ttl` + `--nx` for "set once with expiry":
+
+```bash
+flo kv set lock:resource "owner-1" --ttl 30 --nx
+```
+
+Expiry is **lazy** — keys are checked at read time rather than proactively swept. This means expired keys don't consume I/O until accessed.
+
+## Compare-and-Swap (CAS)
+
+CAS enables optimistic concurrency control. Read the current version, then conditionally write only if nobody else has modified the key since:
+
+```bash
+# Step 1: read current value and version
+flo kv get counter --format json
+# {"key":"counter","value":"41","version":7}
+
+# Step 2: update only if version is still 7
+flo kv set counter "42" --cas 7
+```
+
+If another writer updated the key between your read and write, the CAS fails with "Version mismatch" and the original value is preserved.
+
+**CAS guarantees hold across the cluster.** You can read the version from one node and CAS-update from another — the version is the Raft log index, which is globally consistent.
+
+## Shard Co-location
+
+By default, each key is routed to a shard based on its hash. When you need related keys to land on the same shard (for locality or future atomic operations), use `--routing-key`:
+
+```bash
+flo kv set user:123:name "Alice" -r "user:123"
+flo kv set user:123:email "alice@co.io" -r "user:123"
+flo kv set user:123:prefs '{"theme":"dark"}' -r "user:123"
+```
+
+All three keys route to the same shard because they share the routing key `user:123`.
+
+## Cluster Behavior
+
+In a multi-node cluster:
+
+- **Writes** are proposed to the Raft leader and replicated to a majority before being acknowledged.
+- **Reads** are served from the local shard's projection — no Raft round-trip needed.
+- **Data replicates** to all nodes. A key written on node 1 is readable from node 2 and node 3 after replication.
+- **Node failures** are tolerated as long as a majority (quorum) of nodes remain healthy. A 3-node cluster survives 1 node failure.
+- **CAS and conditional writes** are consistent across the cluster — the version check happens at the leader during Raft proposal.
+
+## SDK Examples
+
+<Tabs>
+<TabItem label="Go">
+```go
+client := flo.NewClient("localhost:9000")
+client.Connect()
+defer client.Close()
+
+// Put
+client.KV.Put("mykey", []byte("hello"), nil)
+
+// Put with TTL
+ttl := uint64(3600)
+client.KV.Put("session:abc", []byte(`{"user":"alice"}`), &flo.PutOptions{
+    TTLSeconds: &ttl,
+})
+
+// Get
+value, _ := client.KV.Get("session:abc", nil)
+
+// CAS update — read version, then conditional write
+version := uint64(7)
+err := client.KV.Put("counter", []byte("42"), &flo.PutOptions{
+    CASVersion: &version,
+})
+if flo.IsConflict(err) {
+    // Another writer modified the key — re-read and retry
+}
+
+// Conditional write (only if key doesn't exist)
+client.KV.Put("lock:resource", []byte("owner-1"), &flo.PutOptions{
+    IfNotExists: true,
+    TTLSeconds:  ptr(uint64(30)),
+})
+
+// Blocking get — wait for key to appear
+blockMS := uint32(5000)
+value, _ = client.KV.Get("job:result", &flo.GetOptions{BlockMS: &blockMS})
+
+// Prefix scan with pagination
+result, _ := client.KV.Scan("user:", &flo.ScanOptions{Limit: ptr(uint32(100))})
+for _, entry := range result.Entries {
+    fmt.Printf("%s = %s\n", entry.Key, entry.Value)
+}
+
+// Version history
+history, _ := client.KV.History("counter", &flo.HistoryOptions{Limit: ptr(uint32(5))})
+for _, v := range history {
+    fmt.Printf("v%d: %s (at %d)\n", v.Version, v.Value, v.Timestamp)
+}
+
+// Namespace-scoped operations
+client.KV.Put("config", []byte("staging-db"), &flo.PutOptions{
+    Namespace: "staging",
+})
+value, _ = client.KV.Get("config", &flo.GetOptions{Namespace: "staging"})
+```
+</TabItem>
+<TabItem label="Python">
+```python
+async with FloClient("localhost:9000") as client:
+    # Put
+    await client.kv.put("mykey", b"hello")
+
+    # Put with TTL
+    await client.kv.put("session:abc", b'{"user":"alice"}',
+        PutOptions(ttl_seconds=3600))
+
+    # Get
+    value = await client.kv.get("session:abc")
+
+    # CAS update
+    try:
+        await client.kv.put("counter", b"42", PutOptions(cas_version=7))
+    except ConflictError:
+        pass  # re-read and retry
+
+    # Conditional write
+    await client.kv.put("lock:resource", b"owner-1",
+        PutOptions(if_not_exists=True, ttl_seconds=30))
+
+    # Blocking get
+    value = await client.kv.get("job:result", GetOptions(block_ms=5000))
+
+    # Prefix scan
+    result = await client.kv.scan("user:", ScanOptions(limit=100))
+    for entry in result.entries:
+        print(f"{entry.key}: {entry.value}")
+
+    # Version history
+    history = await client.kv.history("counter", HistoryOptions(limit=5))
+    for v in history:
+        print(f"v{v.version}: {v.value}")
+
+    # Namespace-scoped
+    await client.kv.put("config", b"staging-db",
+        PutOptions(namespace="staging"))
+```
+</TabItem>
+<TabItem label="JavaScript">
+```typescript
+const client = new FloClient("localhost:9000");
+await client.connect();
+
+// Put
+await client.kv.put("mykey", encode("hello"));
+
+// Put with TTL
+await client.kv.put("session:abc", encode('{"user":"alice"}'), {
+  ttlSeconds: 3600n,
+});
+
+// CAS update
+try {
+  await client.kv.put("counter", encode("42"), { casVersion: 7n });
+} catch (err) {
+  // ConflictError — re-read and retry
+}
+
+// Conditional write
+await client.kv.put("lock:resource", encode("owner-1"), {
+  ifNotExists: true,
+  ttlSeconds: 30n,
+});
+
+// Blocking get
+const value = await client.kv.get("job:result", { blockMs: 5000 });
+
+// Prefix scan
+const result = await client.kv.scan("user:", { limit: 100 });
+for (const entry of result.entries) {
+  console.log(`${entry.key} = ${entry.value}`);
+}
+
+// Version history
+const history = await client.kv.history("counter", { limit: 5 });
+
+// Namespace-scoped
+await client.kv.put("config", encode("staging-db"), {
+  namespace: "staging",
+});
+```
+</TabItem>
+<TabItem label="Zig">
+```zig
+var client = flo.Client.init(allocator, "localhost:9000", .{});
+defer client.deinit();
+try client.connect();
+
+var kv = flo.KV.init(&client);
+
+// Put
+try kv.put("mykey", "hello", .{});
+
+// Put with TTL
+try kv.put("session:abc", "{\"user\":\"alice\"}", .{ .ttl_seconds = 3600 });
+
+// Get
+if (try kv.get("session:abc", .{})) |value| {
+    defer allocator.free(value);
+    std.debug.print("Got: {s}\n", .{value});
+}
+
+// CAS update
+kv.put("counter", "42", .{ .cas_version = 7 }) catch |err| switch (err) {
+    error.Conflict => {}, // re-read and retry
+    else => return err,
+};
+
+// Conditional write
+try kv.put("lock:resource", "owner-1", .{
+    .if_not_exists = true,
+    .ttl_seconds = 30,
+});
+
+// Blocking get
+if (try kv.get("job:result", .{ .block_ms = 5000 })) |value| {
+    defer allocator.free(value);
+}
+
+// Prefix scan
+var result = try kv.scan("user:", .{ .limit = 100 });
+defer result.deinit();
+
+// Version history
+var history = try kv.history("counter", .{ .limit = 5 });
+defer history.deinit();
+
+// Namespace-scoped
+try kv.put("config", "staging-db", .{ .namespace = "staging" });
+```
+</TabItem>
+</Tabs>
+
+## Use Cases
+
+### Distributed Locks
+
+Use `--nx` with `--ttl` as a simple distributed lock with automatic expiry:
+
+```bash
+# Acquire lock (fails if already held)
+flo kv set lock:payment "worker-7" --ttl 30 --nx
+
+# Release lock
+flo kv delete lock:payment
+```
+
+The TTL acts as a safety net — if the lock holder crashes, the lock auto-expires.
+
+### Configuration Store
+
+Store configuration per environment using namespaces, and watch for changes with `--block`:
+
+```bash
+# Set config
+flo kv set feature:dark-mode "true" -n production
+
+# Watch for config changes (long-poll)
+flo kv get feature:dark-mode --block 0 -n production
+```
+
+### Job Coordination
+
+Use `--wait` for producer/consumer coordination where one process publishes a result and another waits for it:
+
+```bash
+# Worker: process job and publish result
+flo kv set job:abc:result '{"status":"done","output":"..."}' --ttl 3600
+
+# Requester: wait for result (up to 60 seconds)
+flo kv get job:abc:result --wait 60000
+```
+
+## Internals
+
+The KV store is implemented as a **KV Projection** — a hash table with MVCC version chains, derived from the Unified Append Log.
+
+| Property | Value |
+|----------|-------|
+| Max key size | ~3.9 KB |
+| Max value size | ~256 KB |
+| Max namespace length | 128 bytes |
+| Version chain depth | 64 versions per key (oldest evicted) |
+| Default scan limit | 100 (max: 1,000) |
+| Reserved key prefixes | `_action:`, `_worker:`, `_sys:`, `_internal:`, `_flo:` |
+
+**Write path**: `kv_put` → Raft propose → majority commit → UAL append → KV projection update → response to client.
+
+**Read path**: `kv_get` → KV projection lookup → response. No Raft involvement.
+
+**Recovery**: On server restart, the projection is rebuilt by replaying UAL entries from the last snapshot. Read-after-write consistency is immediate after recovery — there is no warm-up period.
+
+**TTL enforcement**: Lazy — expired keys are detected at read time rather than proactively swept. This avoids background I/O for expiry.
+
+**Tombstones**: Deletes write a tombstone entry to the UAL. Prior versions remain in the version chain and are queryable via `history`. Tombstones are purged during compaction.

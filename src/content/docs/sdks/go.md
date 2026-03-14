@@ -179,16 +179,19 @@ client.Stream.Append("events", []byte(`{"event":"click"}`), nil)
 records, _ := client.Stream.Read("events", nil)
 
 // Consumer groups
-records, _ = client.Stream.GroupRead("events", &flo.GroupReadOptions{
-    Group: "processors", Consumer: "worker-1", Count: 10,
-})
-client.Stream.GroupAck("events", "processors", offsets)
+count := uint32(10)
+records, _ = client.Stream.GroupRead("events", "processors", "worker-1",
+    &flo.StreamGroupReadOptions{Count: &count},
+)
+client.Stream.GroupAck("events", "processors", []flo.StreamID{
+    {Sequence: 1, TimestampMS: 1700000000000},
+}, nil)
 ```
 
 ## Worker Pattern
 
 ```go
-w, _ := client.NewWorker(flo.WorkerOptions{Concurrency: 10})
+w, _ := client.NewActionWorker(flo.ActionWorkerOptions{Concurrency: 10})
 defer w.Close()
 
 w.MustRegisterAction("process-order", func(actx *flo.ActionContext) ([]byte, error) {

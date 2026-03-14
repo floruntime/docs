@@ -1,0 +1,518 @@
+---
+title: Streams
+description: Append-only commit log with Stream IDs, consumer groups, partitioning, tiered storage, and blocking reads.
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+Flo streams are append-only, ordered logs of records backed by the Unified Append Log. Every append is Raft-replicated before being acknowledged. There is no separate stream projection — reading a stream is reading UAL entries directly, making it zero-copy and the fastest primitive.
+
+Streams are the foundation of event sourcing, activity feeds, change data capture, and real-time data pipelines.
+
+## Core Concepts
+
+### Stream IDs
+
+Every record in a stream is identified by a **Stream ID** — a composite `<timestamp_ms>-<sequence>` value:
+
+- **timestamp_ms**: Unix milliseconds when the record was appended
+- **sequence**: Counter within the same millisecond (0-indexed)
+- Example: `1703350800000-0`, `1703350800000-1`, `1703350801000-0`
+
+Stream IDs are **monotonically increasing**. If the system clock goes backward, the previous timestamp is reused and the sequence increments — guaranteeing ordering without coordination.
+
+Special values:
+- `0-0` — the very beginning of the stream
+- `$` — the current tail (only future records)
+
+### Namespace Isolation
+
+Streams live inside **namespaces**. The default namespace is used when no `-n` flag is provided. The same stream name in different namespaces is fully independent — separate records, separate consumer groups, separate metadata.
+
+```bash
+flo ns create staging
+flo ns create production
+
+flo stream append events '{"env":"staging"}' -n staging
+flo stream append events '{"env":"prod"}' -n production
+
+# Each namespace sees only its own records
+flo stream read events --limit 10 -n staging
+flo stream read events --limit 10 -n production
+
+# Consumer groups are also namespace-scoped
+flo stream group create events --group workers -n staging
+flo stream group create events --group workers -n production
+```
+
+### Partitioning
+
+Streams can have multiple **partitions** for parallel throughput. When you create a stream with `--partitions N`, each partition is an independent ordered log.
+
+```bash
+# Create a 4-partition stream
+flo stream create orders --partitions 4
+```
+
+**Routing records to partitions:**
+
+- **Explicit partition**: `--partition 2` sends to partition 2 directly
+- **Partition key**: `--partition-key alice` hashes the key to a deterministic partition (Wyhash). All records with the same key land on the same partition, preserving per-key ordering.
+- **No flag**: defaults to partition 0
+
+```bash
+# Explicit partition
+flo stream append orders '{"id":1}' --partition 2
+
+# Partition key — all alice events on the same partition
+flo stream append orders '{"user":"alice"}' --partition-key alice
+flo stream append orders '{"user":"alice"}' --partition-key alice  # same partition
+
+# Different key may route to a different partition
+flo stream append orders '{"user":"bob"}' --partition-key bob
+```
+
+**Reading from partitions:**
+
+```bash
+# Read only partition 1
+flo stream read orders --partition 1
+
+# Read using the same partition key (resolves to the same partition)
+flo stream read orders --partition-key alice
+
+# Bare read without --partition or --partition-key reads ALL partitions
+flo stream read orders --limit 20
+```
+
+A bare `stream read` without partition flags returns records from **all partitions** merged together. This matches industry-standard behavior (Kafka, Redpanda, Pulsar).
+
+## Operations
+
+### Append
+
+```bash
+# Single record
+flo stream append events '{"type":"signup","user":"alice"}'
+
+# Batch append (multiple payloads in one request)
+flo stream append events 'event-a' 'event-b' 'event-c'
+
+# With headers
+flo stream append events '{"type":"login"}' -H source=web -H trace-id=abc123
+
+# To a specific partition
+flo stream append events '{"type":"login"}' --partition 2
+
+# With partition key routing
+flo stream append events '{"type":"login"}' --partition-key alice
+
+# JSON output (returns the Stream ID)
+flo stream append events 'hello' --json
+```
+
+The response includes the assigned Stream ID (e.g., `1703350800000-0`).
+
+### Read
+
+```bash
+# From the beginning
+flo stream read events --start 0-0 --limit 10
+
+# From a specific Stream ID
+flo stream read events --start 1703350800000-0 --limit 50
+
+# Bounded range (inclusive on both ends)
+flo stream read events --start 1703350800000-0 --end 1703350815000-0
+
+# JSON output (includes id, payload, tier, partition fields)
+flo stream read events --limit 10 --json
+```
+
+The default limit is 10. Maximum is 1000 per request.
+
+### Blocking Reads
+
+Blocking reads wait for new data instead of returning empty results immediately.
+
+```bash
+# Block up to 5 seconds for new records
+flo stream read events --block 5000 --start 0-0 --limit 5
+
+# Block forever (0 = infinite timeout)
+flo stream read events --block 0 --start 0-0 --limit 5
+
+# Block for new records from the tail only (skip existing data)
+flo stream read events --block 5000 --start '$' --limit 5
+```
+
+If matching data already exists, the blocking read returns immediately. If no data arrives within the timeout, it returns an empty (but successful) result.
+
+### Follow Mode
+
+Follow mode is a continuous tail — it keeps reading as new records arrive, like `tail -f`.
+
+```bash
+# Follow from the beginning (prints existing + new records)
+flo stream read events --follow --start 0-0
+
+# Follow from the tail (new records only)
+flo stream read events --follow --start '$'
+```
+
+`--follow` implies a blocking timeout and loops internally. It runs until interrupted.
+
+### Create
+
+Streams are auto-created on first append. Explicit creation is only needed when you want multiple partitions or custom retention up front.
+
+```bash
+flo stream create events                     # 1 partition (default)
+flo stream create events --partitions 4      # 4 partitions
+flo stream create events --retention 72      # 72-hour retention
+```
+
+### Info
+
+```bash
+flo stream info events
+flo stream info events --json
+```
+
+Returns stream metadata: name, partition count, first/last Stream IDs, record count.
+
+### List
+
+```bash
+flo stream ls
+flo stream ls --limit 50 --json
+```
+
+### Trim
+
+Remove old records to reclaim storage.
+
+```bash
+# Keep only the last 10,000 records
+flo stream trim events --maxlen 10000
+
+# Remove records before a specific Stream ID
+flo stream trim events --before 1703350800000-0
+
+# Remove records older than 1 hour
+flo stream trim events --maxage 3600
+
+# Trim to a byte budget
+flo stream trim events --maxbytes 1073741824
+
+# Preview what would be trimmed (no changes made)
+flo stream trim events --maxlen 10000 --dry-run
+```
+
+## Consumer Groups
+
+Consumer groups allow multiple consumers to process a stream cooperatively. Each record is delivered to **exactly one** consumer in the group. The server tracks a **Pending Entry List (PEL)** — records that have been delivered but not yet acknowledged.
+
+### Lifecycle
+
+```bash
+# Create a group explicitly (optional — group read auto-creates)
+flo stream group create events --group processors
+
+# Join a consumer to the group
+flo stream group join events processors worker-1
+
+# Read records (auto-creates group and joins consumer if needed)
+flo stream group read events --group processors --consumer worker-1 --limit 10
+
+# Acknowledge processed records
+flo stream group ack events --group processors --consumer worker-1 \
+  --ids 1703350800000-0,1703350800000-1
+
+# Leave the group
+flo stream group leave events --group processors --consumer worker-1
+
+# Delete the entire group
+flo stream group delete events --group processors
+```
+
+### Acknowledgment
+
+Records delivered via `group read` are placed in the PEL. They must be acknowledged to advance the cursor. Unacknowledged records will be redelivered.
+
+```bash
+# Ack specific IDs (comma-separated)
+flo stream group ack events --group processors --consumer worker-1 \
+  --ids 1703350800000-0,1703350800000-1
+
+# Read with auto-ack — no PEL tracking (at-most-once delivery)
+flo stream group read events --group processors --consumer worker-1 --no-ack
+```
+
+### Redelivery and Nack
+
+If processing fails, you can explicitly nack records to put them back in the delivery pool:
+
+```bash
+# Nack — make records available for redelivery immediately
+flo stream group nack events --group processors --consumer worker-1 \
+  --ids 1703350800000-0
+
+# Nack with delay — records become visible again after 5 seconds
+flo stream group nack events --group processors --consumer worker-1 \
+  --ids 1703350800000-0 --delay 5000
+```
+
+The group can also auto-redeliver if the consumer doesn't ack within a deadline:
+
+```bash
+# Auto-redeliver after 30 seconds of no ack
+flo stream group create events --group processors --ack-timeout 30000
+
+# Give up after 5 delivery attempts (records go to DLQ)
+flo stream group create events --group processors --max-deliver 5
+```
+
+### Extending Delivery Deadlines
+
+If a consumer needs more time to process a record, it can extend the ack deadline:
+
+```bash
+# Extend the deadline by 60 seconds
+flo stream group touch events --group processors --consumer worker-1 \
+  --ids 1703350800000-0 --extend 60000
+```
+
+### Inspecting Pending State
+
+```bash
+# List all pending (delivered but unacked) records for a group
+flo stream group pending events --group processors
+
+# Group metadata (consumer count, PEL size, last delivered ID)
+flo stream group info events --group processors
+```
+
+### Consumer Modes
+
+Groups support three delivery modes, set at creation time:
+
+| Mode | Behavior |
+|------|----------|
+| `shared` (default) | Records distributed round-robin across all consumers |
+| `exclusive` | One active consumer holds the lease; others are standbys |
+| `key_shared` | Records with the same key always go to the same consumer |
+
+```bash
+# Shared mode (default)
+flo stream group create events --group processors --mode shared
+
+# Exclusive — one active consumer, others wait
+flo stream group create events --group processors --mode exclusive
+
+# Singleton — exclusive with zero standbys allowed
+flo stream group create events --group processors --mode exclusive --max-standbys 0
+
+# Key-shared — partition by key across consumers
+flo stream group create events --group processors --mode key_shared --slots 16
+```
+
+## SDK Examples
+
+<Tabs>
+<TabItem label="Go">
+```go
+client := flo.NewClient("localhost:9000")
+client.Connect()
+defer client.Close()
+
+// Append
+result, _ := client.Stream.Append("events", []byte(`{"event":"signup"}`), nil)
+
+// Read from beginning
+records, _ := client.Stream.Read("events", &flo.StreamReadOptions{
+    Start: &flo.StreamID{TimestampMS: 0, Sequence: 0},
+    Count: ptr(uint32(10)),
+})
+for _, rec := range records.Records {
+    fmt.Printf("id=%d-%d: %s\n", rec.ID.TimestampMS, rec.ID.Sequence, rec.Payload)
+}
+
+// Blocking read
+records, _ = client.Stream.Read("events", &flo.StreamReadOptions{
+    Tail:    true,
+    BlockMS: ptr(uint32(5000)),
+    Count:   ptr(uint32(10)),
+})
+
+// Consumer group
+records, _ = client.Stream.GroupRead("events", "processors", "worker-1",
+    &flo.StreamGroupReadOptions{
+        Count:   ptr(uint32(10)),
+        BlockMS: ptr(uint32(30000)),
+    },
+)
+// ... process records ...
+ids := make([]flo.StreamID, len(records.Records))
+for i, rec := range records.Records {
+    ids[i] = rec.ID
+}
+client.Stream.GroupAck("events", "processors", ids, &flo.StreamGroupAckOptions{
+    Consumer: "worker-1",
+})
+```
+</TabItem>
+<TabItem label="Python">
+```python
+async with FloClient("localhost:9000") as client:
+    # Append
+    result = await client.stream.append("events", b'{"event":"signup"}')
+    print(f"Appended at {result.id.timestamp_ms}-{result.id.sequence}")
+
+    # Read from beginning
+    result = await client.stream.read("events", StreamReadOptions(
+        start=StreamID(0, 0),
+        count=10,
+    ))
+    for record in result.records:
+        print(f"id={record.id}: {record.payload}")
+
+    # Blocking read from tail
+    result = await client.stream.read("events", StreamReadOptions(
+        tail=True,
+        block_ms=5000,
+        count=10,
+    ))
+
+    # Consumer group
+    result = await client.stream.group_read(
+        "events", "processors", "worker-1",
+        StreamGroupReadOptions(count=10, block_ms=30000),
+    )
+    await client.stream.group_ack(
+        "events", "processors",
+        [r.id for r in result.records],
+        StreamGroupAckOptions(consumer="worker-1"),
+    )
+```
+</TabItem>
+<TabItem label="JavaScript">
+```typescript
+const client = new FloClient("localhost:9000");
+await client.connect();
+
+// Append
+const result = await client.stream.append(
+  "events", encode('{"event":"signup"}')
+);
+
+// Read from beginning
+const records = await client.stream.read("events", {
+  start: StreamID.fromTimestamp(0n),
+  limit: 10,
+});
+for (const rec of records.records) {
+  console.log(`id=${rec.id}: ${decode(rec.payload)}`);
+}
+
+// Blocking read from tail
+const newRecords = await client.stream.read("events", {
+  tail: true,
+  blockMs: 5000,
+  limit: 10,
+});
+
+// Consumer group
+const groupRecords = await client.stream.groupRead("events", {
+  group: "processors",
+  consumer: "worker-1",
+  limit: 10,
+  blockMs: 30000,
+});
+await client.stream.groupAck(
+  "events",
+  groupRecords.records.map(r => r.id),
+  { group: "processors", consumer: "worker-1" },
+);
+```
+</TabItem>
+<TabItem label="Zig">
+```zig
+var client = flo.Client.init(allocator, "localhost:9000", .{});
+defer client.deinit();
+try client.connect();
+
+var stream = flo.Stream.init(&client);
+
+// Append
+const result = try stream.append("events", "{\"event\":\"signup\"}", .{});
+
+// Read from beginning
+var records = try stream.read("events", .{
+    .start = .{ .timestamp_ms = 0, .sequence = 0 },
+    .count = 10,
+});
+defer records.deinit();
+for (records.records) |rec| {
+    std.debug.print("id={d}-{d}: {s}\n", .{ rec.id.timestamp_ms, rec.id.sequence, rec.payload });
+}
+
+// Consumer group
+var group_records = try stream.groupRead("events", "processors", "worker-1", .{
+    .count = 10,
+    .block_ms = 5000,
+});
+defer group_records.deinit();
+try stream.groupAck("events", "processors", group_records.ids(), .{
+    .consumer = "worker-1",
+});
+```
+</TabItem>
+</Tabs>
+
+## Reading Modes
+
+| Mode | CLI Flag | Behavior |
+|------|----------|----------|
+| From beginning | `--start 0-0` | Returns all records in order |
+| From ID | `--start <id>` | Returns records starting at (or after) the given Stream ID |
+| Range | `--start <id> --end <id>` | Bounded range, inclusive on both ends |
+| Tail | `--start '$'` | Only records appended after the read begins |
+| Blocking | `--block <ms>` | Waits up to `<ms>` for new data (0 = forever) |
+| Follow | `--follow` | Continuous tail — keeps reading as new records arrive |
+| Partition | `--partition <n>` | Reads from a specific partition only |
+| Partition key | `--partition-key <key>` | Reads from the partition that key hashes to |
+| JSON output | `--json` | Machine-readable output with `id`, `payload`, `tier`, `partition` fields |
+
+## Tiered Storage
+
+Stream data flows through a tiered storage hierarchy automatically:
+
+| Tier | Location | Purpose |
+|------|----------|---------|
+| **Hot** | In-memory ring buffer | Recent writes, lowest latency |
+| **Warm** | On-disk segments | Overflowed from hot tier, still fast |
+| **Cold** | External backend (file, S3, Azure) | Archival storage |
+
+When you read with `--json`, each record includes a `"tier"` field indicating where it was served from. Reads are transparent — the server merges results across tiers automatically.
+
+The thresholds for spilling between tiers are configurable per server (hot buffer capacity, max hot entries). Cold storage can be enabled with file or cloud backends.
+
+## Durability
+
+- All appends are Raft-replicated before acknowledgment
+- Stream data, consumer group offsets, and pending state all survive server restarts
+- After restart, new appends continue with monotonically increasing Stream IDs (no duplicates, no gaps)
+- Immediate consistency — a read right after restart returns all pre-restart data
+
+## How It Works
+
+Stream records are UAL entries with `opcode = stream_append`. Reading a stream is reading a range of UAL entries filtered by stream name hash — there is no separate data structure.
+
+- Record IDs are derived from append wall-clock time plus sequence
+- Zero-copy reads — no derived state, no projection overhead
+- Consumer group state (cursors, PEL, mode) is managed per-shard
+- Partition routing uses Wyhash on the partition key or explicit index
+- Blocking reads register waiters that are notified on append
+
+See [Storage Internals](/architecture/storage/) for details.

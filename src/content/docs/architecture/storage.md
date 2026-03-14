@@ -80,10 +80,13 @@ Consumer group offsets are stored as KV entries (prefixed with `cg:`), so the KV
 
 ### Time-Series Projection
 
-- **Write buffers** — per-series, per-field in-memory buffers (flush at 1024 points or 10 seconds)
-- **Columnar block files** (`.floc`) — timestamps and values stored column-wise for compression and vectorized aggregation
-- **Block index** — maps `(series_hash, field_hash, time_range)` → `(file_id, offset, size)`
+TS data has **no dedicated disk files**. All `ts_write` entries are appended to the shared UAL (same `.flseg` segments as KV, queue, and stream data).
+
+- **Write buffers** — per-series, per-field in-memory buffers (1024 points capacity)
+- **Block index** — in-memory metadata: min/max timestamp, point count, UAL index range
 - Series metadata lives in KV projection under `_ts:meta:*` keys
+
+When a write buffer fills, `flushBuffer()` records a block metadata entry (timestamps + UAL index range) and **discards the raw points**. Reconstructing historical block data requires replaying the UAL in `[ual_index_start..ual_index_end]`. This means hot reads (from the write buffer) are fast, while cold reads (from flushed blocks) require UAL replay.
 
 ### Projection Router
 
@@ -179,19 +182,42 @@ Each shard gets a fixed memory budget. Default split for a 2 GB shard:
 ## Directory Layout
 
 ```
-data/{shard_id}/
-├── uat/{partition_id}/
-│   ├── head.ual                    # Active write buffer
-│   ├── seg-{first_index}.flseg     # Sealed warm segments
-│   └── MANIFEST
-├── snapshots/{partition_id}/
-│   ├── snap-{idx}-{ts}.fsnap
-│   └── MANIFEST
-├── ts/{partition_id}/
-│   └── col-{file_id}.floc          # Columnar TS block files
-├── cold/
-│   └── MANIFEST                    # Cold segment inventory
-└── raft_meta                       # 64 bytes: term, voted_for, node_id
+{data_dir}/
+├── SYSTEM                              # Topology lock (shards, partitions, version)
+├── 00000/                              # Shard 0 (zero-padded 5 digits)
+│   ├── MANIFEST                        # Latest snapshot ref + cold segment index
+│   ├── segs/
+│   │   ├── 0000000001.flseg            # UAL segment (10-digit zero-padded first index)
+│   │   ├── 0000000257.flseg
+│   │   └── *.flseg.tmp                 # Transient (in-flight writes only)
+│   ├── snaps/
+│   │   ├── 0000001000-1709234567.fsnap # Snapshot at UAL index 1000
+│   │   └── *.fsnap.tmp                 # Transient (in-flight writes only)
+│   └── cold.fcold                      # (optional) Cold tier manifest
+├── 00001/
+│   ├── MANIFEST
+│   ├── segs/
+│   └── snaps/
+└── ...{shard_count - 1}/
 ```
 
-Each partition's data is fully independent — no cross-partition file contention.
+### SYSTEM
+
+Written once on first boot. If `shards` or `partitions` don't match on restart, the node refuses to start with `TopologyMismatch`. Format:
+
+```json
+{
+  "shards": 8,
+  "partitions": 256,
+  "created_at": 1772033477,
+  "version": "1.0.0"
+}
+```
+
+### MANIFEST
+
+One per shard — a JSON file tracking the latest snapshot pointer and cold segment inventory. No per-directory manifests to coordinate.
+
+### Atomic Writes
+
+Both segments and snapshots are written atomically via `.tmp` → `fdatasync` → rename. If the process crashes before the rename, the previous file remains valid.

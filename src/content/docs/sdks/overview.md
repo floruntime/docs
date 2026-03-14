@@ -3,7 +3,7 @@ title: SDK Overview
 description: Official client SDKs for Go, Python, JavaScript/TypeScript, and Zig.
 ---
 
-Flo provides official SDKs for four languages. All SDKs use the same binary wire protocol and support the full feature set: KV, Streams, Queues, Actions, Workers, and Streams.
+Flo provides official SDKs for four languages. All SDKs use the same binary wire protocol and support the full feature set: KV, Streams, Queues, Time-Series, Actions, and Workers.
 
 ## Available SDKs
 
@@ -26,7 +26,8 @@ Flo provides official SDKs for four languages. All SDKs use the same binary wire
 | Workers (register/await/complete/fail) | ✓ | ✓ | ✓ | ✓ |
 | Blocking gets / long polling | ✓ | ✓ | ✓ | ✓ |
 | CAS (optimistic locking) | ✓ | ✓ | ✓ | ✓ |
-| Worker framework (high-level) | ✓ | — | — | — |
+| Worker framework (high-level) | ✓ | ✓ | ✓ | ✓ |
+| Stream worker framework | ✓ | ✓ | ✓ | ✓ |
 | Browser support (WebSocket) | — | — | ✓ | — |
 
 ## Common Patterns

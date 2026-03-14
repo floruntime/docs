@@ -9,7 +9,7 @@ description: Get Flo running and try every primitive in 2 minutes.
 flo server start
 ```
 
-Flo starts on port `9000` (client API), `9001` (metrics), and `9002` (dashboard).
+Flo starts on port `9000` (client API). Metrics and dashboard are available on ports `9001` and `9002` by default.
 
 ## Key-Value
 
@@ -35,27 +35,27 @@ flo stream append events '{"type": "signup", "user": "alice"}'
 flo stream append events '{"type": "login", "user": "alice"}'
 
 # Read the last 10 records
-flo stream read events --last 10
+flo stream read events --limit 10
 ```
 
 ## Queues
 
 ```bash
-# Push a job onto a queue
-flo queue push jobs '{"task": "send-welcome-email", "to": "alice"}'
+# Enqueue a job
+flo queue enqueue jobs '{"task": "send-welcome-email", "to": "alice"}'
 
-# Pop the next job (with visibility timeout)
-flo queue pop jobs
+# Dequeue the next job (with visibility timeout)
+flo queue dequeue jobs
 ```
 
 ## Time-Series
 
 ```bash
-# Write a metric using InfluxDB line protocol
-flo ts write cpu host=web-01 usage=82.5
+# Write a metric
+flo ts write cpu --tags host=web-01 --value 82.5
 
 # Query with FloQL
-flo ts query "cpu{host=web-01}[1h] | avg(5m)"
+flo ts floql "cpu{host=web-01}[1h] | window(5m) | avg()"
 ```
 
 ## Actions
@@ -67,8 +67,11 @@ flo action register send-email
 # Invoke it
 flo action invoke send-email '{"to": "alice@example.com", "subject": "Welcome!"}'
 
-# Check status
-flo action runs send-email
+# Check run status
+flo action status <run-id>
+
+# List all runs
+flo action list
 ```
 
 ## Workflows
@@ -103,4 +106,5 @@ Open [http://localhost:9002](http://localhost:9002) to see the built-in web UI f
 - [Key-Value guide](/primitives/kv/) — CAS, TTL, versioning, blocking gets
 - [Streams guide](/primitives/streams/) — Consumer groups, offsets, partitioning
 - [Queues guide](/primitives/queues/) — Priority, DLQ, visibility timeouts
+- [Time-Series guide](/primitives/time-series/) — InfluxDB ingest, FloQL queries
 - [SDK guides](/sdks/overview/) — Go, Python, JavaScript, Zig

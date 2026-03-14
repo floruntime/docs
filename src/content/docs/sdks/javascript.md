@@ -66,12 +66,20 @@ const client = new FloClient("wss://flo.example.com/ws", {
 });
 await client.connect();
 
-// Same API as Node.js
-await client.kv.put("key", new TextEncoder().encode("value"));
-const value = await client.kv.get("key");
+// Read-only KV (config, feature flags)
+const value = await client.kv.get("config:flags");
+
+// Streams (subscribe + publish)
+await client.streams.subscribe("chat:room-123", (record) => {
+  console.log(new TextDecoder().decode(record.payload));
+});
 
 await client.close();
 ```
+
+:::note
+The web SDK is limited to **streams** and **KV read-only**. For full KV mutations (put, delete), queues, and actions, use `@floruntime/node` on the backend.
+:::
 
 ## KV Operations
 
@@ -160,23 +168,29 @@ await client.action.register("process-image", ActionType.User, {
 const result = await client.action.invoke("process-image", payload, {
   priority: 10, idempotencyKey: "order-123",
 });
+```
 
-// Worker loop
-await client.worker.register(workerId, taskTypes);
-while (true) {
-  const result = await client.worker.awaitTask(workerId, taskTypes, {
-    blockMs: 30000,
-  });
-  if (!result.task) continue;
-  try {
-    const output = await processImage(result.task.payload);
-    await client.worker.complete(workerId, result.task.taskId, output);
-  } catch (err) {
-    await client.worker.fail(workerId, result.task.taskId, String(err), {
-      retry: true,
-    });
-  }
-}
+### ActionWorker (high-level)
+
+The recommended approach for executing actions is the `ActionWorker` class, which handles connection management, concurrency, heartbeats, and graceful shutdown:
+
+```typescript
+import { ActionWorker } from "@floruntime/node";
+
+const worker = new ActionWorker({
+  endpoint: "localhost:9000",
+  namespace: "myapp",
+  concurrency: 10,
+});
+
+worker.action("process-image", async (ctx) => {
+  const input = ctx.json<{ url: string }>();
+  const output = await processImage(input.url);
+  return ctx.toBytes({ status: "done", result: output });
+});
+
+await worker.start();
+```
 ```
 
 ## API Reference Tables

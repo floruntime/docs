@@ -1,0 +1,938 @@
+---
+title: Actions
+description: Durable task execution with two models — deploy WASM modules that run inside Flo, or build external workers in Go, Python, JavaScript, or Zig that pull tasks over the wire. Built-in retries, timeouts, leases, labels, idempotency, and dead-letter handling.
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+Actions are **named, durable task types**. You register an action once, then invoke it on demand — Flo handles dispatch, retries, lease management, and dead-letter routing. The handler can run in two places:
+
+- **WASM** — Compile your logic to WebAssembly and deploy it to Flo. The action executes **inline** on the shard, with sub-millisecond overhead and zero network hops.
+- **User-hosted workers** — Run a long-lived process (in Go, Python, JS, Zig, or any language that speaks the wire protocol) that pulls tasks from Flo and reports results.
+
+Both models share the same invoke / status / list / delete API. The difference is where the code runs.
+
+```
+┌──────────────┐                   ┌───────────────────────┐
+│  Client      │                   │  Flo Server (Shard)   │
+│              │  action invoke    │                       │
+│  flo action  │ ─────────────────▸│  ActionHandler        │
+│  invoke X    │                   │    ├─ WASM?  Execute  │◄── inline, ~µs
+│              │  ◀─ run_id ───────┤    │   inline         │
+│              │                   │    └─ User?  Queue    │
+└──────────────┘                   │         pending       │
+                                   └──────────┬────────────┘
+                                              │
+┌──────────────┐   action_await                │ 
+│  Worker      │ ◄─────────────────────────────┘
+│  (Go/Py/JS)  │   task_id + payload
+│              │
+│  handler()   │
+│              │   action_complete(result)
+│              │ ────────────────────────────▸ Flo
+└──────────────┘
+```
+
+---
+
+## Quick Start
+
+### 1. Register an action
+
+```bash
+flo action register send-email --timeout 60000 --max-retries 3
+```
+
+### 2. Invoke it
+
+```bash
+flo action invoke send-email '{"to":"alice@example.com","subject":"Welcome!"}'
+# → Result: send-email-1
+```
+
+### 3. Check status
+
+```bash
+flo action status send-email-1
+# → RUN ID          STATUS     CREATED
+#   send-email-1    pending    2026-03-14 10:00:00
+```
+
+For user-hosted actions, nothing happens until a worker picks up the task. For WASM actions, the result is available immediately.
+
+---
+
+## Core Concepts
+
+### Action
+
+A named task type stored in Flo's action registry. Each action has:
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `name` | — | Unique name within a namespace (max 256 chars) |
+| `type` | `user` | `user` (worker-hosted) or `wasm` (Flo-hosted) |
+| `timeout_ms` | `30000` | Max execution time before timeout |
+| `max_retries` | `3` | Retries before dead-lettering |
+| `retry_delay_ms` | `1000` | Base delay for exponential backoff |
+| `description` | — | Human-readable description |
+| `version` | `1` | Auto-incremented on re-registration |
+| `enabled` | `true` | Can be disabled to block new invocations |
+
+WASM actions additionally have:
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `wasm_module` | — | WASM binary bytes |
+| `wasm_entrypoint` | `handle` | Export function name |
+| `wasm_memory_limit` | `16 MB` | Max linear memory (in pages of 64 KB) |
+
+### Run
+
+A single invocation of an action. Every invoke creates a run with a unique ID.
+
+| Status | Description |
+|--------|-------------|
+| `pending` | Queued, waiting for a worker (or WASM execution) |
+| `running` | Claimed by a worker, currently executing |
+| `completed` | Finished successfully with output |
+| `failed` | Failed permanently (retries exhausted or explicit fail) |
+| `cancelled` | Cancelled by user |
+| `timed_out` | Execution exceeded `timeout_ms` |
+
+### Worker
+
+A long-running process that pulls pending tasks from Flo and executes them. Workers:
+
+- **Register** with Flo, declaring which action types they handle
+- **Await** tasks using long polling (blocking dequeue)
+- **Execute** the handler, optionally extending the lease with `touch`
+- **Report** completion or failure back to Flo
+
+Workers can run anywhere — on the same machine, in a container, across the network. Multiple workers can handle the same action type for horizontal scaling.
+
+---
+
+## Execution Models
+
+### WASM Actions (Flo-Hosted)
+
+WASM actions execute **inside the Flo shard** with no network overhead. They're ideal for:
+
+- Pure data transformations (validation, enrichment, rules engines)
+- Low-latency operations (sub-millisecond execution)
+- Self-contained logic with no external dependencies
+
+The WASM module must export three functions:
+
+```
+handle(input_ptr: u32, input_len: u32) → i64
+alloc(size: u32) → u32
+dealloc(ptr: u32, size: u32) → void
+```
+
+`handle` receives the input bytes and returns a packed `i64`: the upper 32 bits are the output pointer, the lower 32 bits are the output length. Negative return values indicate errors:
+
+| Return Code | Meaning |
+|-------------|---------|
+| `-1` | Invalid input |
+| `-2` | Allocation failed |
+| `-3` | Execution error |
+
+Optional exports:
+
+| Export | Purpose |
+|--------|---------|
+| `init() → i32` | Called once after module instantiation |
+| `describe() → i64` | Returns a JSON description (packed ptr\|len) |
+
+#### Host Functions
+
+WASM guest code can call these host functions:
+
+| Function | Description |
+|----------|-------------|
+| `flo.log(level, msg_ptr, msg_len)` | Log a message (0=debug, 1=info, 2=warn, 3=error) |
+| `flo.kv_get(key_ptr, key_len, buf_ptr, buf_len) → i32` | Read from KV store |
+| `flo.kv_set(key_ptr, key_len, val_ptr, val_len) → i32` | Write to KV store |
+| `flo.kv_delete(key_ptr, key_len) → i32` | Delete from KV store |
+
+WASI shims (`wasi_snapshot_preview1.*`) are available for modules compiled with a WASI target.
+
+#### Concurrency
+
+Each shard allows up to 4 concurrent WASM executions (configurable via `max_concurrent_executions`). Additional invocations queue until a slot opens.
+
+#### Building a WASM Action
+
+Here's a complete rules engine in Zig targeting `wasm32-freestanding`:
+
+```zig
+// rules_engine.zig — Build with:
+//   zig build-lib -target wasm32-freestanding -O ReleaseSmall rules_engine.zig
+
+var heap: [65536]u8 = undefined;
+var heap_offset: usize = 0;
+
+export fn alloc(size: u32) u32 {
+    const s: usize = @intCast(size);
+    const aligned = (heap_offset + 7) & ~@as(usize, 7);
+    if (aligned + s > heap.len) return 0;
+    const ptr: [*]u8 = @ptrCast(&heap[aligned]);
+    heap_offset = aligned + s;
+    return @intFromPtr(ptr);
+}
+
+export fn dealloc(_: u32, _: u32) void {}
+
+export fn handle(input_ptr: [*]const u8, input_len: u32) i64 {
+    heap_offset = 0;
+    const input = input_ptr[0..input_len];
+
+    // Parse and evaluate rules against input...
+    const output = processRules(input);
+
+    const out_ptr = alloc(@intCast(output.len));
+    if (out_ptr == 0) return -2;
+    const dest: [*]u8 = @ptrFromInt(out_ptr);
+    @memcpy(dest[0..output.len], output);
+
+    return (@as(i64, out_ptr) << 32) | @as(i64, @intCast(output.len));
+}
+```
+
+Register it:
+
+```bash
+flo action register rules-engine --wasm ./rules_engine.wasm
+```
+
+Now invocations execute inline — no worker needed:
+
+```bash
+flo action invoke rules-engine '{"age": 25, "country": "US"}'
+# → Result: rules-engine-1  (completed immediately)
+
+flo action status rules-engine-1
+# → status: completed, output: {"eligible":true,"rules_evaluated":2,"rules_passed":2}
+```
+
+### User-Hosted Actions (Workers)
+
+User-hosted actions are executed by external worker processes. This is the model for:
+
+- Actions that call external APIs (payment gateways, email services)
+- Long-running tasks (report generation, media processing)
+- Logic that needs access to your infrastructure (databases, file systems)
+
+The flow:
+
+1. **Invoke** creates a run in `pending` status
+2. A **worker** calls `await` (long poll) and receives the task
+3. The worker runs the handler and calls **complete** or **fail**
+4. Flo updates the run status and stores the result
+
+---
+
+## Worker Lifecycle
+
+```
+┌──────────┐   register    ┌──────────┐   await     ┌──────────┐
+│  Init    │ ──────────▸   │  Idle    │ ──────────▸ │ Execute  │
+│          │               │ (polling)│             │          │
+└──────────┘               └──────┬───┘             └────┬─────┘
+                                  │                      │
+                            heartbeat (30s)         complete / fail
+                                  │                      │
+                                  ▼                      ▼
+                           ┌──────────┐          ┌──────────┐
+                           │ Draining │          │  Idle    │
+                           └──────────┘          └──────────┘
+```
+
+### Register
+
+The worker announces itself and the action types it handles:
+
+```bash
+flo worker register worker-1 process-order send-email
+```
+
+Registration includes:
+- **Worker ID** — unique identifier (auto-generated if omitted)
+- **Task types** — list of action names this worker can execute
+- **Max concurrency** — how many tasks in parallel
+- **Machine ID** — for grouping workers on the same host
+- **Metadata** — arbitrary JSON for discovery
+
+### Await (Long Poll)
+
+Workers block-wait for tasks:
+
+```bash
+flo worker await process-order --worker-id worker-1 --block 30000
+```
+
+When a matching pending task exists, Flo returns a **task assignment**:
+
+| Field | Description |
+|-------|-------------|
+| `task_id` | The run ID to complete/fail against |
+| `task_type` | Action name |
+| `payload` | Input bytes from the invoke call |
+| `created_at` | When the invoke happened |
+| `attempt` | Attempt number (starts at 1, increments on retry) |
+
+### Complete
+
+Report successful completion with the result:
+
+```bash
+flo worker complete <task-id> --worker-id worker-1 --action process-order --result '{"status":"done"}'
+```
+
+### Fail
+
+Report failure, optionally requesting a retry:
+
+```bash
+# Retry — task goes back to pending
+flo worker fail <task-id> --worker-id worker-1 --action process-order --error "Temporary failure" --retry
+
+# Permanent failure — task is marked failed
+flo worker fail <task-id> --worker-id worker-1 --action process-order --error "Invalid input"
+```
+
+### Touch (Lease Extension)
+
+For long-running tasks, extend the execution lease to prevent timeout:
+
+```bash
+flo worker touch <task-id> --worker-id worker-1 --action process-order --extend 30000
+```
+
+### Heartbeat
+
+Workers send periodic heartbeats (typically every 30 seconds) to report their current load and stay registered. If the server responds with a `draining` status, the worker should stop accepting new tasks and finish current ones.
+
+### Drain
+
+Signal that the worker should finish current tasks but accept no new ones:
+
+```bash
+flo worker drain --worker-id worker-1
+```
+
+---
+
+## Labels
+
+Actions can require specific worker capabilities using **labels**. When invoking an action with labels, only workers whose labels are a superset of the required labels will receive the task.
+
+```bash
+# Invoke with required labels
+flo action invoke render-video '{"url":"..."}' --labels '{"gpu":true,"vram_gb":24}'
+```
+
+A worker with labels `{"gpu":true, "vram_gb":24, "region":"us-east"}` **matches** — it has all required keys with equal values. A worker with `{"gpu":true, "vram_gb":16}` **does not match** — `vram_gb` differs.
+
+Label matching rules:
+- All keys in `required` must exist in `worker` labels
+- Values must be exactly equal (string, number, or boolean)
+- Extra keys on the worker side are ignored
+- Nested objects and arrays are not compared (flat values only)
+
+---
+
+## Invocation Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `priority` | `10` | Higher = dequeued first (0–255) |
+| `delay_ms` | `0` | Delay before the task becomes available |
+| `idempotency_key` | — | Deduplication key (same key → same run ID) |
+| `labels` | — | Required worker labels (JSON object) |
+| `namespace` | `default` | Namespace isolation |
+
+---
+
+## Idempotency
+
+Use `idempotency_key` to prevent duplicate invocations:
+
+```bash
+flo action invoke charge-payment '{"order":"ORD-123"}' --idempotency-key order-123-charge
+
+# Same key returns the existing run (no new execution)
+flo action invoke charge-payment '{"order":"ORD-123"}' --idempotency-key order-123-charge
+# → same run ID
+```
+
+---
+
+## Retry Behavior
+
+When a worker reports failure with `--retry`:
+
+1. The run status resets to `pending`
+2. The attempt counter increments
+3. The task goes back to the queue for the next available worker
+4. Backoff delay is applied: `retry_delay_ms × 2^(attempt-1)`
+
+When retries are exhausted (`max_retries` reached) or the worker fails without `--retry`:
+- The run status is set to `failed`
+- The error message and timestamps are recorded
+- The run can still be queried via `action status`
+
+---
+
+## Namespace Isolation
+
+Actions and runs are scoped to namespaces. The same action name can exist independently in different namespaces:
+
+```bash
+flo action register send-email --namespace prod
+flo action register send-email --namespace staging
+
+# These create separate runs in separate registries
+flo action invoke send-email '{}' --namespace prod
+flo action invoke send-email '{}' --namespace staging
+```
+
+---
+
+## Persistence
+
+Action registrations and run state are persisted to the Unified Append Log (UAL). On node restart:
+
+- **Registrations** are replayed — all actions reappear in the registry
+- **Runs** are replayed — pending and running tasks are restored
+- Workers must re-register and resume polling
+
+---
+
+## SDK: Building Workers
+
+The SDKs provide a high-level `ActionWorker` that handles registration, polling, concurrency, heartbeats, and error recovery. You just write handler functions.
+
+### Handler Signature
+
+Every action handler receives an `ActionContext` and returns result bytes:
+
+<Tabs>
+<TabItem label="Go">
+```go
+type ActionHandler func(actx *ActionContext) (result []byte, err error)
+```
+</TabItem>
+<TabItem label="Python">
+```python
+async def handler(ctx: ActionContext) -> bytes:
+```
+</TabItem>
+<TabItem label="JavaScript">
+```typescript
+type ActionHandler = (ctx: ActionContext) => Promise<Uint8Array>;
+```
+</TabItem>
+<TabItem label="Zig">
+```zig
+pub const ActionHandler = *const fn (*ActionContext) anyerror![]const u8;
+```
+</TabItem>
+</Tabs>
+
+### ActionContext
+
+The context object passed to every handler:
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `taskId` / `task_id` | string | Unique task/run identifier |
+| `actionName` / `action_name` | string | Which action this is |
+| `input` / `payload` | bytes | Raw input from the invoke call |
+| `attempt` | int | Attempt number (1-based) |
+| `createdAt` / `created_at` | timestamp | When the invoke happened |
+| `namespace` | string | Namespace scope |
+
+Methods:
+
+| Method | Description |
+|--------|-------------|
+| `json()` / `Into()` | Parse input as JSON (typed or untyped) |
+| `toBytes()` / `Bytes()` | Serialize a value to JSON bytes for the response |
+| `touch(extendMs)` | Extend the execution lease (for long-running tasks) |
+
+### Complete Examples
+
+<Tabs>
+<TabItem label="Go">
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    "log"
+    "os"
+    "os/signal"
+    "syscall"
+
+    flo "github.com/floruntime/flo-go"
+)
+
+type OrderRequest struct {
+    OrderID    string  `json:"order_id"`
+    CustomerID string  `json:"customer_id"`
+    Amount     float64 `json:"amount"`
+    Items      []Item  `json:"items"`
+}
+
+type Item struct {
+    SKU      string `json:"sku"`
+    Quantity int    `json:"quantity"`
+}
+
+func processOrder(actx *flo.ActionContext) ([]byte, error) {
+    var req OrderRequest
+    if err := actx.Into(&req); err != nil {
+        return nil, fmt.Errorf("invalid input: %w", err)
+    }
+
+    log.Printf("Processing order %s ($%.2f)", req.OrderID, req.Amount)
+
+    // For long-running tasks, extend the lease periodically
+    for i, item := range req.Items {
+        log.Printf("  Item %d/%d: %s", i+1, len(req.Items), item.SKU)
+
+        // Extend lease every 3 items
+        if (i+1) % 3 == 0 {
+            actx.Touch(30000)
+        }
+    }
+
+    return actx.Bytes(map[string]string{
+        "order_id": req.OrderID,
+        "status":   "processed",
+    })
+}
+
+func sendEmail(actx *flo.ActionContext) ([]byte, error) {
+    var input map[string]string
+    actx.Into(&input)
+
+    log.Printf("Sending email to %s", input["to"])
+
+    return actx.Bytes(map[string]string{"status": "sent"})
+}
+
+func main() {
+    client := flo.NewClient("localhost:9000",
+        flo.WithNamespace("myapp"),
+    )
+    if err := client.Connect(); err != nil {
+        log.Fatal(err)
+    }
+    defer client.Close()
+
+    w, err := client.NewActionWorker(flo.ActionWorkerOptions{
+        Concurrency:   10,
+        ActionTimeout: 5 * time.Minute,
+    })
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer w.Close()
+
+    w.MustRegisterAction("process-order", processOrder)
+    w.MustRegisterAction("send-email", sendEmail)
+
+    // Graceful shutdown
+    ctx, cancel := context.WithCancel(context.Background())
+    go func() {
+        sigCh := make(chan os.Signal, 1)
+        signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+        <-sigCh
+        w.Stop()
+        cancel()
+    }()
+
+    log.Println("Worker starting...")
+    w.Start(ctx)
+}
+```
+</TabItem>
+<TabItem label="Python">
+```python
+import asyncio
+import logging
+import signal
+from flo import FloClient, ActionContext
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+
+async def process_order(ctx: ActionContext) -> bytes:
+    data = ctx.json()
+    logger.info(f"Processing order {data['order_id']} (${data['amount']:.2f})")
+
+    items = data.get("items", [])
+    for i, item in enumerate(items):
+        logger.info(f"  Item {i+1}/{len(items)}: {item['sku']}")
+        await asyncio.sleep(1)
+
+        # Extend lease every 3 items
+        if (i + 1) % 3 == 0:
+            await ctx.touch(30000)
+
+    return ctx.to_bytes({
+        "order_id": data["order_id"],
+        "status": "processed",
+    })
+
+
+async def send_email(ctx: ActionContext) -> bytes:
+    data = ctx.json()
+    logger.info(f"Sending email to {data['to']}")
+    return ctx.to_bytes({"status": "sent"})
+
+
+async def main():
+    client = FloClient("localhost:9000", namespace="myapp")
+    await client.connect()
+
+    worker = client.new_action_worker(concurrency=10, action_timeout=300)
+
+    worker.register_action("process-order", process_order)
+    worker.register_action("send-email", send_email)
+
+    # Decorator syntax also works
+    @worker.action("health-check")
+    async def health_check(ctx: ActionContext) -> bytes:
+        return ctx.to_bytes({"status": "healthy"})
+
+    # Shutdown handling
+    stop = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(sig, lambda: (worker.stop(), stop.set()))
+
+    try:
+        await worker.start()
+    finally:
+        await worker.close()
+        await client.close()
+
+
+asyncio.run(main())
+```
+</TabItem>
+<TabItem label="JavaScript">
+```typescript
+import { ActionWorker, ActionContext } from "@floruntime/node";
+
+async function processOrder(ctx: ActionContext): Promise<Uint8Array> {
+  const req = ctx.json<{
+    orderId: string;
+    amount: number;
+    items: { sku: string; quantity: number }[];
+  }>();
+
+  console.log(`Processing order ${req.orderId} ($${req.amount.toFixed(2)})`);
+
+  for (let i = 0; i < req.items.length; i++) {
+    console.log(`  Item ${i + 1}/${req.items.length}: ${req.items[i].sku}`);
+    await new Promise((r) => setTimeout(r, 1000));
+
+    // Extend lease every 3 items
+    if ((i + 1) % 3 === 0) {
+      await ctx.touch(30000);
+    }
+  }
+
+  return ctx.toBytes({
+    orderId: req.orderId,
+    status: "processed",
+  });
+}
+
+async function sendEmail(ctx: ActionContext): Promise<Uint8Array> {
+  const data = ctx.json<{ to: string; subject: string }>();
+  console.log(`Sending email to ${data.to}`);
+  return ctx.toBytes({ status: "sent" });
+}
+
+const worker = new ActionWorker({
+  endpoint: "localhost:9000",
+  namespace: "myapp",
+  concurrency: 10,
+  actionTimeoutMs: 300_000,
+});
+
+worker.action("process-order", processOrder);
+worker.action("send-email", sendEmail);
+
+process.on("SIGINT", () => worker.stop());
+
+await worker.start();
+await worker.close();
+```
+</TabItem>
+<TabItem label="Zig">
+```zig
+const std = @import("std");
+const flo = @import("flo");
+
+fn processOrder(ctx: *flo.ActionContext) anyerror![]const u8 {
+    const input = try ctx.json(struct {
+        order_id: []const u8,
+        amount: f64,
+        items: []const struct { sku: []const u8, quantity: u32 },
+    });
+
+    std.log.info("Processing order {s} (${d:.2})", .{ input.order_id, input.amount });
+
+    for (input.items, 0..) |item, i| {
+        std.log.info("  Item {d}/{d}: {s}", .{ i + 1, input.items.len, item.sku });
+
+        if ((i + 1) % 3 == 0) {
+            try ctx.touch(30000);
+        }
+    }
+
+    return ctx.toBytes(.{
+        .order_id = input.order_id,
+        .status = "processed",
+    });
+}
+
+fn sendEmail(ctx: *flo.ActionContext) anyerror![]const u8 {
+    const input = try ctx.json(struct { to: []const u8, subject: []const u8 });
+    std.log.info("Sending email to {s}", .{input.to});
+    return ctx.toBytes(.{ .status = "sent" });
+}
+
+pub fn main() !void {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var worker = try flo.ActionWorker.init(allocator, .{
+        .endpoint = "localhost:9000",
+        .namespace = "myapp",
+        .concurrency = 10,
+        .action_timeout_ms = 300_000,
+    });
+    defer worker.deinit();
+
+    try worker.registerAction("process-order", processOrder);
+    try worker.registerAction("send-email", sendEmail);
+
+    try worker.start();
+}
+```
+</TabItem>
+</Tabs>
+
+### Worker Configuration
+
+<Tabs>
+<TabItem label="Go">
+```go
+flo.ActionWorkerOptions{
+    WorkerID:      "my-worker",       // auto-generated if empty
+    MachineID:     "host-01",         // defaults to hostname
+    Concurrency:   10,                // max parallel tasks
+    ActionTimeout: 5 * time.Minute,   // per-task timeout
+    BlockMS:       30000,             // long-poll timeout
+}
+```
+</TabItem>
+<TabItem label="Python">
+```python
+client.new_action_worker(
+    worker_id="my-worker",            # auto-generated if empty
+    concurrency=10,                   # max parallel tasks
+    action_timeout=300,               # seconds
+    block_ms=30000,                   # long-poll timeout
+)
+```
+</TabItem>
+<TabItem label="JavaScript">
+```typescript
+new ActionWorker({
+  endpoint: "localhost:9000",
+  namespace: "myapp",
+  workerId: "my-worker",             // auto-generated if omitted
+  machineId: "host-01",
+  concurrency: 10,                   // max parallel tasks
+  actionTimeoutMs: 300_000,          // per-task timeout
+  blockMs: 30_000,                   // long-poll timeout
+  heartbeatIntervalMs: 30_000,       // heartbeat interval
+});
+```
+</TabItem>
+<TabItem label="Zig">
+```zig
+flo.WorkerConfig{
+    .endpoint = "localhost:9000",
+    .namespace = "myapp",
+    .worker_id = "my-worker",        // null = auto-generated
+    .concurrency = 10,               // max parallel tasks
+    .action_timeout_ms = 300_000,    // per-task timeout
+    .block_ms = 30_000,              // long-poll timeout
+    .heartbeat_interval_ms = 30_000, // heartbeat interval
+    .machine_id = "host-01",
+}
+```
+</TabItem>
+</Tabs>
+
+---
+
+## SDK: Invoking Actions
+
+You don't need a worker to invoke actions — any client can invoke and check status:
+
+<Tabs>
+<TabItem label="Go">
+```go
+client := flo.NewClient("localhost:9000")
+client.Connect()
+defer client.Close()
+
+// Register
+client.Action.Register("process-image", flo.ActionTypeUser, &flo.ActionRegisterOptions{
+    TimeoutMS:   ptr(60000),
+    MaxRetries:  ptr(3),
+    Description: "Resize and optimize images",
+})
+
+// Invoke
+result, _ := client.Action.Invoke("process-image",
+    []byte(`{"url":"https://example.com/img.jpg","width":800}`),
+    &flo.ActionInvokeOptions{
+        Priority:       ptr(uint8(100)),
+        IdempotencyKey: "img-resize-abc",
+    },
+)
+fmt.Println("Run ID:", result.RunID)
+
+// Poll for status
+status, _ := client.Action.Status(result.RunID, nil)
+fmt.Printf("Status: %s, Output: %s\n", status.Status, status.Output)
+
+// Delete
+client.Action.Delete("process-image", nil)
+```
+</TabItem>
+<TabItem label="Python">
+```python
+from flo import FloClient, ActionType, ActionRegisterOptions, ActionInvokeOptions
+
+async with FloClient("localhost:9000") as client:
+    # Register
+    await client.action.register("process-image", ActionType.USER,
+        ActionRegisterOptions(timeout_ms=60000, max_retries=3))
+
+    # Invoke
+    result = await client.action.invoke("process-image",
+        b'{"url":"https://example.com/img.jpg","width":800}',
+        ActionInvokeOptions(priority=100, idempotency_key="img-resize-abc"))
+    print(f"Run ID: {result.run_id}")
+
+    # Poll for status
+    status = await client.action.status(result.run_id)
+    print(f"Status: {status.status}")
+
+    # Delete
+    await client.action.delete("process-image")
+```
+</TabItem>
+<TabItem label="JavaScript">
+```typescript
+import { FloClient, ActionType } from "@floruntime/node";
+
+const client = new FloClient("localhost:9000");
+await client.connect();
+
+// Register
+await client.action.register("process-image", ActionType.User, {
+  timeoutMs: 60000,
+  maxRetries: 3,
+});
+
+// Invoke
+const result = await client.action.invoke(
+  "process-image",
+  encode('{"url":"https://example.com/img.jpg","width":800}'),
+  { priority: 100, idempotencyKey: "img-resize-abc" }
+);
+console.log("Run ID:", result.runId);
+
+// Poll for status
+const status = await client.action.status(result.runId);
+console.log("Status:", status.status);
+
+// Delete
+await client.action.delete("process-image");
+```
+</TabItem>
+<TabItem label="Zig">
+```zig
+var client = try flo.Client.init(allocator, "localhost:9000", .{});
+defer client.deinit();
+try client.connect();
+
+// Register
+try client.actions.registerAction("process-image", .user, .{
+    .timeout_ms = 60000,
+    .max_retries = 3,
+});
+
+// Invoke
+const result = try client.actions.invoke("process-image",
+    "{\"url\":\"https://example.com/img.jpg\"}", .{
+    .priority = 100,
+    .idempotency_key = "img-resize-abc",
+});
+defer result.deinit();
+
+// Status
+const status = try client.actions.getStatus(result.run_id, .{});
+defer status.deinit();
+
+// Delete
+try client.actions.deleteAction("process-image", .{});
+```
+</TabItem>
+</Tabs>
+
+---
+
+## Workflows Integration
+
+Actions are the building blocks that [Workflows](/orchestration/workflows/) compose. A workflow step references an action with the `@actions/` prefix:
+
+```yaml
+steps:
+  charge:
+    run: "@actions/charge-payment"
+    retry:
+      max_attempts: 3
+      backoff: exponential
+    transitions:
+      success: ship
+      failure: flo.Failed
+```
+
+When a workflow invokes a WASM action, the result is available synchronously. When it invokes a user-hosted action, the workflow parks in `waiting` until the worker reports completion.
+
+---
+
+## Related Docs
+
+- [Workers](/orchestration/workers/) — Low-level worker protocol details
+- [Workflows](/orchestration/workflows/) — Compose actions into multi-step orchestrations
+- [Stream Processing](/orchestration/processing/) — Continuous data pipelines (different from actions)

@@ -102,22 +102,22 @@ await client.queue.touch("tasks", [msg.seq])
 ## Stream Operations
 
 ```python
-from flo import StreamReadOptions, StreamStartMode, StreamGroupReadOptions
+from flo import StreamReadOptions, StreamID, StreamGroupReadOptions
 
 # Append
 result = await client.stream.append("events", b'{"event": "click"}')
 
-# Read from offset
+# Read from a specific position
 result = await client.stream.read("events",
-    StreamReadOptions(start_mode=StreamStartMode.OFFSET, offset=100, count=10))
+    StreamReadOptions(start=StreamID(timestamp_ms=1700000000000, sequence=0), count=10))
 
-# Read from tail
+# Read from tail (latest records)
 result = await client.stream.read("events",
-    StreamReadOptions(start_mode=StreamStartMode.TAIL, count=10))
+    StreamReadOptions(tail=True, count=10))
 
 # Blocking read (long polling)
 result = await client.stream.read("events",
-    StreamReadOptions(offset=100, block_ms=30000))
+    StreamReadOptions(tail=True, count=10, block_ms=30000))
 
 # Consumer groups
 await client.stream.group_join("events", "processors", "worker-1")
@@ -139,18 +139,25 @@ result = await client.action.invoke("process-image", payload,
     ActionInvokeOptions(priority=10, idempotency_key="order-123"))
 
 status = await client.action.status(result.run_id)
+```
 
-# Worker loop
-await client.worker.register("worker-1", ["process-image"])
-while True:
-    result = await client.worker.await_task("worker-1", ["process-image"],
-        WorkerAwaitOptions(block_ms=30000))
-    if result.task:
-        try:
-            output = process(result.task.input)
-            await client.worker.complete("worker-1", result.task.task_id, output)
-        except Exception as e:
-            await client.worker.fail("worker-1", result.task.task_id, str(e))
+### ActionWorker (high-level)
+
+The recommended way to execute actions is the `ActionWorker`, created from a connected client. It handles registration, polling, concurrency, and heartbeats automatically:
+
+```python
+from flo import FloClient, ActionContext
+
+async with FloClient("localhost:9000", namespace="myapp") as client:
+    worker = client.new_action_worker(concurrency=5)
+
+    @worker.action("process-image")
+    async def process_image(ctx: ActionContext) -> bytes:
+        data = ctx.json()
+        result = await do_processing(data)
+        return ctx.to_bytes({"status": "done", "result": result})
+
+    await worker.start()
 ```
 
 ## Features

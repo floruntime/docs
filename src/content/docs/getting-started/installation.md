@@ -32,8 +32,8 @@ Requires [Zig 0.15.2+](https://ziglang.org/download/).
 
 ```bash
 git clone https://github.com/floruntime/flo.git
-cd flo
-zig build -Doptimize=ReleaseFast
+cd flo/flo
+zig build -Drelease=true
 ```
 
 The binary is at `zig-out/bin/flo`.
@@ -48,6 +48,6 @@ flo --version
 
 | Port | Purpose |
 |------|---------|
-| `9000` | Client API (binary protocol) |
-| `9001` | Prometheus metrics |
-| `9002` | Dashboard (web UI) |
+| `9000` | Client API (binary protocol + WebSocket) |
+| `9001` | Prometheus metrics (auto: port + 1) |
+| `9002` | Dashboard web UI (auto: port + 2) |

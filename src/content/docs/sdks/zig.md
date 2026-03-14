@@ -129,15 +129,15 @@ const result = try stream.append("events", "payload", .{});
 var records = try stream.read("events", .{});
 defer records.deinit();
 
-// Read from offset
+// Read from a specific position
 var records = try stream.read("events", .{
-    .start_mode = .offset, .offset = 100, .count = 50,
+    .start = flo.StreamID.fromSequence(100), .count = 50,
 });
 defer records.deinit();
 
 // Read from tail with long polling
 var records = try stream.read("events", .{
-    .start_mode = .tail, .block_ms = 5000,
+    .tail = true, .block_ms = 5000,
 });
 defer records.deinit();
 
@@ -156,35 +156,54 @@ try stream.trim("events", .{ .max_len = 1000 });
 
 ## Worker / Action Operations
 
-```zig
-var worker = flo.Worker.init(&client);
+The `ActionWorker` is a high-level worker that manages connection, registration, polling, heartbeats, and graceful shutdown:
 
-// Register action
-try worker.registerAction("send-email", .user, .{
+```zig
+const flo = @import("flo");
+
+fn processOrder(ctx: *flo.ActionContext) ![]const u8 {
+    const input = try ctx.json(OrderRequest);
+    defer input.deinit();
+
+    // For long tasks, extend the lease
+    try ctx.touch(30000);
+
+    return ctx.toBytes(.{ .status = "completed" });
+}
+
+pub fn main() !void {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var worker = try flo.ActionWorker.init(allocator, .{
+        .endpoint = "localhost:9000",
+        .namespace = "myapp",
+        .concurrency = 10,
+    });
+    defer worker.deinit();
+
+    try worker.registerAction("process-order", processOrder);
+    try worker.start();
+}
+```
+
+For low-level action operations (register, invoke, status), use `flo.Actions`:
+
+```zig
+var actions = flo.Actions.init(&client);
+
+// Register an action type
+try actions.register("send-email", .user, .{
     .timeout_ms = 30000, .max_retries = 3,
 });
 
-// Invoke action
-const run_id = try worker.invoke("send-email", "{\"to\":\"user@example.com\"}", .{});
+// Invoke an action
+const run_id = try actions.invoke("send-email", "{\"to\":\"user@example.com\"}", .{});
 defer allocator.free(run_id);
 
-// Worker loop
-try worker.register("worker-1", &[_][]const u8{"send-email"}, .{});
-while (true) {
-    if (try worker.awaitTask("worker-1", &[_][]const u8{"send-email"}, .{
-        .block_ms = 0,
-    })) |*task| {
-        defer task.deinit();
-        if (processTask(task.payload).success) {
-            try worker.complete("worker-1", task.task_id, output, .{});
-        } else {
-            try worker.fail("worker-1", task.task_id, error_msg, .{ .retry = true });
-        }
-    }
-}
-
-// Extend lease for long tasks
-try worker.touch("worker-1", task.task_id, .{ .extend_ms = 30000 });
+// Check status
+const status = try actions.status(run_id, .{});
 ```
 
 ## Error Handling
