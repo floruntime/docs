@@ -488,6 +488,7 @@ Rules use the same condition expressions as `filter`.
 operators:
   - type: classify
     name: route-payments
+    default_tag: unmatched           # optional: tag when no rules match
     rules:
       - condition: "json:type^=payment"
         tag: payments
@@ -498,6 +499,8 @@ operators:
 ```
 
 A single record can match multiple rules and carry multiple tags. This enables multi-way routing: a `payments` sink, a `high-value` sink, and a `high-value, payments` sink can all coexist.
+
+Records that match no rules pass through untagged by default. Set `default_tag` to route unmatched records to a specific sink.
 
 ### `passthrough` — Identity / Debug Tap
 
