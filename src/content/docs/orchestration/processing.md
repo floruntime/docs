@@ -271,7 +271,7 @@ sinks:
 
 ### Tag-Based Routing
 
-Sinks can subscribe to **tagged records** instead of receiving the full pipeline output. Tags are set by the `classify` operator and matched with AND logic — a record reaches a sink only when it carries **all** of the sink's declared tags.
+Sinks can subscribe to **tagged records** instead of receiving the full pipeline output. Tags are set by the `classify` operator and matched with AND logic — a record reaches a sink only when it carries **all** of the sink's declared `match` tags.
 
 Up to 32 distinct tag names per pipeline.
 
@@ -293,20 +293,20 @@ sinks:
   - name: late-events
     stream:
       name: late-data
-    tags: [late]
+    match: [late]
 
   - name: failures
     queue:
       name: dead-letter
-    tags: [errors]
+    match: [errors]
 
   - name: slow-errors
     stream:
       name: slow-error-stream
-    tags: [errors, slow]          # AND — must have BOTH tags
+    match: [errors, slow]          # AND — must have BOTH tags
 ```
 
-Sinks without `tags` receive all records from the main operator chain. A single `tags:` value is also accepted as sugar: `tags: late` is equivalent to `tags: [late]`.
+Sinks without `match` receive all records from the main operator chain. A single `match:` value is also accepted as sugar: `match: late` is equivalent to `match: [late]`.
 
 ## Operators
 
