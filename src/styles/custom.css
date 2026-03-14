@@ -1,0 +1,41 @@
+/* Custom styles to match Flo brand */
+
+/* Dark theme overrides */
+:root {
+  --sl-font: 'Space Grotesk', sans-serif;
+  --sl-font-mono: 'JetBrains Mono', monospace;
+}
+
+:root[data-theme='dark'] {
+  --sl-color-accent-low: #0d2818;
+  --sl-color-accent: #00ff88;
+  --sl-color-accent-high: #b3ffd9;
+  --sl-color-bg-nav: #111111;
+  --sl-color-bg-sidebar: #111111;
+  --sl-color-bg: #0a0a0a;
+  --sl-color-black: #0a0a0a;
+  --sl-color-hairline-light: #333333;
+  --sl-color-hairline: #222222;
+}
+
+:root[data-theme='light'] {
+  --sl-color-accent-low: #e6fff2;
+  --sl-color-accent: #008844;
+  --sl-color-accent-high: #003d1f;
+}
+
+/* Code block styling */
+.expressive-code pre {
+  border: 1px solid var(--sl-color-hairline-light);
+  border-radius: 8px;
+}
+
+/* Hero / landing page tweaks */
+.hero {
+  border-bottom: 1px solid var(--sl-color-hairline-light);
+}
+
+/* Sidebar active link accent */
+nav[aria-label="Main"] a[aria-current="page"] {
+  font-weight: 600;
+}
