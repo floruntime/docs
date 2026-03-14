@@ -913,7 +913,7 @@ try client.actions.deleteAction("process-image", .{});
 
 ## Workflows Integration
 
-Actions are the building blocks that [Workflows](/orchestration/workflows/) compose. A workflow step references an action with the `@actions/` prefix:
+Actions are the building blocks that [Workflows](/docs/orchestration/workflows/) compose. A workflow step references an action with the `@actions/` prefix:
 
 ```yaml
 steps:
@@ -933,6 +933,6 @@ When a workflow invokes a WASM action, the result is available synchronously. Wh
 
 ## Related Docs
 
-- [Workers](/orchestration/workers/) — Low-level worker protocol details
-- [Workflows](/orchestration/workflows/) — Compose actions into multi-step orchestrations
-- [Stream Processing](/orchestration/processing/) — Continuous data pipelines (different from actions)
+- [Workers](/docs/orchestration/workers/) — Low-level worker protocol details
+- [Workflows](/docs/orchestration/workflows/) — Compose actions into multi-step orchestrations
+- [Stream Processing](/docs/orchestration/processing/) — Continuous data pipelines (different from actions)

@@ -9,11 +9,11 @@ hero:
     light: ../../assets/logo-light.svg
   actions:
     - text: Get Started
-      link: /getting-started/introduction/
+      link: /docs/getting-started/introduction/
       icon: right-arrow
       variant: primary
     - text: Install
-      link: /getting-started/installation/
+      link: /docs/getting-started/installation/
       variant: minimal
 ---
 
@@ -24,19 +24,19 @@ import { Card, CardGrid } from '@astrojs/starlight/components';
 <CardGrid>
   <Card title="Key-Value" icon="pencil">
     Hash-indexed KV with MVCC, TTL, and atomic operations.
-    [Read more →](/primitives/kv/)
+    [Read more →](/docs/primitives/kv/)
   </Card>
   <Card title="Streams" icon="right-arrow">
     Ordered append logs with consumer groups, offsets, and retention.
-    [Read more →](/primitives/streams/)
+    [Read more →](/docs/primitives/streams/)
   </Card>
   <Card title="Queues" icon="list-format">
     Priority queues with leases, dead-letter, and exactly-once delivery.
-    [Read more →](/primitives/queues/)
+    [Read more →](/docs/primitives/queues/)
   </Card>
   <Card title="Time-Series" icon="seti:clock">
     Columnar storage with FloQL and InfluxDB line protocol compatibility.
-    [Read more →](/primitives/time-series/)
+    [Read more →](/docs/primitives/time-series/)
   </Card>
 </CardGrid>
 
@@ -45,18 +45,18 @@ import { Card, CardGrid } from '@astrojs/starlight/components';
 <CardGrid>
   <Card title="Actions" icon="rocket">
     Durable execution with automatic retries, timeouts, and dead-letter handling.
-    [Read more →](/orchestration/actions/)
+    [Read more →](/docs/orchestration/actions/)
   </Card>
   <Card title="Workers" icon="setting">
     Long-running consumers that poll for action invocations and report results.
-    [Read more →](/orchestration/workers/)
+    [Read more →](/docs/orchestration/workers/)
   </Card>
   <Card title="Workflows" icon="random">
     Multi-step orchestration with signals, timers, and circuit breakers.
-    [Read more →](/orchestration/workflows/)
+    [Read more →](/docs/orchestration/workflows/)
   </Card>
   <Card title="Stream Processing" icon="bars">
     Real-time stateful pipelines with windowing, checkpointing, and WASM operators.
-    [Read more →](/orchestration/processing/)
+    [Read more →](/docs/orchestration/processing/)
   </Card>
 </CardGrid>

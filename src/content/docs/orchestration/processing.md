@@ -1007,10 +1007,10 @@ The engine collects per-operator and per-pipeline metrics:
 
 ## Related Docs
 
-- [Streams](/primitives/streams/) — source and sink behavior for stream-backed pipelines
-- [Time-Series](/primitives/time-series/) — TS query and write semantics
-- [KV](/primitives/kv/) — KV storage used by `kv_lookup` operator and KV sinks
-- [Queues](/primitives/queues/) — queue sinks for task pipelines
-- [Actions](/orchestration/actions/) — WASM action registration and invocation
-- [Workflows](/orchestration/workflows/) — multi-step orchestration over actions
+- [Streams](/docs/primitives/streams/) — source and sink behavior for stream-backed pipelines
+- [Time-Series](/docs/primitives/time-series/) — TS query and write semantics
+- [KV](/docs/primitives/kv/) — KV storage used by `kv_lookup` operator and KV sinks
+- [Queues](/docs/primitives/queues/) — queue sinks for task pipelines
+- [Actions](/docs/orchestration/actions/) — WASM action registration and invocation
+- [Workflows](/docs/orchestration/workflows/) — multi-step orchestration over actions
 

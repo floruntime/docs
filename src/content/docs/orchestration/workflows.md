@@ -3,7 +3,7 @@ title: Workflows
 description: Durable multi-step orchestration — compose actions via YAML, with signals, retries, inline plans, circuit breakers, health-weighted routing, cron schedules, stream triggers, JSONPath data flow, and idempotency.
 ---
 
-Workflows are Flo's **durable orchestration layer**. They compose [Actions](/orchestration/actions/) into multi-step business processes defined in YAML, with built-in resilience: retries, circuit breakers, health-weighted routing, signal handling, timeouts, polling, cron scheduling, stream triggers, and idempotency.
+Workflows are Flo's **durable orchestration layer**. They compose [Actions](/docs/orchestration/actions/) into multi-step business processes defined in YAML, with built-in resilience: retries, circuit breakers, health-weighted routing, signal handling, timeouts, polling, cron scheduling, stream triggers, and idempotency.
 
 A workflow definition is a directed graph of **steps**. Each step either runs a target (an action, an inline plan, or a child workflow) or waits for an external signal. Every step declares **transitions** that map outcomes to the next step or to a **terminal state**. The engine walks the graph from the start step until it reaches a terminal.
 
@@ -983,7 +983,7 @@ flo workflow signal wfrun-42 --type approval '{"decision": "approved", "approver
 
 ## Related Docs
 
-- [Actions](/orchestration/actions/) — Actions are the building blocks that workflows compose
-- [Stream Processing](/orchestration/processing/) — For continuous, stateless data pipelines (filter/map/aggregate)
-- [Streams](/data/streams/) — Source data for stream triggers
-- [KV Store](/data/kv/) — Used by actions for state lookups
+- [Actions](/docs/orchestration/actions/) — Actions are the building blocks that workflows compose
+- [Stream Processing](/docs/orchestration/processing/) — For continuous, stateless data pipelines (filter/map/aggregate)
+- [Streams](/docs/primitives/streams/) — Source data for stream triggers
+- [KV Store](/docs/primitives/kv/) — Used by actions for state lookups

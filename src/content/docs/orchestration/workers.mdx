@@ -8,7 +8,7 @@ import { Tabs, TabItem } from '@astrojs/starlight/components';
 Workers are **long-running processes** that connect to Flo and execute tasks. There are two kinds:
 
 - **Action workers** — pull action tasks from a queue (long-polling), execute a handler, and report results. Used for durable task processing with retries, timeouts, and dead-letter routing.
-- **Stream workers** — consume records from a [stream](/data/streams/) via consumer groups, process each record, and auto-ack or nack. Used for continuous event processing.
+- **Stream workers** — consume records from a [stream](/docs/primitives/streams/) via consumer groups, process each record, and auto-ack or nack. Used for continuous event processing.
 
 Both worker types register themselves in the **worker registry**, send periodic heartbeats, report load metrics, and support graceful drain. The server tracks each worker's health and can mark stale workers as unhealthy after 90 seconds of silence.
 
@@ -558,7 +558,7 @@ The server runs a periodic health check (on each shard tick). Workers that haven
 
 ## Related
 
-- [Actions](/orchestration/actions/) — Register and invoke durable task types
-- [Streams](/data/streams/) — Append-only ordered log with consumer groups
-- [Workflows](/orchestration/workflows/) — Multi-step orchestration using actions as steps
-- [Stream Processing](/orchestration/processing/) — Declarative stream processing jobs
+- [Actions](/docs/orchestration/actions/) — Register and invoke durable task types
+- [Streams](/docs/primitives/streams/) — Append-only ordered log with consumer groups
+- [Workflows](/docs/orchestration/workflows/) — Multi-step orchestration using actions as steps
+- [Stream Processing](/docs/orchestration/processing/) — Declarative stream processing jobs
