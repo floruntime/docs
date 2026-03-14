@@ -269,11 +269,22 @@ sinks:
       delay_ms: 1000            # visibility delay
 ```
 
-### Side Output Routing
+### Tag-Based Routing
 
-Sinks can subscribe to named **side outputs** instead of the main pipeline output. Side outputs are used for late data routing, error handling, or multi-way splits:
+Sinks can subscribe to **tagged records** instead of receiving the full pipeline output. Tags are set by the `classify` operator and matched with AND logic — a record reaches a sink only when it carries **all** of the sink's declared tags.
+
+Up to 32 distinct tag names per pipeline.
 
 ```yaml
+operators:
+  - type: classify
+    name: route-events
+    rules:
+      - condition: "json:level=error"
+        tag: errors
+      - condition: "json:$.latency_ms>5000"
+        tag: slow
+
 sinks:
   - name: main
     stream:
@@ -282,23 +293,30 @@ sinks:
   - name: late-events
     stream:
       name: late-data
-    side_output: late
+    tags: [late]
 
   - name: failures
     queue:
       name: dead-letter
-    side_output: errors
+    tags: [errors]
+
+  - name: slow-errors
+    stream:
+      name: slow-error-stream
+    tags: [errors, slow]          # AND — must have BOTH tags
 ```
 
-Operators emit to side outputs via the operator context: `ctx.sideOutput("late", record)`.
+Sinks without `tags` receive all records from the main operator chain. A single `tags:` value is also accepted as sugar: `tags: late` is equivalent to `tags: [late]`.
 
 ## Operators
 
-Operators are the transformation steps between source and sink. They are declared in the `operators:` array and execute in order. Flo includes seven built-in operator types.
+Operators are the transformation steps between source and sink. They are declared in the `operators:` array and execute in order. Flo includes eight built-in operator types.
 
 ### `filter` — Expression-Based Filter
 
 Drops records that don't match a condition. Supported expressions:
+
+**Record-level:**
 
 | Expression | Matches when… |
 |-----------|---------------|
@@ -309,8 +327,22 @@ Drops records that don't match a condition. Supported expressions:
 | `value_prefix:<prefix>` | Record value starts with the prefix |
 | `not_empty` | Record value is non-empty |
 | `key_not_empty` | Record key is non-empty |
-| `json_field:<path>=<value>` | JSON field at path equals the value |
 | `min_length:<n>` | Record value length ≥ n |
+
+**JSON field — `json:<path><op><value>`:**
+
+| Expression | Matches when… |
+|-----------|---------------|
+| `json:<path>=<value>` | Field equals value |
+| `json:<path>!=<value>` | Field does not equal value |
+| `json:<path>^=<value>` | Field starts with value (prefix) |
+| `json:<path>*=<value>` | Field contains value (substring) |
+| `json:<path>!^=<value>` | Field does not start with value |
+| `json:<path>!*=<value>` | Field does not contain value |
+| `json:<path>><value>` | Field > value (numeric) |
+| `json:<path>>=<value>` | Field >= value (numeric) |
+| `json:<path><<value>` | Field < value (numeric) |
+| `json:<path><=<value>` | Field <= value (numeric) |
 
 ```yaml
 operators:
@@ -446,6 +478,27 @@ operators:
     enrich_field: tier
 ```
 
+### `classify` — Tag-Based Record Labeling
+
+Evaluates rules against each record and sets tag bits for matching conditions. Records continue flowing — classify never drops or forks, it only labels. Downstream sinks filter by AND-matching their `tags` list against the record's tag bitfield.
+
+Rules use the same condition expressions as `filter`.
+
+```yaml
+operators:
+  - type: classify
+    name: route-payments
+    rules:
+      - condition: "json:type^=payment"
+        tag: payments
+      - condition: "json:type*=transfer"
+        tag: transfers
+      - condition: "json:amount>10000"
+        tag: high-value
+```
+
+A single record can match multiple rules and carry multiple tags. This enables multi-way routing: a `payments` sink, a `high-value` sink, and a `high-value, payments` sink can all coexist.
+
 ### `passthrough` — Identity / Debug Tap
 
 Emits every record unchanged. Useful for testing and as a pipeline placeholder:
@@ -534,7 +587,7 @@ Records that arrive after the watermark has passed their window are classified a
 2. **Late** — past the watermark but within the allowed lateness (re-fires window)
 3. **Dropped** — too late, beyond the allowed lateness threshold
 
-Late records can be routed to a side output for monitoring or reprocessing.
+Late records can be tagged (via a `classify` rule) and routed to a dedicated sink for monitoring or reprocessing.
 
 ## Keyed State
 
