@@ -59,7 +59,7 @@ export default defineConfig({
         {
           label: 'Primitives',
           items: [
-            { slug: 'primitives/kv', label: 'Key-Value' },
+            { slug: 'primitives/kv', label: 'KV' },
             { slug: 'primitives/streams' },
             { slug: 'primitives/queues' },
             { slug: 'primitives/time-series', label: 'Time-Series' },

@@ -11,7 +11,7 @@ flo server start
 
 Flo starts on port `9000` (client API). Metrics and dashboard are available on ports `9001` and `9002` by default.
 
-## Key-Value
+## KV
 
 ```bash
 # Store a JSON document
@@ -103,7 +103,7 @@ Open [http://localhost:9002](http://localhost:9002) to see the built-in web UI f
 
 ## Next Steps
 
-- [Key-Value guide](/docs/primitives/kv/) — CAS, TTL, versioning, blocking gets
+- [KV guide](/docs/primitives/kv/) — CAS, TTL, versioning, blocking gets
 - [Streams guide](/docs/primitives/streams/) — Consumer groups, offsets, partitioning
 - [Queues guide](/docs/primitives/queues/) — Priority, DLQ, visibility timeouts
 - [Time-Series guide](/docs/primitives/time-series/) — InfluxDB ingest, FloQL queries
