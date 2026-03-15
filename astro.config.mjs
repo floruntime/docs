@@ -44,7 +44,7 @@ export default defineConfig({
         },
       ],
       editLink: {
-        baseUrl: 'https://github.com/floruntime/flo/edit/main/docs/',
+        baseUrl: 'https://github.com/floruntime/docs/edit/main/',
       },
       sidebar: [
         {
