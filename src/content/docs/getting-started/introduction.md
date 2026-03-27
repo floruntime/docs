@@ -55,6 +55,6 @@ Flo has official SDKs for:
 
 ## Next Steps
 
-- [Install Flo](/docs/getting-started/installation/) to get the binary
-- [Quick Start](/docs/getting-started/quickstart/) to try it in 2 minutes
-- [Architecture Overview](/docs/architecture/overview/) to understand the internals
+- [Install Flo](/getting-started/installation/) to get the binary
+- [Quick Start](/getting-started/quickstart/) to try it in 2 minutes
+- [Architecture Overview](/architecture/overview/) to understand the internals

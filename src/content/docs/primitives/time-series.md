@@ -296,4 +296,4 @@ The TS Projection uses columnar storage optimized for time-series access pattern
 
 Queries scan both the active write buffer and flushed blocks. Aggregation functions (avg, sum, min, max, count) operate directly on the columnar layout.
 
-See [Storage Internals](/docs/architecture/storage/) for details.
+See [Storage Internals](/architecture/storage/) for details.

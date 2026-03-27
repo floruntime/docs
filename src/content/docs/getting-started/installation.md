@@ -24,7 +24,7 @@ brew install flo
 docker run -p 9000:9000 -p 9001:9001 -p 9002:9002 ghcr.io/floruntime/flo:latest
 ```
 
-See the [Docker deployment guide](/docs/deployment/docker/) for production usage with volumes and compose.
+See the [Docker deployment guide](/deployment/docker/) for production usage with volumes and compose.
 
 ## Building from Source
 

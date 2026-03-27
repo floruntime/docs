@@ -8,7 +8,7 @@ import { Tabs, TabItem } from '@astrojs/starlight/components';
 Workers are **long-running processes** that connect to Flo and execute tasks. There are two kinds:
 
 - **Action workers** — pull action tasks from a queue (long-polling), execute a handler, and report results. Used for durable task processing with retries, timeouts, and dead-letter routing.
-- **Stream workers** — consume records from a [stream](/docs/primitives/streams/) via consumer groups, process each record, and auto-ack or nack. Used for continuous event processing.
+- **Stream workers** — consume records from a [stream](/primitives/streams/) via consumer groups, process each record, and auto-ack or nack. Used for continuous event processing.
 
 Both worker types register themselves in the **worker registry**, send periodic heartbeats, report load metrics, and support graceful drain. The server tracks each worker's health and can mark stale workers as unhealthy after 90 seconds of silence.
 
@@ -338,11 +338,149 @@ When a handler returns an error, the SDK automatically reports a failure with `r
 |-----------|-------|-------|
 | Handler returns error | Yes | Auto-retry with exponential backoff |
 | Handler panics / throws | Yes | SDK catches panics, reports failure |
+| `NonRetryableError` / `NewNonRetryableErrorf` | **No** | Immediately failed — no retries, no DLQ |
 | Context deadline exceeded | **No** | Task is permanently failed |
 | Context cancelled (shutdown) | **No** | Task is permanently failed |
 | Explicit `fail(..., retry: false)` | No | Moves to dead-letter queue |
 
-### Concurrency
+### NonRetryableError
+
+Use `NonRetryableError` when the task has definitively failed and retrying would be pointless (invalid input, business rule violations, permanent service rejections). The task is immediately marked `failed` — no retry delay, no backoff, no dead-letter queue.
+
+<Tabs>
+<TabItem label="JavaScript">
+```typescript
+import { NonRetryableError } from "@floruntime/node";
+
+worker.action("validate-order", async (ctx) => {
+  const { orderId, amount } = ctx.json<{ orderId?: string; amount?: number }>();
+
+  if (!orderId) {
+    throw new NonRetryableError("missing orderId");
+  }
+  if ((amount ?? 0) > 2000) {
+    throw new NonRetryableError(`order amount $${amount} exceeds $2000 limit`);
+  }
+  return ctx.toBytes({ valid: true, orderId });
+});
+```
+</TabItem>
+<TabItem label="Go">
+```go
+w.MustRegisterAction("validate-order", func(actx *flo.ActionContext) (interface{}, error) {
+    var data struct {
+        OrderID string  `json:"orderId"`
+        Amount  float64 `json:"amount"`
+    }
+    actx.Into(&data)
+
+    if data.OrderID == "" {
+        return nil, flo.NewNonRetryableErrorf("missing orderId")
+    }
+    if data.Amount > 2000 {
+        return nil, flo.NewNonRetryableErrorf("order amount $%.0f exceeds $2000 limit", data.Amount)
+    }
+    return map[string]interface{}{"valid": true, "orderId": data.OrderID}, nil
+})
+```
+</TabItem>
+<TabItem label="Python">
+```python
+from flo import NonRetryableError
+
+@worker.action("validate-order")
+async def validate_order(ctx: ActionContext) -> bytes:
+    data = ctx.json()
+    if not data.get("orderId"):
+        raise NonRetryableError("missing orderId")
+    if data.get("amount", 0) > 2000:
+        raise NonRetryableError(f"order amount ${data['amount']} exceeds $2000 limit")
+    return ctx.to_bytes({"valid": True, "orderId": data["orderId"]})
+```
+</TabItem>
+</Tabs>
+
+When a workflow step handler throws `NonRetryableError`, the workflow run is routed through the `failure` transition without waiting for retries.
+
+### Named Outcomes
+
+By default, a returning handler produces the `success` outcome. To route a workflow down a specific named transition branch, use `ctx.result(outcomeName, data)`. This is used for **outcome-based routing** — where the same step can branch to different next steps depending on the business decision.
+
+<Tabs>
+<TabItem label="JavaScript">
+```typescript
+import { ActionResult } from "@floruntime/node";
+
+worker.action("review-order", async (ctx): Promise<ActionResult> => {
+  const { orderId, amount } = ctx.json<{ orderId: string; amount: number }>();
+
+  if (amount < 100) {
+    // Workflow follows "approved" transition
+    return ctx.result("approved", { orderId, decision: "auto-approved" });
+  } else if (amount >= 500) {
+    // Workflow follows "rejected" transition
+    return ctx.result("rejected", { orderId, reason: "amount too high" });
+  } else {
+    // Workflow follows "needs_review" transition
+    return ctx.result("needs_review", { orderId, note: "manual review required" });
+  }
+});
+```
+</TabItem>
+<TabItem label="Go">
+```go
+w.MustRegisterAction("review-order", func(actx *flo.ActionContext) (interface{}, error) {
+    var data struct {
+        OrderID string  `json:"orderId"`
+        Amount  float64 `json:"amount"`
+    }
+    actx.Into(&data)
+
+    if data.Amount < 100 {
+        return actx.Result("approved", map[string]interface{}{
+            "orderId": data.OrderID, "decision": "auto-approved",
+        })
+    } else if data.Amount >= 500 {
+        return actx.Result("rejected", map[string]interface{}{
+            "orderId": data.OrderID, "reason": "amount too high",
+        })
+    }
+    return actx.Result("needs_review", map[string]interface{}{
+        "orderId": data.OrderID, "note": "manual review required",
+    })
+})
+```
+</TabItem>
+<TabItem label="Python">
+```python
+@worker.action("review-order")
+async def review_order(ctx: ActionContext) -> bytes:
+    data = ctx.json()
+    amount = data.get("amount", 0)
+
+    if amount < 100:
+        return ctx.result("approved", {"orderId": data["orderId"], "decision": "auto-approved"})
+    elif amount >= 500:
+        return ctx.result("rejected", {"orderId": data["orderId"], "reason": "amount too high"})
+    else:
+        return ctx.result("needs_review", {"orderId": data["orderId"], "note": "manual review required"})
+```
+</TabItem>
+</Tabs>
+
+The workflow YAML declares the named outcome transitions:
+
+```yaml
+start:
+  run: "@actions/review-order"
+  transitions:
+    approved: fulfill          # ctx.result("approved") → go to fulfill step
+    rejected: notify_rejection # ctx.result("rejected") → go to notify_rejection
+    needs_review: manual_review
+    failure: flo.Failed
+```
+
+
 
 The `concurrency` setting controls how many tasks a worker processes in parallel:
 
@@ -558,7 +696,7 @@ The server runs a periodic health check (on each shard tick). Workers that haven
 
 ## Related
 
-- [Actions](/docs/orchestration/actions/) — Register and invoke durable task types
-- [Streams](/docs/primitives/streams/) — Append-only ordered log with consumer groups
-- [Workflows](/docs/orchestration/workflows/) — Multi-step orchestration using actions as steps
-- [Stream Processing](/docs/orchestration/processing/) — Declarative stream processing jobs
+- [Actions](/orchestration/actions/) — Register and invoke durable task types
+- [Streams](/primitives/streams/) — Append-only ordered log with consumer groups
+- [Workflows](/orchestration/workflows/) — Multi-step orchestration using actions as steps
+- [Stream Processing](/orchestration/processing/) — Declarative stream processing jobs

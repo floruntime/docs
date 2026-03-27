@@ -203,6 +203,96 @@ w.MustRegisterAction("process-order", func(actx *flo.ActionContext) ([]byte, err
 w.Start(ctx)
 ```
 
+## Workflow Operations
+
+`client.Workflow` manages the full lifecycle of [workflow](/orchestration/workflows/) definitions and runs.
+
+### Declarative Sync
+
+Deploy or update a workflow definition safely — calling this on every app boot is idiomatic:
+
+```go
+r, err := client.Workflow.SyncBytes([]byte(yamlString), nil)
+// r.Name, r.Version, r.Action → "created" | "updated" | "unchanged"
+```
+
+### Start and Monitor Runs
+
+```go
+import "encoding/json"
+
+// Start a run
+input, _ := json.Marshal(map[string]interface{}{
+    "orderId": "ORD-123",
+    "amount":  99.99,
+})
+runID, err := client.Workflow.Start("process-order", input, nil)
+
+// Get status
+s, err := client.Workflow.Status(runID, nil)
+fmt.Println(s.RunID)        // string
+fmt.Println(s.Workflow)     // workflow name
+fmt.Println(s.Version)      // version string
+fmt.Println(s.Status)       // "pending"|"running"|"waiting"|"completed"|"failed"|...
+fmt.Println(s.CurrentStep)  // current or last step name
+// s.Input        []byte  — raw input bytes
+// s.CreatedAt    int64   — epoch ms
+// s.StartedAt    *int64  — nil if not yet started
+// s.CompletedAt  *int64  — nil if not yet completed
+// s.WaitSignal   *string — signal type being waited for, or nil
+
+// Cancel a run
+err = client.Workflow.Cancel(runID, nil)
+```
+
+### Signals
+
+Deliver external events to a waiting workflow:
+
+```go
+sigData, _ := json.Marshal(map[string]interface{}{
+    "approved": true,
+    "approver": "manager@corp.com",
+})
+err = client.Workflow.Signal(runID, "approval_decision", sigData, nil)
+```
+
+### History and Listings
+
+`History`, `ListRuns`, and `ListDefinitions` return raw binary and are parsed with helper functions (see the full example for reference parsers):
+
+```go
+// Run event history (binary response)
+data, err := client.Workflow.History(runID, nil)
+events := parseHistory(data) // []HistoryEvent{Type, Detail, Timestamp}
+
+// List runs for a workflow
+limit := 50
+data, err = client.Workflow.ListRuns("process-order", &flo.WorkflowListRunsOptions{Limit: limit})
+runs := parseListRuns(data) // []RunEntry{RunID, Workflow, Status, CreatedAt}
+
+// List all registered definitions
+data, err = client.Workflow.ListDefinitions(nil)
+defs := parseListDefinitions(data) // []DefinitionEntry{Name, Version, CreatedAt}
+
+// Download a definition's YAML
+yamlBytes, err := client.Workflow.GetDefinition("process-order", nil)
+```
+
+### Disable / Enable
+
+```go
+// Pause new runs (existing runs continue)
+err = client.Workflow.Disable("process-order", nil)
+
+// Resume
+err = client.Workflow.Enable("process-order", nil)
+```
+
+### Full Example
+
+See [examples/workflows/main.go](https://github.com/floruntime/flo-go/blob/master/examples/workflows/main.go) and [examples/action_worker/main.go](https://github.com/floruntime/flo-go/blob/master/examples/action_worker/main.go) for a complete walkthrough covering sync, signals, signal timeouts, outcome-based routing, history, and cancellation.
+
 ## Error Handling
 
 ```go

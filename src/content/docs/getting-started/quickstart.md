@@ -103,8 +103,8 @@ Open [http://localhost:9002](http://localhost:9002) to see the built-in web UI f
 
 ## Next Steps
 
-- [KV guide](/docs/primitives/kv/) — CAS, TTL, versioning, blocking gets
-- [Streams guide](/docs/primitives/streams/) — Consumer groups, offsets, partitioning
-- [Queues guide](/docs/primitives/queues/) — Priority, DLQ, visibility timeouts
-- [Time-Series guide](/docs/primitives/time-series/) — InfluxDB ingest, FloQL queries
-- [SDK guides](/docs/sdks/overview/) — Go, Python, JavaScript, Zig
+- [KV guide](/primitives/kv/) — CAS, TTL, versioning, blocking gets
+- [Streams guide](/primitives/streams/) — Consumer groups, offsets, partitioning
+- [Queues guide](/primitives/queues/) — Priority, DLQ, visibility timeouts
+- [Time-Series guide](/primitives/time-series/) — InfluxDB ingest, FloQL queries
+- [SDK guides](/sdks/overview/) — Go, Python, JavaScript, Zig

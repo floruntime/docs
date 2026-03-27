@@ -3,7 +3,7 @@ title: Workflows
 description: Durable multi-step orchestration — compose actions via YAML, with signals, retries, inline plans, circuit breakers, health-weighted routing, cron schedules, stream triggers, JSONPath data flow, and idempotency.
 ---
 
-Workflows are Flo's **durable orchestration layer**. They compose [Actions](/docs/orchestration/actions/) into multi-step business processes defined in YAML, with built-in resilience: retries, circuit breakers, health-weighted routing, signal handling, timeouts, polling, cron scheduling, stream triggers, and idempotency.
+Workflows are Flo's **durable orchestration layer**. They compose [Actions](/orchestration/actions/) into multi-step business processes defined in YAML, with built-in resilience: retries, circuit breakers, health-weighted routing, signal handling, timeouts, polling, cron scheduling, stream triggers, and idempotency.
 
 A workflow definition is a directed graph of **steps**. Each step either runs a target (an action, an inline plan, or a child workflow) or waits for an external signal. Every step declares **transitions** that map outcomes to the next step or to a **terminal state**. The engine walks the graph from the start step until it reaches a terminal.
 
@@ -368,6 +368,15 @@ States:
 - **Open** — Executor is skipped (after `failure_threshold` consecutive failures)
 - **Half-open** — After `cooldown_ms`, allows `half_open_max_calls` probe requests. If probes succeed → closed. If probes fail → open again.
 
+```
+closed ──(N consecutive failures)──▸ open ──(cooldown expires)──▸ half_open
+  ▲                                                                 │
+  └──────────(probe succeeds)───────────────────────────────────────┘
+  open ◂──────────(probe fails)─────────────────────────────────────┘
+```
+
+When a circuit breaker is **open**, the engine emits a `plan_breaker_skip` history event and moves to the next executor without attempting the action. This means a failing executor is taken out of rotation within seconds rather than consuming retries on every request.
+
 ### Rate Limiting
 
 ```yaml
@@ -391,7 +400,7 @@ When `mode: async`, the workflow parks in `waiting` until the action result arri
 
 ### Health Tracking
 
-When `selection: health-weighted`, the engine tracks per-executor success rates:
+When `selection: health-weighted`, the engine tracks per-executor success rates and uses them to prefer healthier executors:
 
 ```yaml
 health:
@@ -401,6 +410,36 @@ health:
 ```
 
 Until `min_samples` is reached, the engine falls back to priority-based ordering.
+
+**Health Score** (0.0–1.0) is computed as:
+
+```
+score = (api_success_rate × 0.7) + (business_success_rate × 0.3)
+```
+
+With circuit breaker penalties:
+- **Open breaker** → score × 0.1
+- **Half-open breaker** → score × 0.5
+
+At each plan invocation, executors are sorted by descending health score and tried in that order. A healthy executor with no failures scores 1.0; an executor with an open breaker scores ≤ 0.1.
+
+#### Runtime Behavior
+
+Health state is **in-memory only** — it resets to defaults on server restart. This is intentional:
+
+- **Fast convergence**: With a `failure_threshold` of 5, the engine rediscovers a broken executor within a handful of requests.
+- **No stale data**: An executor that was down before restart may have recovered. Starting from a clean slate avoids unnecessary penalization.
+- **Restart = recovery**: Every executor gets a fresh chance. This matches how circuit breaker libraries like Hystrix, resilience4j, and Polly behave.
+
+Health metrics are tracked per executor and updated on every action completion (synchronous or async). The engine emits history events for observability:
+
+| Event | Meaning |
+|-------|---------|
+| `plan_executor_start` | Beginning an attempt on this executor |
+| `plan_executor_success` | Executor returned success |
+| `plan_executor_retry` | Retrying the same executor |
+| `plan_executor_exhausted` | Executor's retries exhausted, moving to next |
+| `plan_breaker_skip` | Skipped executor because circuit breaker is open |
 
 ### Result Caching
 
@@ -983,7 +1022,7 @@ flo workflow signal wfrun-42 --type approval '{"decision": "approved", "approver
 
 ## Related Docs
 
-- [Actions](/docs/orchestration/actions/) — Actions are the building blocks that workflows compose
-- [Stream Processing](/docs/orchestration/processing/) — For continuous, stateless data pipelines (filter/map/aggregate)
-- [Streams](/docs/primitives/streams/) — Source data for stream triggers
-- [KV Store](/docs/primitives/kv/) — Used by actions for state lookups
+- [Actions](/orchestration/actions/) — Actions are the building blocks that workflows compose
+- [Stream Processing](/orchestration/processing/) — For continuous, stateless data pipelines (filter/map/aggregate)
+- [Streams](/primitives/streams/) — Source data for stream triggers
+- [KV Store](/primitives/kv/) — Used by actions for state lookups

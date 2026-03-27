@@ -193,6 +193,110 @@ await worker.start();
 ```
 ```
 
+## Workflow Operations
+
+`client.workflow` manages the full lifecycle of [workflow](/orchestration/workflows/) definitions and runs.
+
+### Declarative Sync
+
+Deploy or update a workflow definition safely — calling this on every app boot is idiomatic:
+
+```typescript
+// Sync from a YAML string
+const result = await client.workflow.sync(yamlString);
+console.log(`${result.name} v${result.version}: ${result.action}`);
+// result.action → "created" | "updated" | "unchanged"
+
+// Sync from raw bytes
+const result2 = await client.workflow.syncBytes(
+  new TextEncoder().encode(yamlString)
+);
+```
+
+### Start and Monitor Runs
+
+```typescript
+// Start a run
+const runId = await client.workflow.start(
+  "process-order",
+  JSON.stringify({ orderId: "ORD-123", amount: 99.99 })
+);
+
+// Poll status
+const status = await client.workflow.status(runId);
+console.log(status.run_id);        // string
+console.log(status.workflow);      // workflow name
+console.log(status.version);       // version string
+console.log(status.status);        // "pending"|"running"|"waiting"|"completed"|"failed"|...
+console.log(status.current_step);  // current or last step name
+// status.input          → Uint8Array (raw input bytes)
+// status.created_at     → bigint (epoch ms)
+// status.started_at?    → bigint | undefined
+// status.completed_at?  → bigint | undefined
+// status.wait_signal?   → string | undefined (signal type being waited for)
+
+// Cancel a run
+await client.workflow.cancel(runId, "User requested cancellation");
+```
+
+### Signals
+
+Deliver external events to a waiting workflow:
+
+```typescript
+// The workflow must have a waitForSignal step expecting "approval_decision"
+await client.workflow.signal(
+  runId,
+  "approval_decision",
+  JSON.stringify({ approved: true, approver: "manager@corp.com" })
+);
+```
+
+### History and Listings
+
+```typescript
+// Run event history
+const events = await client.workflow.history(runId, { limit: 20 });
+for (const event of events) {
+  console.log(`[${event.timestamp}] ${event.type}: ${event.detail}`);
+}
+
+// List runs for a workflow
+const runs = await client.workflow.listRuns({
+  workflowName: "process-order",
+  limit: 50,
+});
+for (const run of runs) {
+  console.log(`${run.run_id} — ${run.status} (${run.created_at})`);
+}
+
+// List all registered definitions
+const defs = await client.workflow.listDefinitions();
+for (const def of defs) {
+  console.log(`${def.name} v${def.version}`);
+}
+
+// Download a definition's YAML
+const yaml = await client.workflow.getDefinition("process-order");
+// yaml → Uint8Array | null
+```
+
+### Disable / Enable
+
+```typescript
+// Pause new runs (existing runs continue)
+await client.workflow.disable("process-order");
+
+// Resume
+await client.workflow.enable("process-order");
+```
+
+### Full Example
+
+See [examples/workflow.ts](https://github.com/floruntime/flo-js/blob/dev/examples/workflow.ts) for a complete walkthrough covering sync, signals, signal timeouts, outcome-based routing, history, and cancellation.
+
+---
+
 ## API Reference Tables
 
 ### KV Methods
@@ -225,3 +329,20 @@ await worker.start();
 | `groupJoin` | `groupJoin(stream, group, consumer) → Promise<void>` | Join group |
 | `groupRead` | `groupRead(stream, opts) → Promise<ReadResult>` | Group read |
 | `groupAck` | `groupAck(stream, ids, opts) → Promise<void>` | Group ack |
+
+### Workflow Methods
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `sync` | `sync(yaml) → Promise<SyncResult>` | Deploy/update definition from YAML string |
+| `syncBytes` | `syncBytes(bytes) → Promise<SyncResult>` | Deploy/update from raw bytes |
+| `start` | `start(name, input?) → Promise<string>` | Start a run, returns run ID |
+| `status` | `status(runId) → Promise<WorkflowStatusResult>` | Get run status |
+| `signal` | `signal(runId, type, data?) → Promise<void>` | Deliver a signal to a waiting run |
+| `cancel` | `cancel(runId, reason?) → Promise<void>` | Cancel a run |
+| `history` | `history(runId, opts?) → Promise<HistoryEvent[]>` | Run event history |
+| `listRuns` | `listRuns(opts?) → Promise<RunEntry[]>` | List runs for a workflow |
+| `listDefinitions` | `listDefinitions() → Promise<DefinitionEntry[]>` | List registered definitions |
+| `getDefinition` | `getDefinition(name) → Promise<Uint8Array \| null>` | Download definition YAML |
+| `disable` | `disable(name) → Promise<void>` | Pause new runs |
+| `enable` | `enable(name) → Promise<void>` | Resume new runs |
