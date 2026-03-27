@@ -2,8 +2,7 @@ import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 
 export default defineConfig({
-  site: 'https://floruntime.github.io',
-  base: '/docs/',
+  site: 'https://docs.floruntime.io',
   integrations: [
     starlight({
       title: 'Flo',
