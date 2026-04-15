@@ -269,7 +269,6 @@ flo action register <name> [options]
 
 | Flag | Description |
 |------|-------------|
-| `--wasm <path>` | WASM module path |
 | `--timeout <ms>` | Execution timeout |
 | `--max-retries <n>` | Maximum retry count |
 
