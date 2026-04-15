@@ -175,8 +175,21 @@ client.Queue.Touch("tasks", []uint64{msg.Seq}, nil)     // Extend lease
 // Append
 client.Stream.Append("events", []byte(`{"event":"click"}`), nil)
 
+// Append with headers
+client.Stream.Append("events", []byte(`{"event":"click"}`), &flo.StreamAppendOptions{
+    Headers: map[string]string{"content-type": "application/json", "source": "web"},
+})
+
 // Read
 records, _ := client.Stream.Read("events", nil)
+
+// Access record fields
+for _, rec := range records.Records {
+    fmt.Println(rec.Stream)   // stream name (e.g. "events")
+    fmt.Println(rec.Payload)  // raw bytes
+    fmt.Println(rec.Headers)  // map[string]string or nil
+    fmt.Println(rec.ID)       // StreamID{TimestampMS, Sequence}
+}
 
 // Consumer groups
 count := uint32(10)
@@ -188,7 +201,64 @@ client.Stream.GroupAck("events", "processors", []flo.StreamID{
 }, nil)
 ```
 
-## Worker Pattern
+## StreamWorker (high-level)
+
+The recommended way to consume streams is the `StreamWorker`, created from a connected client. It handles consumer group join, polling, concurrency, ack/nack, and reconnection automatically:
+
+```go
+worker, _ := client.NewStreamWorker(flo.StreamWorkerOptions{
+    Stream:      "events",
+    Group:       "processors",
+    Concurrency: 5,
+    BatchSize:   10,
+    BlockMS:     30000,
+}, func(sctx *flo.StreamContext) error {
+    var data map[string]interface{}
+    sctx.Into(&data)
+    fmt.Printf("Stream: %s, ID: %v\n", sctx.Stream(), sctx.StreamID())
+    fmt.Printf("Headers: %v\n", sctx.Headers())
+    return process(data)
+})
+defer worker.Close()
+
+worker.Start(ctx)
+```
+
+### StreamWorkerOptions
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `Stream` | `string` | | Single stream name (shorthand) |
+| `Streams` | `[]string` | | Multiple streams (merged with Stream) |
+| `Group` | `string` | `"default"` | Consumer group name |
+| `Consumer` | `string` | auto | Consumer ID within the group |
+| `Concurrency` | `int` | `10` | Max concurrent handlers |
+| `BatchSize` | `uint32` | `10` | Records per poll |
+| `BlockMS` | `uint32` | `30000` | Long-poll timeout (ms) |
+| `MessageTimeout` | `time.Duration` | `5m` | Max handler duration |
+
+### StreamContext
+
+The handler receives a `*StreamContext` with convenience accessors:
+
+```go
+func handler(sctx *flo.StreamContext) error {
+    sctx.Payload()    // []byte
+    sctx.StreamID()   // StreamID
+    sctx.Stream()     // stream name
+    sctx.Headers()    // map[string]string
+    sctx.Namespace()  // namespace
+    sctx.Group()      // consumer group
+    sctx.Consumer()   // consumer ID
+    sctx.Record()     // full StreamRecord
+    sctx.Into(&v)     // JSON unmarshal
+    return nil
+}
+```
+
+Records are **auto-acked** on handler success and **auto-nacked** on error. Connection errors trigger automatic reconnect and consumer group re-join.
+
+## ActionWorker
 
 ```go
 w, _ := client.NewActionWorker(flo.ActionWorkerOptions{Concurrency: 10})

@@ -143,6 +143,14 @@ const records = await client.stream.read("events", {
   limit: 10,
 });
 
+// Access record fields
+for (const rec of records.records) {
+  console.log(rec.stream);   // stream name (e.g. "events")
+  console.log(rec.payload);  // Uint8Array
+  console.log(rec.headers);  // Record<string, string> | null
+  console.log(rec.id);       // StreamID { timestampMs, sequence }
+}
+
 // Consumer groups
 await client.stream.groupJoin("events", "processors", "consumer-1");
 const groupRecords = await client.stream.groupRead("events", {
@@ -155,6 +163,59 @@ await client.stream.groupAck("events",
   { group: "processors" }
 );
 ```
+
+## StreamWorker (high-level)
+
+The recommended way to consume streams is the `StreamWorker`, available in `@floruntime/node`. It handles consumer group join, polling, concurrency, ack/nack, and reconnection automatically:
+
+```typescript
+import { StreamWorker } from "@floruntime/node";
+
+const worker = new StreamWorker("localhost:9000", {
+  stream: "events",
+  group: "processors",
+  concurrency: 5,
+  batchSize: 10,
+  blockMs: 30000,
+}, async (ctx) => {
+  const data = ctx.json<{ event: string }>();
+  console.log(`Stream: ${ctx.stream}, ID: ${ctx.streamId}`);
+  console.log(`Headers:`, ctx.headers);
+  await process(data);
+});
+
+await worker.start();
+```
+
+### StreamWorkerConfig
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `stream` | `string` | *required* | Stream name to consume |
+| `group` | `string` | `"default"` | Consumer group name |
+| `consumer` | `string` | auto | Consumer ID within the group |
+| `concurrency` | `number` | `10` | Max concurrent handlers |
+| `batchSize` | `number` | `10` | Records per poll |
+| `blockMs` | `number` | `30000` | Long-poll timeout (ms) |
+| `messageTimeoutMs` | `number` | `300000` | Max handler duration (ms) |
+
+### StreamContext
+
+The handler receives a `StreamContext` with convenience accessors:
+
+```typescript
+async (ctx) => {
+  ctx.payload;     // Uint8Array
+  ctx.text();      // string (UTF-8 decoded)
+  ctx.json<T>();   // parsed JSON
+  ctx.streamId;    // StreamID
+  ctx.stream;      // stream name
+  ctx.headers;     // Record<string, string> (empty object if none)
+  ctx.record;      // full StreamRecord
+}
+```
+
+Records are **auto-acked** on handler success and **auto-nacked** on exception. Connection errors trigger automatic reconnect and consumer group re-join.
 
 ## Action & Worker Operations
 
@@ -324,8 +385,8 @@ See [examples/workflow.ts](https://github.com/floruntime/flo-js/blob/dev/example
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `append` | `append(stream, payload, opts?) → Promise<AppendResult>` | Append |
-| `read` | `read(stream, opts?) → Promise<ReadResult>` | Read |
+| `append` | `append(stream, payload, opts?) → Promise<AppendResult>` | Append record (with optional headers) |
+| `read` | `read(stream, opts?) → Promise<ReadResult>` | Read records |
 | `groupJoin` | `groupJoin(stream, group, consumer) → Promise<void>` | Join group |
 | `groupRead` | `groupRead(stream, opts) → Promise<ReadResult>` | Group read |
 | `groupAck` | `groupAck(stream, ids, opts) → Promise<void>` | Group ack |

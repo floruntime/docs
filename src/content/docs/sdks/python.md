@@ -102,10 +102,14 @@ await client.queue.touch("tasks", [msg.seq])
 ## Stream Operations
 
 ```python
-from flo import StreamReadOptions, StreamID, StreamGroupReadOptions
+from flo import StreamReadOptions, StreamAppendOptions, StreamID, StreamGroupReadOptions
 
 # Append
 result = await client.stream.append("events", b'{"event": "click"}')
+
+# Append with headers
+result = await client.stream.append("events", b'{"event": "click"}',
+    StreamAppendOptions(headers={"content-type": "application/json", "source": "web"}))
 
 # Read from a specific position
 result = await client.stream.read("events",
@@ -119,11 +123,81 @@ result = await client.stream.read("events",
 result = await client.stream.read("events",
     StreamReadOptions(tail=True, count=10, block_ms=30000))
 
+# Access record fields
+for rec in result.records:
+    print(rec.stream)    # stream name (e.g. "events")
+    print(rec.payload)   # raw bytes
+    print(rec.headers)   # dict[str, str] or None
+    print(rec.id)        # StreamID(timestamp_ms, sequence)
+
 # Consumer groups
 await client.stream.group_join("events", "processors", "worker-1")
 result = await client.stream.group_read("events", "processors", "worker-1",
     StreamGroupReadOptions(count=10, block_ms=30000))
 await client.stream.group_ack("events", "processors", [r.id for r in result.records])
+```
+
+## StreamWorker (high-level)
+
+The recommended way to consume streams is the `StreamWorker`, created from a connected client. It handles consumer group join, polling, concurrency, ack/nack, and reconnection automatically:
+
+```python
+from flo import FloClient, StreamContext
+
+async with FloClient("localhost:9000", namespace="myapp") as client:
+    worker = client.new_stream_worker(
+        stream="events",
+        group="processors",
+        handler=process_event,
+        concurrency=5,
+    )
+
+    async def process_event(ctx: StreamContext) -> None:
+        data = ctx.json()
+        print(f"Stream: {ctx.stream}, ID: {ctx.stream_id}")
+        print(f"Headers: {ctx.headers}")
+        await handle(data)
+
+    await worker.start()
+```
+
+### StreamWorker Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `stream` | `str` | *required* | Stream name to consume |
+| `group` | `str` | `""` | Consumer group name |
+| `consumer` | `str` | auto-generated | Consumer ID within the group |
+| `handler` | `Callable` | *required* | Async function receiving `StreamContext` |
+| `concurrency` | `int` | `10` | Max concurrent handler invocations |
+| `batch_size` | `int` | `10` | Records per poll |
+| `block_ms` | `int` | `30000` | Long-poll timeout (ms) |
+| `message_timeout` | `float` | `300.0` | Max seconds per handler call |
+
+### StreamContext
+
+The handler receives a `StreamContext` with convenience accessors:
+
+```python
+async def process(ctx: StreamContext) -> None:
+    ctx.payload              # raw bytes
+    ctx.json()               # JSON-decoded payload
+    ctx.into(MyModel)        # JSON-decoded into a class
+    ctx.stream_id            # StreamID (timestamp_ms, sequence)
+    ctx.stream               # stream name
+    ctx.headers              # dict[str, str] (empty dict if no headers)
+    ctx.record               # full StreamRecord
+```
+
+Records are **auto-acked** on handler success and **auto-nacked** on exception. Connection errors trigger automatic reconnect and consumer group re-join.
+
+### Context Manager
+
+```python
+async with client.new_stream_worker(
+    stream="events", group="processors", handler=process,
+) as worker:
+    await worker.start()
 ```
 
 ## Action & Worker Operations
@@ -165,4 +239,6 @@ async with FloClient("localhost:9000", namespace="myapp") as client:
 - Native **asyncio** support
 - Full **type annotations** for IDE support
 - Context manager (`async with`) for automatic cleanup
+- **StreamWorker** and **ActionWorker** for managed consumption
+- **Headers** on stream records (read and write)
 - All operations support namespace overrides

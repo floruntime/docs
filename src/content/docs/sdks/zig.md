@@ -125,6 +125,11 @@ var stream = flo.Stream.init(&client);
 // Append
 const result = try stream.append("events", "payload", .{});
 
+// Append with headers
+const result = try stream.append("events", "payload", .{
+    .headers = "content-type=application/json\nsource=web",
+});
+
 // Read from beginning
 var records = try stream.read("events", .{});
 defer records.deinit();
@@ -141,6 +146,13 @@ var records = try stream.read("events", .{
 });
 defer records.deinit();
 
+// Access record fields
+for (records.records) |rec| {
+    std.debug.print("Stream: {s}\n", .{rec.stream});   // stream name
+    std.debug.print("Payload: {s}\n", .{rec.payload});  // raw bytes
+    // rec.headers = ?[]const u8 (raw wire bytes, null if no headers)
+}
+
 // Consumer groups
 try stream.groupJoin("events", "my-group", "worker-1", .{});
 var group_records = try stream.groupRead("events", "my-group", "worker-1", .{
@@ -154,7 +166,72 @@ const info = try stream.info("events", .{});
 try stream.trim("events", .{ .max_len = 1000 });
 ```
 
-## Worker / Action Operations
+## StreamWorker (high-level)
+
+The recommended way to consume streams is the `StreamWorker`. It handles consumer group join, polling, concurrency, ack/nack, and reconnection automatically:
+
+```zig
+fn processEvent(ctx: *flo.StreamContext) !void {
+    const data = try ctx.json(Event);
+    defer data.deinit();
+
+    std.debug.print("Stream: {s}, ID: {d}\n", .{ ctx.stream(), ctx.streamID().sequence });
+    if (ctx.headers()) |hdrs| {
+        // iterate parsed headers
+        _ = hdrs;
+    }
+}
+
+pub fn main() !void {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var worker = try flo.StreamWorker.init(allocator, .{
+        .endpoint = "localhost:9000",
+        .namespace = "myapp",
+        .stream = "events",
+        .group = "processors",
+        .concurrency = 5,
+        .batch_size = 10,
+        .block_ms = 30_000,
+    }, processEvent);
+    defer worker.deinit();
+
+    try worker.start();
+}
+```
+
+### StreamWorkerConfig
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `stream` | `[]const u8` | `""` | Single stream name |
+| `streams` | `?[]const []const u8` | `null` | Multiple streams |
+| `group` | `[]const u8` | `"default"` | Consumer group name |
+| `consumer` | `?[]const u8` | auto | Consumer ID |
+| `concurrency` | `u32` | `10` | Max concurrent handlers |
+| `batch_size` | `u32` | `10` | Records per poll |
+| `block_ms` | `u32` | `30_000` | Long-poll timeout (ms) |
+| `heartbeat_interval_ms` | `u64` | `30_000` | Heartbeat interval (ms) |
+
+### StreamContext
+
+The handler receives a `*StreamContext` with convenience accessors:
+
+```zig
+fn handler(ctx: *flo.StreamContext) !void {
+    ctx.payload();    // []const u8
+    ctx.streamID();   // StreamID
+    ctx.stream();     // stream name
+    ctx.headers();    // ?std.StringHashMap([]const u8)
+    ctx.json(T);      // parsed JSON
+}
+```
+
+Records are **auto-acked** on handler success and **auto-nacked** on error. Connection errors trigger automatic reconnect and consumer group re-join.
+
+## ActionWorker
 
 The `ActionWorker` is a high-level worker that manages connection, registration, polling, heartbeats, and graceful shutdown:
 
