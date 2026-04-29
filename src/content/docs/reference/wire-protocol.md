@@ -79,17 +79,29 @@ Every request has a fixed 32-byte header followed by a variable-length payload:
 
 The protocol defines 167 operation codes organized by subsystem:
 
-### KV Operations (0x10–0x1F)
+### KV Operations (0x100–0x118)
 
 | OpCode | Value | Description |
 |--------|-------|-------------|
-| `kv_get` | `0x10` | Get value by key |
-| `kv_put` | `0x11` | Set key-value pair |
-| `kv_delete` | `0x12` | Delete a key |
-| `kv_scan` | `0x13` | Prefix scan |
-| `kv_batch_put` | `0x14` | Batch put multiple keys |
-| `kv_history` | `0x15` | Get version history |
-| `kv_cas` | `0x16` | Compare-and-swap |
+| `kv_put` | `0x100` | Set key-value pair (returns new version) |
+| `kv_get` | `0x101` | Get value + version by key |
+| `kv_mget` | `0x102` | Multi-key get |
+| `kv_delete` | `0x103` | Delete a key |
+| `kv_scan` | `0x104` | Prefix scan |
+| `kv_history` | `0x105` | Get version history |
+| `kv_incr` | `0x10B` | Atomic counter (signed i64 delta, default +1) |
+| `kv_json_get` | `0x10C` | Extract JSON sub-field via JSONPath |
+| `kv_json_set` | `0x10D` | Atomically set a JSON sub-field |
+| `kv_json_del` | `0x10E` | Atomically delete a JSON sub-field |
+| `kv_touch` | `0x113` | Update TTL on existing key (no value rewrite) |
+| `kv_persist` | `0x114` | Clear TTL (make key permanent) |
+| `kv_exists` | `0x115` | Existence check (no value transferred) |
+| `kv_begin_txn` | `0x110` | Open a per-shard transaction (returns `txn_id` + pinned partition hash) |
+| `kv_commit_txn` | `0x111` | Commit a transaction atomically (returns `commit_index` + `op_count`) |
+| `kv_rollback_txn` | `0x112` | Discard a transaction (idempotent) |
+| `kv_txn_response` | `0x119` | Reply envelope for ops executed inside a transaction |
+
+Response opcodes occupy `0x106–0x10A` and `0x116–0x118`. CAS is expressed as a TLV option on `kv_put`, not a separate opcode. Per-shard transactions (see [Transactions](/primitives/kv#transactions)) are scoped to a single partition and carry the open `txn_id` via the `txn_id` TLV option (tag `0x09`, u64 LE) on subsequent KV ops.
 
 ### Queue Operations (0x20–0x2F)
 
@@ -183,13 +195,20 @@ Flo also accepts Redis RESP protocol on the same port. The Acceptor detects RESP
 
 | RESP Command | Flo Operation |
 |-------------|---------------|
-| `SET key value` | `kv_put` |
+| `SET key value [EX sec] [NX] [XX]` | `kv_put` |
 | `GET key` | `kv_get` |
 | `DEL key` | `kv_delete` |
+| `EXISTS key` | `kv_exists` |
+| `INCR key` / `INCRBY key n` / `DECR key` | `kv_incr` |
+| `EXPIRE key sec` | `kv_touch` |
+| `PERSIST key` | `kv_persist` |
+| `JSON.GET key [path]` | `kv_json_get` |
+| `JSON.SET key path value` | `kv_json_set` |
+| `JSON.DEL key [path]` | `kv_json_del` |
 | `SCAN cursor MATCH pattern` | `kv_scan` |
 | `LPUSH queue value` | `queue_enqueue` |
 | `RPOP queue` | `queue_dequeue` |
 | `XADD stream * field value` | `stream_append` |
 | `XREAD COUNT n STREAMS stream id` | `stream_read` |
 
-This allows Redis clients to connect to Flo without modification for basic operations.
+This allows Redis clients (`redis-cli`, `ioredis`, `redis-py`, `go-redis`, RedisInsight, etc.) to connect to Flo without modification for the operations above. See [Redis compatibility](/reference/redis) for the full mapping and known semantic differences.
