@@ -68,6 +68,21 @@ flo kv get <key> [options]
 |------|-------------|
 | `--block <ms>` | Block until key appears |
 
+### `flo kv mget`
+
+Get many keys in a single round trip. Keys may live on different shards — the server gathers results in parallel.
+
+```bash
+flo kv mget <key1> <key2> ... [options]
+```
+
+| Flag | Description |
+|------|-------------|
+| `--namespace <ns>` | Override default namespace |
+| `--output <fmt>` | `text` (default), `json`, or `table` |
+
+Maximum 256 keys per call. Missing keys are returned as `nil` entries (not errors).
+
 ### `flo kv delete`
 
 Delete a key.
@@ -100,6 +115,70 @@ flo kv history <key> [options]
 | Flag | Description |
 |------|-------------|
 | `--limit <n>` | Maximum versions to return |
+
+### `flo kv incr`
+
+Atomically increment an `i64` counter.
+
+```bash
+flo kv incr <key> [--by <delta>]
+```
+
+| Flag | Description |
+|------|-------------|
+| `-b, --by <n>` | Signed delta (default `+1`) |
+
+### `flo kv touch` / `flo kv persist`
+
+Adjust the TTL on an existing key without rewriting the value.
+
+```bash
+flo kv touch <key> --ttl <seconds>   # update TTL (0 clears it)
+flo kv persist <key>                  # clear TTL
+```
+
+### `flo kv exists`
+
+Existence check (no value transferred). Exits `0` when present, `1` when absent.
+
+```bash
+flo kv exists <key>
+```
+
+### `flo kv jget` / `jset` / `jdel`
+
+JSON sub-field operations using a small JSONPath subset (`$`, `.field`, `[index]`).
+
+```bash
+flo kv jset <key> <path> <json>
+flo kv jget <key> [path]
+flo kv jdel <key> [path]
+```
+
+`jget` prints both the value and the document's current `version`; `jset` / `jdel` print the new version after the write.
+
+### `flo kv begin` / `commit` / `rollback`
+
+Per-shard transactions buffer multiple writes on a single pinned partition and commit them atomically as one Raft entry.
+
+```bash
+flo kv begin <routing-key>             # → prints txn_id and pinned_hash
+flo kv commit <txn-id>                 # → prints commit_index and op_count
+flo kv rollback <txn-id>               # discard buffered ops
+```
+
+Add `--txn <id>` to any of `set`, `get`, `delete`, `incr`, `touch`, `persist`, `exists` to run that operation inside the transaction:
+
+```bash
+TXN=$(flo kv begin user:42 --format json | jq -r .txn_id)
+flo kv set  user:42:name "Jane" --txn "$TXN"
+flo kv incr user:42:visits      --txn "$TXN"
+flo kv commit "$TXN"
+```
+
+Every key inside a transaction must hash to the same partition as the routing key, otherwise the server returns `kv_txn_cross_shard`. `scan`, `mget`, `jget`, `jset`, `jdel`, and `history` are not supported inside transactions.
+
+**Server caps**: 256 ops per transaction, 1 MiB total payload, 1024 open transactions per server. Transactions survive across stateless connections — they are owned by `txn_id`, not by the TCP connection.
 
 ## Streams
 

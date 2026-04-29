@@ -42,23 +42,35 @@ asyncio.run(main())
 ```python
 from flo import GetOptions, PutOptions, ScanOptions, HistoryOptions
 
-# Get
-value = await client.kv.get("key")
+# Put returns PutResult with the new version
+res = await client.kv.put("session:abc", b"data", PutOptions(ttl_seconds=3600))
+print("committed at v", res.version)
+
+# Get returns GetResult | None \u2014 carries both value and version
+r = await client.kv.get("key")
+if r is not None:
+    print(r.value, "@", r.version)
 
 # Blocking get
-value = await client.kv.get("key", GetOptions(block_ms=5000))
+r = await client.kv.get("key", GetOptions(block_ms=5000))
 
-# Put with TTL
-await client.kv.put("session:abc", b"data", PutOptions(ttl_seconds=3600))
-
-# Put with CAS
-await client.kv.put("counter", b"2", PutOptions(cas_version=1))
+# Put with CAS \u2014 use the version returned by Get/Put
+r = await client.kv.get("counter")
+await client.kv.put("counter", b"2", PutOptions(cas_version=r.version))
 
 # Conditional writes
 await client.kv.put("key", b"value", PutOptions(if_not_exists=True))
 
 # Delete
 await client.kv.delete("key")
+
+# Multi-key get (single round trip, up to 256 keys, may span shards)
+entries = await client.kv.mget(["user:1", "user:2", "user:3"])
+for e in entries:
+    if e.found:
+        print(f"{e.key} = {e.value!r} (v{e.version})")
+    else:
+        print(f"{e.key} missing")
 
 # Scan with pagination
 result = await client.kv.scan("user:", ScanOptions(limit=100))
@@ -67,7 +79,42 @@ while result.has_more:
 
 # Version history
 history = await client.kv.history("user:123", HistoryOptions(limit=10))
+
+# Atomic counter
+n = await client.kv.incr("visits:home")        # +1
+n = await client.kv.incr("visits:home", KVIncrOptions(delta=10))
+
+# TTL lifecycle and existence
+await client.kv.touch("lock:resource", 60)     # extend TTL
+await client.kv.persist("lock:resource")       # clear TTL
+ok = await client.kv.exists("lock:resource")
+
+# JSON paths
+await client.kv.json_set("order:42", "$", b'{"items":3,"status":"new"}')
+res = await client.kv.json_set("order:42", "$.status", b'"shipped"')  # atomic sub-field
+print("doc now at v", res.version)
+status = await client.kv.json_get("order:42", "$.status")             # GetResult | None
+print(f"{status.value!r} @ v{status.version}")
+await client.kv.json_del("order:42", "$.status")
+
+# Per-shard transaction \u2014 atomic multi-key writes on one partition
+txn = await client.kv.begin("user:42")
+try:
+    await txn.put("user:42:name", b"Jane")
+    await txn.incr("user:42:visits")
+    result = await txn.commit()
+    print(f"committed {result.op_count} ops at index {result.commit_index}")
+except Exception:
+    await txn.rollback()  # idempotent
+    raise
+
+# Or use as an async context manager (auto-rollback on exception)
+async with await client.kv.begin("user:42") as txn:
+    await txn.put("user:42:last_seen", b"now")
+    await txn.commit()
 ```
+
+`scan`, `mget`, `json_get`, `json_set`, `json_del`, and `history` are not supported inside a transaction and raise `TxnUnsupportedOpError`. Server caps: 256 ops per transaction, 1 MiB total payload.
 
 ## Queue Operations
 

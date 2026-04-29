@@ -90,6 +90,73 @@ flo kv get job:result --wait 30000
 flo kv get config:feature-flags --block 0
 ```
 
+### Multi-key get
+
+Fetch many keys in a single round trip. Keys may live on different shards — the server gathers results in parallel and returns one entry per requested key (with a `found` flag distinguishing missing keys from empty values).
+
+```bash
+flo kv mget user:1 user:2 user:3
+flo kv mget user:1 user:2 --output json
+```
+
+| Flag | Description |
+|------|-------------|
+| `--output <fmt>` | `text` (default), `json`, `table` |
+| `-n <namespace>` | Target namespace |
+
+Limited to **256 keys per call**. The total response is capped at 1 MB; entries beyond that limit are omitted (re-issue the call with the remaining keys).
+
+<Tabs syncKey="lang">
+  <TabItem label="Go">
+    ```go
+    entries, err := client.KV.MGet([]string{"user:1", "user:2", "user:3"}, nil)
+    if err != nil { return err }
+    for _, e := range entries {
+        if e.Found {
+            fmt.Printf("%s = %s (v%d)\n", e.Key, e.Value, e.Version)
+        } else {
+            fmt.Printf("%s missing\n", e.Key)
+        }
+    }
+    ```
+  </TabItem>
+  <TabItem label="Python">
+    ```python
+    entries = await client.kv.mget(["user:1", "user:2", "user:3"])
+    for e in entries:
+        if e.found:
+            print(f"{e.key} = {e.value!r} (v{e.version})")
+        else:
+            print(f"{e.key} missing")
+    ```
+  </TabItem>
+  <TabItem label="JavaScript">
+    ```ts
+    const entries = await client.kv.mget(["user:1", "user:2", "user:3"]);
+    for (const e of entries) {
+      if (e.found) {
+        console.log(`${e.key} = ${new TextDecoder().decode(e.value)} (v${e.version})`);
+      } else {
+        console.log(`${e.key} missing`);
+      }
+    }
+    ```
+  </TabItem>
+  <TabItem label="Zig">
+    ```zig
+    var result = try kv.mget(&.{ "user:1", "user:2", "user:3" }, .{});
+    defer result.deinit();
+    for (result.entries) |e| {
+        if (e.found) {
+            std.debug.print("{s} = {s} (v{d})\n", .{ e.key, e.value, e.version });
+        } else {
+            std.debug.print("{s} missing\n", .{e.key});
+        }
+    }
+    ```
+  </TabItem>
+</Tabs>
+
 ### Delete
 
 ```bash
@@ -179,6 +246,152 @@ If another writer updated the key between your read and write, the CAS fails wit
 
 **CAS guarantees hold across the cluster.** You can read the version from one node and CAS-update from another — the version is the Raft log index, which is globally consistent.
 
+## Atomicity model
+
+Flo's KV store is built around **per-key linearizable writes** rather than multi-key transactions. Every mutation goes through Raft as a single committed entry, so each individual operation is atomic and durable on its own — the same model used by etcd, Consul, and FoundationDB single-key paths.
+
+### Conditional & atomic writes
+
+Use the conditional flags on `kv set`/`KV.Put` to express "do this only if X". Each is a single Raft entry — no coordinator, no roundtrips, no rollback to worry about.
+
+| Pattern | How |
+|---------|-----|
+| Insert if absent | `--nx` (or `--cas 0`) |
+| Update only if present | `--xx` |
+| Compare-and-swap by version | `--cas <version>` |
+| Atomic create with lease | `--nx --ttl <seconds>` |
+| Atomic counter | [`kv incr`](#counters) |
+| Atomic JSON sub-field update | [`kv jset`](#json-paths) |
+
+The classic read-modify-write loop becomes:
+
+```bash
+# 1. Read current state and version (PUT/GET both return the version)
+flo kv get account:42 --format json     # → value + version=11
+
+# 2. Compute new state client-side
+# 3. Conditional write — fails if anyone else changed the key
+flo kv set account:42 '{"balance":150}' --cas 11
+```
+
+If the CAS fails, re-read and retry. For a counter, prefer `kv incr` — it is unconditional and never conflicts.
+
+### Multi-key atomicity
+
+For multi-key writes that must commit or fail as a unit, Flo offers [**per-shard transactions**](#transactions). Operations are buffered on a single pinned partition and replicated as one Raft entry on commit. Pick the right tool:
+
+| Need | Recommended approach |
+|------|---------------------|
+| "Several keys, all-or-nothing" | Open a [transaction](#transactions) pinned to a routing key — all writes commit atomically as one Raft entry. |
+| "All these keys live together" | Set the same `--routing-key` on every related key (see [Shard Co-location](#shard-co-location)). Reads and writes stay on one shard. |
+| "Update several fields of one document" | Model the state as a **single key with a JSON value** and use [`kv jset`](#json-paths) or CAS on the whole document. One Raft entry, no coordination. |
+| "Atomic counter" | Use [`kv incr`](#counters) — unconditional and conflict-free. |
+| "Long-running multi-step state machine" | Use a [workflow](/orchestration/workflows). Workflows give you durable execution, retries, and compensation steps. |
+| "Idempotent producer / exactly-once write" | Use `--nx` on a dedupe key (e.g. `dedupe:<request-id>`) before doing the work. |
+| "Cross-partition transaction" | Not supported. Either restructure keys to share a routing key, or use a workflow with compensating actions. |
+
+## Counters
+
+`kv incr` (opcode `0x10B`) atomically adds a signed delta to a key holding a 64-bit counter. The first `incr` on a missing key creates it at the delta value. The operation is unconditional — it never conflicts — and is ideal for rate-limit buckets, sequence generators, and metric accumulators.
+
+```bash
+flo kv incr visits:home          # +1, returns new value
+flo kv incr visits:home -d 10    # +10
+flo kv incr visits:home -d -1    # decrement
+```
+
+A counter and a string value cannot share a key. `incr` against a non-counter key returns `Conflict`.
+
+### Recipe: per-minute rate limiter
+
+```python
+minute = int(time.time() // 60)
+key = f"rl:{user_id}:{minute}"
+count = await client.kv.incr(key)
+if count == 1:
+    await client.kv.touch(key, ttl_seconds=120)  # auto-expire old buckets
+if count > LIMIT:
+    raise RateLimited()
+```
+
+## TTL lifecycle
+
+TTLs are set at write time via `--ttl` / `PutOptions.TTLSeconds`, but you can also adjust them later:
+
+| Op | Effect |
+|----|--------|
+| [`kv touch <key> --ttl N`](#touch--persist) | Update the TTL on an existing key without rewriting the value |
+| [`kv touch <key> --ttl 0`](#touch--persist) | Clear the TTL (equivalent to `kv persist`) |
+| [`kv persist <key>`](#touch--persist) | Make a key permanent |
+
+These are single-shard, no-replication-skip operations. Use them to extend session leases, refresh distributed locks, or promote a temporary value to permanent without losing it.
+
+## Existence check
+
+`kv exists` (opcode `0x115`) returns a single byte (`0` or `1`) without transferring the value, and is significantly cheaper than `get` for large values.
+
+```bash
+flo kv exists user:123    # exit 0 if present, 1 if absent
+```
+
+## JSON paths
+
+For keys whose value is a JSON document, three operations let you read or mutate **sub-fields** without round-tripping the whole document:
+
+| Op | Wire | Purpose |
+|----|------|---------|
+| `kv jget <key> [path]` | `0x10C` | Extract `path` from the JSON document. Path defaults to `$` (the whole document). |
+| `kv jset <key> <path> <json>` | `0x10D` | Atomically set the value at `path`. `path = "$"` replaces the document (and creates the key if missing). |
+| `kv jdel <key> [path]` | `0x10E` | Remove the value at `path`. |
+
+Paths use a tiny JSONPath subset: `$`, `.field`, `.field.nested`, `[index]`. The operations are atomic per Raft entry — a sub-field update is a single committed write, not a read-modify-write loop.
+
+`jget` returns the document's current `version` alongside the bytes (same `GetResult` shape as `kv get`); `jset` and `jdel` return a `PutResult` with the new version. Use that version to drive CAS on subsequent writes.
+
+### Recipe: status enrichment
+
+```bash
+flo kv set order:42 '{"id":42,"items":3,"status":"new"}'
+flo kv jset order:42 '$.status' '"shipped"'
+flo kv jget order:42 '$.status'      # → "shipped"
+```
+
+The `jset` is a single Raft entry; concurrent writers updating different fields on the same document still each succeed atomically (last writer wins per field).
+
+## Transactions
+
+Per-shard transactions buffer multiple writes on a single pinned partition and commit them atomically as **one Raft entry**. Open with a routing key — every key touched inside the transaction must hash to the same partition, otherwise the server returns `kv_txn_cross_shard`.
+
+| Op | Wire | Purpose |
+|----|------|---------|
+| `kv begin <routing-key>` | `0x110` | Open a new transaction. Returns a `txn_id` and the partition's `pinned_hash`. |
+| `kv commit <txn-id>` | `0x111` | Apply all buffered ops atomically. Returns the `commit_index` and `op_count`. |
+| `kv rollback <txn-id>` | `0x112` | Discard buffered ops. Idempotent. |
+
+Inside a transaction, normal `kv` ops (`put`, `get`, `delete`, `incr`, `touch`, `persist`, `exists`) accept a `--txn <id>` flag and are buffered until commit. **Reads inside the transaction see the buffered writes.** The following are **not supported** inside a transaction and return `kv_txn_unsupported_op`: `scan`, `mget`, `jget`, `jset`, `jdel`, `history`.
+
+**Server caps**: 256 ops per transaction, 1 MiB total payload, 1024 open transactions per server.
+
+```bash
+# Open, write, commit
+TXN=$(flo kv begin user:42 --format json | jq -r .txn_id)
+flo kv set user:42:name "Jane"   --txn $TXN
+flo kv incr user:42:visits       --txn $TXN
+flo kv set user:42:last_seen "$(date -u +%s)" --txn $TXN
+flo kv commit $TXN               # → commit_index=N op_count=3
+```
+
+If the client crashes before commit, the buffered ops are discarded automatically when the transaction expires server-side. Transactions survive across stateless connections — they are owned by `txn_id`, not by the TCP connection.
+
+### When to use transactions vs. JSON or workflows
+
+| Pattern | Use |
+|---------|-----|
+| Atomic update of 2–10 related keys on the same partition | **Transaction** |
+| Atomic update of fields inside one document | [`kv jset`](#json-paths) |
+| Atomic counter increment | [`kv incr`](#counters) |
+| Multi-step business process across shards / external systems | [Workflow](/orchestration/workflows) |
+
 ## Shard Co-location
 
 By default, each key is routed to a shard based on its hash. When you need related keys to land on the same shard (for locality or future atomic operations), use `--routing-key`:
@@ -210,8 +423,9 @@ client := flo.NewClient("localhost:9000")
 client.Connect()
 defer client.Close()
 
-// Put
-client.KV.Put("mykey", []byte("hello"), nil)
+// Put returns a PutResult with the new version
+res, _ := client.KV.Put("mykey", []byte("hello"), nil)
+fmt.Println("committed at version", res.Version)
 
 // Put with TTL
 ttl := uint64(3600)
@@ -219,13 +433,15 @@ client.KV.Put("session:abc", []byte(`{"user":"alice"}`), &flo.PutOptions{
     TTLSeconds: &ttl,
 })
 
-// Get
-value, _ := client.KV.Get("session:abc", nil)
+// Get returns *GetResult (nil if not found) — contains both value and version
+if r, _ := client.KV.Get("session:abc", nil); r != nil {
+    fmt.Printf("%s @ v%d\n", r.Value, r.Version)
+}
 
-// CAS update — read version, then conditional write
-version := uint64(7)
+// CAS update — read version from Get, conditional write
+r, _ := client.KV.Get("counter", nil)
 err := client.KV.Put("counter", []byte("42"), &flo.PutOptions{
-    CASVersion: &version,
+    CASVersion: &r.Version,
 })
 if flo.IsConflict(err) {
     // Another writer modified the key — re-read and retry
@@ -237,9 +453,21 @@ client.KV.Put("lock:resource", []byte("owner-1"), &flo.PutOptions{
     TTLSeconds:  ptr(uint64(30)),
 })
 
+// Atomic counter
+n, _ := client.KV.Incr("visits:home", nil)
+
+// TTL lifecycle
+client.KV.Touch("lock:resource", 60, nil)   // extend lease
+client.KV.Persist("lock:resource", nil)      // make permanent
+ok, _ := client.KV.Exists("lock:resource", nil)
+
+// JSON path operations
+client.KV.JsonSet("order:42", "$.status", []byte(`"shipped"`), nil)
+status, _ := client.KV.JsonGet("order:42", "$.status", nil)
+
 // Blocking get — wait for key to appear
 blockMS := uint32(5000)
-value, _ = client.KV.Get("job:result", &flo.GetOptions{BlockMS: &blockMS})
+r, _ = client.KV.Get("job:result", &flo.GetOptions{BlockMS: &blockMS})
 
 // Prefix scan with pagination
 result, _ := client.KV.Scan("user:", &flo.ScanOptions{Limit: ptr(uint32(100))})
@@ -257,25 +485,39 @@ for _, v := range history {
 client.KV.Put("config", []byte("staging-db"), &flo.PutOptions{
     Namespace: "staging",
 })
-value, _ = client.KV.Get("config", &flo.GetOptions{Namespace: "staging"})
+r, _ = client.KV.Get("config", &flo.GetOptions{Namespace: "staging"})
+
+// Transaction — multiple writes on one shard, atomic commit
+txn, _ := client.KV.Begin("user:42", nil)
+_, _  = txn.Put("user:42:name", []byte("Jane"), nil)
+_, _  = txn.Incr("user:42:visits", 1)
+result, err := txn.Commit()
+if err != nil {
+    _ = txn.Rollback() // idempotent
+}
+fmt.Printf("committed %d ops at index %d\n", result.OpCount, result.CommitIndex)
 ```
 </TabItem>
 <TabItem label="Python">
 ```python
 async with FloClient("localhost:9000") as client:
-    # Put
-    await client.kv.put("mykey", b"hello")
+    # Put returns PutResult with the new version
+    res = await client.kv.put("mykey", b"hello")
+    print("committed at version", res.version)
 
     # Put with TTL
     await client.kv.put("session:abc", b'{"user":"alice"}',
         PutOptions(ttl_seconds=3600))
 
-    # Get
-    value = await client.kv.get("session:abc")
+    # Get returns GetResult | None — contains both value and version
+    r = await client.kv.get("session:abc")
+    if r is not None:
+        print(f"{r.value} @ v{r.version}")
 
-    # CAS update
+    # CAS update — read version from Get, conditional write
+    r = await client.kv.get("counter")
     try:
-        await client.kv.put("counter", b"42", PutOptions(cas_version=7))
+        await client.kv.put("counter", b"42", PutOptions(cas_version=r.version))
     except ConflictError:
         pass  # re-read and retry
 
@@ -283,8 +525,20 @@ async with FloClient("localhost:9000") as client:
     await client.kv.put("lock:resource", b"owner-1",
         PutOptions(if_not_exists=True, ttl_seconds=30))
 
+    # Atomic counter
+    n = await client.kv.incr("visits:home")
+
+    # TTL lifecycle
+    await client.kv.touch("lock:resource", 60)
+    await client.kv.persist("lock:resource")
+    ok = await client.kv.exists("lock:resource")
+
+    # JSON paths
+    await client.kv.json_set("order:42", "$.status", b'"shipped"')
+    status = await client.kv.json_get("order:42", "$.status")
+
     # Blocking get
-    value = await client.kv.get("job:result", GetOptions(block_ms=5000))
+    r = await client.kv.get("job:result", GetOptions(block_ms=5000))
 
     # Prefix scan
     result = await client.kv.scan("user:", ScanOptions(limit=100))
@@ -299,6 +553,17 @@ async with FloClient("localhost:9000") as client:
     # Namespace-scoped
     await client.kv.put("config", b"staging-db",
         PutOptions(namespace="staging"))
+
+    # Transaction — multiple writes on one shard, atomic commit
+    txn = await client.kv.begin("user:42")
+    try:
+        await txn.put("user:42:name", b"Jane")
+        await txn.incr("user:42:visits")
+        result = await txn.commit()
+        print(f"committed {result.op_count} ops at index {result.commit_index}")
+    except Exception:
+        await txn.rollback()  # idempotent
+        raise
 ```
 </TabItem>
 <TabItem label="JavaScript">
@@ -306,17 +571,23 @@ async with FloClient("localhost:9000") as client:
 const client = new FloClient("localhost:9000");
 await client.connect();
 
-// Put
-await client.kv.put("mykey", encode("hello"));
+// Put returns PutResult with the new version
+const res = await client.kv.put("mykey", encode("hello"));
+console.log("committed at version", res.version);
 
 // Put with TTL
 await client.kv.put("session:abc", encode('{"user":"alice"}'), {
   ttlSeconds: 3600n,
 });
 
-// CAS update
+// Get returns GetResult | null — contains both value and version
+const r = await client.kv.get("session:abc");
+if (r) console.log(`${decode(r.value)} @ v${r.version}`);
+
+// CAS update — read version from Get, conditional write
+const cur = await client.kv.get("counter");
 try {
-  await client.kv.put("counter", encode("42"), { casVersion: 7n });
+  await client.kv.put("counter", encode("42"), { casVersion: cur!.version });
 } catch (err) {
   // ConflictError — re-read and retry
 }
@@ -327,8 +598,20 @@ await client.kv.put("lock:resource", encode("owner-1"), {
   ttlSeconds: 30n,
 });
 
+// Atomic counter
+const n = await client.kv.incr("visits:home");
+
+// TTL lifecycle
+await client.kv.touch("lock:resource", 60n);
+await client.kv.persist("lock:resource");
+const exists = await client.kv.exists("lock:resource");
+
+// JSON paths
+await client.kv.jsonSet("order:42", "$.status", encode('"shipped"'));
+const status = await client.kv.jsonGet("order:42", "$.status");
+
 // Blocking get
-const value = await client.kv.get("job:result", { blockMs: 5000 });
+const pending = await client.kv.get("job:result", { blockMs: 5000 });
 
 // Prefix scan
 const result = await client.kv.scan("user:", { limit: 100 });
@@ -343,6 +626,18 @@ const history = await client.kv.history("counter", { limit: 5 });
 await client.kv.put("config", encode("staging-db"), {
   namespace: "staging",
 });
+
+// Transaction — multiple writes on one shard, atomic commit
+const txn = await client.kv.begin("user:42");
+try {
+  await txn.put("user:42:name", encode("Jane"));
+  await txn.incr("user:42:visits", 1n);
+  const result = await txn.commit();
+  console.log(`committed ${result.opCount} ops at index ${result.commitIndex}`);
+} catch (err) {
+  await txn.rollback(); // idempotent
+  throw err;
+}
 ```
 </TabItem>
 <TabItem label="Zig">
@@ -353,33 +648,56 @@ try client.connect();
 
 var kv = flo.KV.init(&client);
 
-// Put
-try kv.put("mykey", "hello", .{});
+// Put returns PutResult with the new version
+const put_res = try kv.put("mykey", "hello", .{});
+std.debug.print("committed at v{d}\n", .{put_res.version});
 
 // Put with TTL
-try kv.put("session:abc", "{\"user\":\"alice\"}", .{ .ttl_seconds = 3600 });
+_ = try kv.put("session:abc", "{\"user\":\"alice\"}", .{ .ttl_seconds = 3600 });
 
-// Get
-if (try kv.get("session:abc", .{})) |value| {
-    defer allocator.free(value);
-    std.debug.print("Got: {s}\n", .{value});
+// Get returns ?GetResult — contains both value and version
+if (try kv.get("session:abc", .{})) |r_const| {
+    var r = r_const;
+    defer r.deinit(allocator);
+    std.debug.print("{s} @ v{d}\n", .{ r.value, r.version });
 }
 
-// CAS update
-kv.put("counter", "42", .{ .cas_version = 7 }) catch |err| switch (err) {
-    error.Conflict => {}, // re-read and retry
-    else => return err,
-};
+// CAS update — read version from Get, conditional write
+if (try kv.get("counter", .{})) |r_const| {
+    var r = r_const;
+    defer r.deinit(allocator);
+    _ = kv.put("counter", "42", .{ .cas_version = r.version }) catch |err| switch (err) {
+        error.Conflict => {}, // re-read and retry
+        else => return err,
+    };
+}
 
 // Conditional write
-try kv.put("lock:resource", "owner-1", .{
+_ = try kv.put("lock:resource", "owner-1", .{
     .if_not_exists = true,
     .ttl_seconds = 30,
 });
 
+// Atomic counter
+const n = try kv.incr("visits:home", .{});
+
+// TTL lifecycle
+try kv.touch("lock:resource", 60, .{});
+try kv.persist("lock:resource", .{});
+const exists = try kv.exists("lock:resource", .{});
+
+// JSON paths
+_ = try kv.jsonSet("order:42", "$.status", "\"shipped\"", .{});
+if (try kv.jsonGet("order:42", "$.status", .{})) |status_const| {
+    var status = status_const;
+    defer status.deinit(allocator);
+    std.debug.print("{s} @ v{d}\n", .{ status.value, status.version });
+}
+
 // Blocking get
-if (try kv.get("job:result", .{ .block_ms = 5000 })) |value| {
-    defer allocator.free(value);
+if (try kv.get("job:result", .{ .block_ms = 5000 })) |r_const| {
+    var r = r_const;
+    defer r.deinit(allocator);
 }
 
 // Prefix scan
@@ -392,6 +710,14 @@ defer history.deinit();
 
 // Namespace-scoped
 try kv.put("config", "staging-db", .{ .namespace = "staging" });
+
+// Transaction — multiple writes on one shard, atomic commit
+var txn = try kv.begin("user:42", .{});
+defer txn.deinit();
+_ = try txn.put("user:42:name", "Jane", .{});
+_ = try txn.incr("user:42:visits", 1);
+const result = try txn.commit();
+std.debug.print("committed {d} ops at index {d}\n", .{ result.op_count, result.commit_index });
 ```
 </TabItem>
 </Tabs>

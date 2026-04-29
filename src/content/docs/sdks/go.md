@@ -65,33 +65,41 @@ client := flo.NewClient("localhost:9000",
 ### Get
 
 ```go
-// Simple get
-value, err := client.KV.Get("key", nil)
+// Returns *flo.GetResult (nil if not found) — carries both value and version
+result, err := client.KV.Get("key", nil)
+if result != nil {
+    fmt.Printf("%s @ v%d\n", result.Value, result.Version)
+}
 
 // Blocking get (wait for key to appear)
 blockMS := uint32(5000)
-value, err := client.KV.Get("key", &flo.GetOptions{BlockMS: &blockMS})
+result, _ = client.KV.Get("key", &flo.GetOptions{BlockMS: &blockMS})
 ```
 
 ### Put
 
 ```go
-// Simple put
-err := client.KV.Put("key", []byte("value"), nil)
+// Simple put — returns flo.PutResult with the committed version
+res, err := client.KV.Put("key", []byte("value"), nil)
+fmt.Println("committed at version", res.Version)
 
 // With TTL
 ttl := uint64(3600)
-err := client.KV.Put("key", []byte("value"), &flo.PutOptions{TTLSeconds: &ttl})
+res, _ = client.KV.Put("key", []byte("value"), &flo.PutOptions{TTLSeconds: &ttl})
 
-// With CAS
-version := uint64(1)
-err := client.KV.Put("key", []byte("new"), &flo.PutOptions{CASVersion: &version})
+// With CAS — use the version returned by Get or a previous Put
+cur, _ := client.KV.Get("key", nil)
+res, err = client.KV.Put("key", []byte("new"), &flo.PutOptions{CASVersion: &cur.Version})
 if flo.IsConflict(err) {
-    // Version mismatch
+    // Version mismatch — re-read and retry
 }
 
+// CAS create-if-absent (version 0 means "must not exist")
+zero := uint64(0)
+res, err = client.KV.Put("key", []byte("first"), &flo.PutOptions{CASVersion: &zero})
+
 // Conditional
-err := client.KV.Put("key", []byte("value"), &flo.PutOptions{IfNotExists: true})
+res, err = client.KV.Put("key", []byte("value"), &flo.PutOptions{IfNotExists: true})
 ```
 
 ### Delete
@@ -99,6 +107,84 @@ err := client.KV.Put("key", []byte("value"), &flo.PutOptions{IfNotExists: true})
 ```go
 err := client.KV.Delete("key", nil)
 ```
+
+### Multi-key get
+
+Fetch up to 256 keys in a single round trip — keys may live on different shards. Each entry has a `Found` flag.
+
+```go
+entries, err := client.KV.MGet([]string{"user:1", "user:2", "user:3"}, nil)
+if err != nil { return err }
+for _, e := range entries {
+    if e.Found {
+        fmt.Printf("%s = %s (v%d)\n", e.Key, e.Value, e.Version)
+    } else {
+        fmt.Printf("%s missing\n", e.Key)
+    }
+}
+```
+
+### Atomic counters
+
+```go
+n, err := client.KV.Incr("visits:home", nil)            // +1
+n, err = client.KV.Incr("visits:home", &flo.KVIncrOptions{Delta: flo.Int64Ptr(10)})
+```
+
+### TTL lifecycle and existence
+
+```go
+client.KV.Touch("lock:resource", 60, nil)  // extend TTL
+client.KV.Persist("lock:resource", nil)    // clear TTL
+ok, _ := client.KV.Exists("lock:resource", nil)
+```
+
+### JSON paths
+
+```go
+// Whole-document set (creates the key)
+client.KV.JsonSet("order:42", "$", []byte(`{"items":3,"status":"new"}`), nil)
+
+// Atomic sub-field update — single Raft entry, returns new version
+res, _ := client.KV.JsonSet("order:42", "$.status", []byte(`"shipped"`), nil)
+fmt.Println("doc now at v", res.Version)
+
+// Read a sub-field — returns *GetResult{Value, Version}
+status, _ := client.KV.JsonGet("order:42", "$.status", nil)
+fmt.Printf("%s @ v%d\n", status.Value, status.Version)
+
+// Remove a sub-field
+client.KV.JsonDel("order:42", "$.status", nil)
+```
+
+### Per-shard transactions
+
+Buffer multiple writes on a single pinned partition and commit them atomically as one Raft entry. Every key touched inside the transaction must hash to the same partition as the routing key.
+
+```go
+txn, err := client.KV.Begin("user:42", nil)
+if err != nil {
+    return err
+}
+
+if _, err := txn.Put("user:42:name", []byte("Jane"), nil); err != nil {
+    _ = txn.Rollback()
+    return err
+}
+if _, err := txn.Incr("user:42:visits", 1); err != nil {
+    _ = txn.Rollback()
+    return err
+}
+
+result, err := txn.Commit()
+if err != nil {
+    _ = txn.Rollback() // idempotent
+    return err
+}
+fmt.Printf("committed %d ops at index %d\n", result.OpCount, result.CommitIndex)
+```
+
+`scan`, `mget`, `JsonGet`, `JsonSet`, `JsonDel`, and `History` are not supported inside a transaction and return `ErrTxnUnsupportedOp`. Server caps: 256 ops per transaction, 1 MiB total payload.
 
 ### Scan
 

@@ -40,10 +40,11 @@ pub fn main() !void {
 
     // KV
     var kv = flo.KV.init(&client);
-    try kv.put("key", "value", .{});
-    if (try kv.get("key", .{})) |value| {
-        defer allocator.free(value);
-        std.debug.print("Got: {s}\n", .{value});
+    _ = try kv.put("key", "value", .{});
+    if (try kv.get("key", .{})) |r_const| {
+        var r = r_const;
+        defer r.deinit(allocator);
+        std.debug.print("Got: {s} @ v{d}\n", .{ r.value, r.version });
     }
 
     // Queue
@@ -65,22 +66,43 @@ pub fn main() !void {
 ```zig
 var kv = flo.KV.init(&client);
 
-// Get (returns null if not found)
-const value = try kv.get("key", .{});
+// Get returns ?GetResult — carries both value and version
+if (try kv.get("key", .{})) |r_const| {
+    var r = r_const;
+    defer r.deinit(allocator);
+    std.debug.print("{s} @ v{d}\n", .{ r.value, r.version });
+}
 
 // Blocking get
-const value = try kv.get("key", .{ .block_ms = 5000 });
+_ = try kv.get("key", .{ .block_ms = 5000 });
 
-// Put with options
-try kv.put("key", "value", .{
+// Put returns PutResult { version: u64 }
+const put_res = try kv.put("key", "value", .{
     .ttl_seconds = 3600,
-    .cas_version = 5,
     .if_not_exists = true,
-    .namespace = "other-ns",  // override default
+    .namespace = "other-ns",
 });
+
+// CAS — use the version returned by Get/Put
+if (try kv.get("key", .{})) |r_const| {
+    var r = r_const;
+    defer r.deinit(allocator);
+    _ = try kv.put("key", "new", .{ .cas_version = r.version });
+}
 
 // Delete
 try kv.delete("key", .{});
+
+// Multi-key get (single round trip, up to 256 keys, may span shards)
+var mget_res = try kv.mget(&.{ "user:1", "user:2", "user:3" }, .{});
+defer mget_res.deinit();
+for (mget_res.entries) |e| {
+    if (e.found) {
+        std.debug.print("{s} = {s} (v{d})\n", .{ e.key, e.value, e.version });
+    } else {
+        std.debug.print("{s} missing\n", .{e.key});
+    }
+}
 
 // Scan
 var result = try kv.scan("prefix:", .{ .limit = 100, .keys_only = true });
@@ -88,7 +110,38 @@ defer result.deinit();
 
 // History
 const versions = try kv.history("key", .{ .limit = 10 });
+
+// Atomic counter
+const n = try kv.incr("visits:home", .{});
+const m = try kv.incr("visits:home", .{ .delta = 10 });
+
+// TTL lifecycle and existence
+try kv.touch("lock:resource", 60, .{});
+try kv.persist("lock:resource", .{});
+const exists = try kv.exists("lock:resource", .{});
+
+// JSON paths
+_ = try kv.jsonSet("order:42", "$", "{\"items\":3,\"status\":\"new\"}", .{});
+const set_res = try kv.jsonSet("order:42", "$.status", "\"shipped\"", .{}); // atomic sub-field
+std.debug.print("doc now at v{d}\n", .{set_res.version});
+if (try kv.jsonGet("order:42", "$.status", .{})) |status_const| {
+    var status = status_const;
+    defer status.deinit(allocator);
+    std.debug.print("{s} @ v{d}\n", .{ status.value, status.version });
+}
+_ = try kv.jsonDel("order:42", "$.status", .{});
+
+// Per-shard transaction — atomic multi-key writes on one partition
+var txn = try kv.begin("user:42", .{});
+defer txn.deinit();
+_ = try txn.put("user:42:name", "Jane", .{});
+_ = try txn.incr("user:42:visits", 1);
+const result = try txn.commit();
+std.debug.print("committed {d} ops at index {d}\n", .{ result.op_count, result.commit_index });
+// On error, call `txn.rollback()` instead — idempotent.
 ```
+
+`scan`, `mget`, `jsonGet`, `jsonSet`, `jsonDel`, and `history` are not supported inside a transaction and return `FloError.TxnUnsupportedOp`. Server caps: 256 ops per transaction, 1 MiB total payload.
 
 ## Queue Operations
 

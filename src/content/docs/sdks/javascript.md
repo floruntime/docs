@@ -84,25 +84,69 @@ The web SDK is limited to **streams** and **KV read-only**. For full KV mutation
 ## KV Operations
 
 ```typescript
-// Get
-const value = await client.kv.get("key"); // Uint8Array | null
+// Get returns GetResult | null \u2014 carries both value and version
+const r = await client.kv.get("key");
+if (r) console.log(r.value, "@", r.version); // r.version is bigint
 
-// Put with options
-await client.kv.put("key", encode("value"), {
+// Put returns PutResult { version: bigint }
+const res = await client.kv.put("key", encode("value"), {
   ttlSeconds: 3600n,
-  casVersion: 1n,      // Optimistic locking
+  casVersion: r?.version,  // optimistic locking against the latest read
   ifNotExists: true,
 });
+console.log("committed at v", res.version);
 
 // Delete
 await client.kv.delete("key");
+
+// Multi-key get (single round trip, up to 256 keys, may span shards)
+const entries = await client.kv.mget(["user:1", "user:2", "user:3"]);
+const decoder = new TextDecoder();
+for (const e of entries) {
+  if (e.found) {
+    console.log(`${e.key} = ${decoder.decode(e.value)} (v${e.version})`);
+  } else {
+    console.log(`${e.key} missing`);
+  }
+}
 
 // Scan
 const result = await client.kv.scan("user:", { limit: 100 });
 
 // History
 const versions = await client.kv.history("key");
+
+// Atomic counter
+const n = await client.kv.incr("visits:home");        // +1
+const m = await client.kv.incr("visits:home", { delta: 10n });
+
+// TTL lifecycle and existence
+await client.kv.touch("lock:resource", 60n);   // extend TTL
+await client.kv.persist("lock:resource");      // clear TTL
+const exists = await client.kv.exists("lock:resource");
+
+// JSON paths
+await client.kv.jsonSet("order:42", "$", encode('{"items":3,"status":"new"}'));
+const setRes = await client.kv.jsonSet("order:42", "$.status", encode('"shipped"'));
+console.log("doc now at v", setRes.version);
+const status = await client.kv.jsonGet("order:42", "$.status"); // GetResult | null
+if (status) console.log(`${decode(status.value)} @ v${status.version}`);
+await client.kv.jsonDel("order:42", "$.status");
+
+// Per-shard transaction — atomic multi-key writes on one partition
+const txn = await client.kv.begin("user:42");
+try {
+  await txn.put("user:42:name", encode("Jane"));
+  await txn.incr("user:42:visits", 1n);
+  const result = await txn.commit();
+  console.log(`committed ${result.opCount} ops at index ${result.commitIndex}`);
+} catch (err) {
+  await txn.rollback(); // idempotent
+  throw err;
+}
 ```
+
+`scan`, `mget`, `jsonGet`, `jsonSet`, `jsonDel`, and `history` are not supported inside a transaction and throw `TxnUnsupportedOpError`. Server caps: 256 ops per transaction, 1 MiB total payload.
 
 ## Queue Operations
 
