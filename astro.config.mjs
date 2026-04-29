@@ -103,6 +103,7 @@ export default defineConfig({
             { slug: 'reference/cli', label: 'CLI' },
             { slug: 'reference/rest-api', label: 'REST API' },
             { slug: 'reference/wire-protocol' },
+            { slug: 'reference/redis', label: 'Redis Compatibility' },
           ],
         },
       ],
