@@ -88,8 +88,14 @@ Maximum 256 keys per call. Missing keys are returned as `nil` entries (not error
 Delete a key.
 
 ```bash
-flo kv delete <key>
+flo kv delete <key> [options]
 ```
+
+| Flag | Description |
+|------|-------------|
+| `--cas <version>` | Only delete if the current version matches (race-free lock release) |
+| `-r, --routing-key <key>` | Explicit shard routing key |
+| `-t, --txn <id>` | Buffer inside a transaction |
 
 ### `flo kv list`
 
@@ -136,6 +142,12 @@ Adjust the TTL on an existing key without rewriting the value.
 flo kv touch <key> --ttl <seconds>   # update TTL (0 clears it)
 flo kv persist <key>                  # clear TTL
 ```
+
+| Flag | Description |
+|------|-------------|
+| `--cas <version>` | Only update if the current version matches (race-free lease renewal) |
+| `-r, --routing-key <key>` | Explicit shard routing key |
+| `-t, --txn <id>` | Buffer inside a transaction |
 
 ### `flo kv exists`
 
