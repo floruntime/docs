@@ -276,6 +276,31 @@ flo kv set account:42 '{"balance":150}' --cas 11
 
 If the CAS fails, re-read and retry. For a counter, prefer `kv incr` — it is unconditional and never conflicts.
 
+#### CAS-guarded delete, touch, and persist
+
+The same `if_match` guard is also accepted by `delete`, `touch`, and `persist`. This closes the classic distributed-lock race: the holder can release the lock (or extend its lease) only if it still owns the version it acquired.
+
+```go
+// Acquire: NX put with TTL returns version
+v, _ := kv.Put(ctx, "lock:job-42", []byte(ownerID),
+    &flo.PutOptions{NX: true, TTL: 30 * time.Second})
+
+// ... do work ...
+
+// Release: only the owner deletes — no risk of unlocking after expiry
+_ = kv.Delete(ctx, "lock:job-42", &flo.DeleteOptions{IfMatch: &v.Version})
+```
+
+```python
+v = await kv.put("lock:job-42", owner_id.encode(), nx=True, ttl=30)
+# ... work ...
+await kv.delete("lock:job-42", DeleteOptions(if_match=v.version))
+# Renew the lease atomically
+await kv.touch("lock:job-42", 30, KVTouchOptions(if_match=v.version))
+```
+
+A version mismatch (or a missing key when `if_match` is set) returns the same CAS-failed error as `put` with `--cas`, carrying the current version so callers can decide whether to retry or give up.
+
 ### Multi-key atomicity
 
 For multi-key writes that must commit or fail as a unit, Flo offers [**per-shard transactions**](#transactions). Operations are buffered on a single pinned partition and replicated as one Raft entry on commit. Pick the right tool:
