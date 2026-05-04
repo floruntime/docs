@@ -1,0 +1,222 @@
+---
+title: Welcome to FloRuntime
+description: The Universal Distributed Runtime — Streams, KV, Queues, Time-Series, Actions, Workflows, and Stream Processing in a single binary.
+template: splash
+tableOfContents: false
+editUrl: false
+hero:
+  tagline: Streams, KV, Queues, Time-Series, Actions, and Workflows — unified in a single binary. Thread-per-shard. Zero dependencies.
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+<div class="flo-home">
+
+<section class="flo-section flo-quickstart">
+  <div class="flo-section-head">
+    <span class="flo-eyebrow">Developer Quickstart</span>
+    <h2 class="flo-section-title">Get up and running in under a minute</h2>
+    <p class="flo-section-lede">
+      Install Flo, start the runtime, and store your first value. Every primitive ships in one binary —
+      no Kafka, no Redis, no separate workflow engine.
+    </p>
+  </div>
+
+  <div class="flo-quickstart-panel">
+
+<Tabs>
+<TabItem label="macOS">
+
+```bash
+# Install via Homebrew
+brew install floruntime/tap/flo
+
+# Start the runtime
+flo server start
+
+# Store and read a value
+flo kv set hello "world"
+flo kv get hello
+```
+
+</TabItem>
+<TabItem label="Linux">
+
+```bash
+# Download and install
+curl -fsSL https://get.floruntime.io | sh
+
+# Start the runtime
+flo server start
+
+# Create a stream and append an event
+flo stream create events
+flo stream append events '{"type":"login","user":"alice"}'
+```
+
+</TabItem>
+<TabItem label="Docker">
+
+```bash
+# Pull and run
+docker run -p 4222:4222 -p 9090:9090 floruntime/flo:latest
+
+# Use the CLI from another terminal
+flo kv set greeting "hello from docker"
+flo kv get greeting
+```
+
+</TabItem>
+</Tabs>
+
+  </div>
+</section>
+
+<section class="flo-section">
+  <div class="flo-section-head">
+    <span class="flo-eyebrow">Primitives</span>
+    <h2 class="flo-section-title">Storage that bends to your workload</h2>
+    <p class="flo-section-lede">
+      Four data primitives — all backed by the same Raft-replicated log, shaped to fit
+      different access patterns.
+    </p>
+  </div>
+
+  <div class="flo-grid flo-grid-4">
+    <a class="flo-card" href="/primitives/kv/">
+      <div class="flo-card-icon" data-icon="database"></div>
+      <div class="flo-card-body">
+        <h3>KV Store</h3>
+        <p>Hash-indexed key-value with MVCC, TTL, CAS, and prefix scans.</p>
+      </div>
+      <span class="flo-card-arrow"></span>
+    </a>
+    <a class="flo-card" href="/primitives/streams/">
+      <div class="flo-card-icon" data-icon="stream"></div>
+      <div class="flo-card-body">
+        <h3>Streams</h3>
+        <p>Partitioned append-only logs with consumer groups and exactly-once delivery.</p>
+      </div>
+      <span class="flo-card-arrow"></span>
+    </a>
+    <a class="flo-card" href="/primitives/queues/">
+      <div class="flo-card-icon" data-icon="queue"></div>
+      <div class="flo-card-body">
+        <h3>Queues</h3>
+        <p>Priority queues with lease delivery, dead-letter, and visibility timeouts.</p>
+      </div>
+      <span class="flo-card-arrow"></span>
+    </a>
+    <a class="flo-card" href="/primitives/time-series/">
+      <div class="flo-card-icon" data-icon="clock"></div>
+      <div class="flo-card-body">
+        <h3>Time-Series</h3>
+        <p>Columnar storage with InfluxDB line-protocol ingest and FloQL queries.</p>
+      </div>
+      <span class="flo-card-arrow"></span>
+    </a>
+  </div>
+</section>
+
+<section class="flo-section">
+  <div class="flo-section-head">
+    <span class="flo-eyebrow">Orchestration</span>
+    <h2 class="flo-section-title">Build agents and pipelines on the same runtime</h2>
+    <p class="flo-section-lede">
+      Durable execution, multi-step workflows, and real-time stream processing — no
+      separate cluster needed.
+    </p>
+  </div>
+
+  <div class="flo-grid flo-grid-2">
+    <a class="flo-card flo-card-lg" href="/orchestration/actions/">
+      <div class="flo-card-icon" data-icon="action"></div>
+      <div class="flo-card-body">
+        <h3>Actions &amp; Workers</h3>
+        <p>
+          Durable execution of external logic. Automatic retries, timeouts, and
+          dead-letter handling. Workers poll for invocations and report results.
+        </p>
+      </div>
+      <span class="flo-card-arrow"></span>
+    </a>
+    <a class="flo-card flo-card-lg" href="/orchestration/workflows/">
+      <div class="flo-card-icon" data-icon="workflow"></div>
+      <div class="flo-card-body">
+        <h3>Workflows</h3>
+        <p>
+          Multi-step orchestration defined in YAML. Signals, timers, circuit breakers,
+          and full state replay.
+        </p>
+      </div>
+      <span class="flo-card-arrow"></span>
+    </a>
+    <a class="flo-card flo-card-lg" href="/orchestration/processing/">
+      <div class="flo-card-icon" data-icon="processing"></div>
+      <div class="flo-card-body">
+        <h3>Stream Processing</h3>
+        <p>
+          Stateful pipelines with windowing, watermarks, checkpointing, and WASM
+          operators. Sub-millisecond local hops.
+        </p>
+      </div>
+      <span class="flo-card-arrow"></span>
+    </a>
+    <a class="flo-card flo-card-lg" href="/architecture/overview/">
+      <div class="flo-card-icon" data-icon="architecture"></div>
+      <div class="flo-card-body">
+        <h3>Architecture</h3>
+        <p>
+          Thread-per-shard, single Raft log per partition, hot-warm-cold storage tiering.
+          Designed for predictable tail latency.
+        </p>
+      </div>
+      <span class="flo-card-arrow"></span>
+    </a>
+  </div>
+</section>
+
+<section class="flo-section">
+  <div class="flo-section-head">
+    <span class="flo-eyebrow">Client SDKs</span>
+    <h2 class="flo-section-title">Talk to Flo from any language</h2>
+    <p class="flo-section-lede">
+      Native clients with the full TCP wire protocol. Drop-in Redis compatibility for
+      KV. RESP, HTTP, and WebSocket transports.
+    </p>
+  </div>
+
+  <div class="flo-grid flo-grid-4 flo-grid-compact">
+    <a class="flo-sdk" href="/sdks/go/">
+      <span class="flo-sdk-mark" data-lang="go">Go</span>
+      <span class="flo-sdk-name">Go SDK</span>
+    </a>
+    <a class="flo-sdk" href="/sdks/python/">
+      <span class="flo-sdk-mark" data-lang="py">Py</span>
+      <span class="flo-sdk-name">Python SDK</span>
+    </a>
+    <a class="flo-sdk" href="/sdks/javascript/">
+      <span class="flo-sdk-mark" data-lang="js">JS</span>
+      <span class="flo-sdk-name">JavaScript SDK</span>
+    </a>
+    <a class="flo-sdk" href="/sdks/zig/">
+      <span class="flo-sdk-mark" data-lang="zig">Zig</span>
+      <span class="flo-sdk-name">Zig SDK</span>
+    </a>
+  </div>
+</section>
+
+<section class="flo-section flo-cta">
+  <div class="flo-cta-inner">
+    <div>
+      <h2>Ready to deploy?</h2>
+      <p>Run a single node, a 3-node Raft cluster, or scale across regions.</p>
+    </div>
+    <div class="flo-cta-actions">
+      <a class="flo-btn flo-btn-primary" href="/getting-started/installation/">Install Flo</a>
+      <a class="flo-btn flo-btn-ghost" href="/deployment/clustering/">Cluster guide →</a>
+    </div>
+  </div>
+</section>
+
+</div>

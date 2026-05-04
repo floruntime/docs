@@ -18,8 +18,7 @@ Flo clusters consist of multiple nodes that coordinate via:
 
 Each node needs at least one seed address to join the cluster:
 
-```toml
-# flo.toml
+```toml title="flo.toml"
 [cluster]
 seeds = ["10.0.1.10:9000", "10.0.1.11:9000", "10.0.1.12:9000"]
 node_id = 1

@@ -12,51 +12,154 @@ hero:
       link: /getting-started/introduction/
       icon: right-arrow
       variant: primary
-    - text: Install
+    - text: Install Flo
       link: /getting-started/installation/
       variant: minimal
 ---
 
-import { Card, CardGrid } from '@astrojs/starlight/components';
+import { Card, CardGrid, Tabs, TabItem } from '@astrojs/starlight/components';
+
+## Quickstart
+
+Get up and running in under a minute.
+
+<Tabs>
+  <TabItem label="macOS">
+
+```bash
+# Install via Homebrew
+brew install floruntime/tap/flo
+
+# Start Flo
+flo server start
+
+# Store a value
+flo kv set hello "world"
+
+# Read it back
+flo kv get hello
+```
+
+  </TabItem>
+  <TabItem label="Linux">
+
+```bash
+# Download and install
+curl -fsSL https://get.floruntime.io | sh
+
+# Start Flo
+flo server start
+
+# Create a stream
+flo stream create events
+
+# Append an event
+flo stream append events '{"type":"login","user":"alice"}'
+```
+
+  </TabItem>
+  <TabItem label="Docker">
+
+```bash
+# Pull and run
+docker run -p 4222:4222 -p 9090:9090 floruntime/flo:latest
+
+# Use the CLI from another terminal
+flo kv set mykey "hello from docker"
+flo kv get mykey
+```
+
+  </TabItem>
+</Tabs>
 
 ## Primitives
 
+Core building blocks — all backed by the same Raft-replicated log.
+
 <CardGrid>
   <Card title="KV" icon="pencil">
-    Hash-indexed KV with MVCC, TTL, and atomic operations.
-    [Read more →](/primitives/kv/)
+    Hash-indexed key-value store with MVCC, TTL, CAS, and prefix scans.
+    [Explore KV →](/primitives/kv/)
   </Card>
   <Card title="Streams" icon="right-arrow">
-    Ordered append logs with consumer groups, offsets, and retention.
-    [Read more →](/primitives/streams/)
+    Partitioned append-only logs with consumer groups and exactly-once delivery.
+    [Explore Streams →](/primitives/streams/)
   </Card>
   <Card title="Queues" icon="list-format">
-    Priority queues with leases, dead-letter, and exactly-once delivery.
-    [Read more →](/primitives/queues/)
+    Priority queues with lease-based delivery, dead-letter support, and visibility timeouts.
+    [Explore Queues →](/primitives/queues/)
   </Card>
   <Card title="Time-Series" icon="seti:clock">
-    Columnar storage with FloQL and InfluxDB line protocol compatibility.
-    [Read more →](/primitives/time-series/)
+    Columnar storage with InfluxDB line protocol ingest and FloQL query language.
+    [Explore Time-Series →](/primitives/time-series/)
   </Card>
 </CardGrid>
 
 ## Orchestration
 
+Durable execution, workflows, and stream processing — no separate cluster needed.
+
 <CardGrid>
   <Card title="Actions" icon="rocket">
-    Durable execution with automatic retries, timeouts, and dead-letter handling.
-    [Read more →](/orchestration/actions/)
+    Durable execution of external logic with automatic retries, timeouts, and dead-letter handling.
+    [Explore Actions →](/orchestration/actions/)
   </Card>
   <Card title="Workers" icon="setting">
     Long-running consumers that poll for action invocations and report results.
-    [Read more →](/orchestration/workers/)
+    [Explore Workers →](/orchestration/workers/)
   </Card>
   <Card title="Workflows" icon="random">
-    Multi-step orchestration with signals, timers, and circuit breakers.
-    [Read more →](/orchestration/workflows/)
+    Multi-step orchestration with YAML definitions, signals, timers, and circuit breakers.
+    [Explore Workflows →](/orchestration/workflows/)
   </Card>
   <Card title="Stream Processing" icon="bars">
-    Real-time stateful pipelines with windowing, checkpointing, and WASM operators.
-    [Read more →](/orchestration/processing/)
+    Real-time stateful pipelines with windowing, checkpointing, watermarks, and WASM operators.
+    [Explore Processing →](/orchestration/processing/)
+  </Card>
+</CardGrid>
+
+## SDKs
+
+Official client libraries for every major language.
+
+<CardGrid>
+  <Card title="Go" icon="seti:go">
+    Native Go client with full TCP protocol support.
+    [Go SDK →](/sdks/go/)
+  </Card>
+  <Card title="Python" icon="seti:python">
+    Async Python client with asyncio transport.
+    [Python SDK →](/sdks/python/)
+  </Card>
+  <Card title="JavaScript" icon="seti:javascript">
+    Node.js and browser clients with TCP and WebSocket transports.
+    [JS SDK →](/sdks/javascript/)
+  </Card>
+  <Card title="Zig" icon="seti:zig">
+    Native Zig client for maximum performance.
+    [Zig SDK →](/sdks/zig/)
+  </Card>
+</CardGrid>
+
+## Architecture
+
+Understand how Flo works under the hood.
+
+<CardGrid>
+  <Card title="Architecture Overview" icon="information">
+    Thread-per-shard design, Raft consensus, and the Unified Append Log.
+    [Read more →](/architecture/overview/)
+  </Card>
+  <Card title="Storage Engine" icon="database">
+    Hot ring buffer → warm disk segments → cold remote storage.
+    [Read more →](/architecture/storage/)
+  </Card>
+  <Card title="Deployment" icon="server">
+    Docker, clustering, and production configuration.
+    [Read more →](/deployment/docker/)
+  </Card>
+  <Card title="Wire Protocol" icon="terminal">
+    Binary protocol spec with 167 opcodes and TLV encoding.
+    [Read more →](/reference/wire-protocol/)
   </Card>
 </CardGrid>
