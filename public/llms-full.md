@@ -1962,10 +1962,14 @@ async with FloClient("localhost:9000") as client:
 const client = new FloClient("localhost:9000");
 await client.connect();
 
-// Append
+// Append plain objects directly (auto-serialized to JSON)
 const result = await client.stream.append(
-  "events", encode('{"event":"signup"}')
+  "events",
+  { event: "signup", user: "alice" }
 );
+
+// Strings are UTF-8 encoded automatically
+await client.stream.append("events", "user signed up");
 
 // Read from beginning
 const records = await client.stream.read("events", {
@@ -8273,10 +8277,18 @@ await client.queue.dlqRequeue("tasks", seqs);
 ## Stream Operations
 
 ```typescript
-// Append
-const result = await client.stream.append("events", payload, {
+// Append accepts string, plain object, or Uint8Array
+const result = await client.stream.append("events", {
+  event: "signup",
+  userId: "user-123",
+}, {
   partitionKey: "user-123",
 });
+
+await client.stream.append("events", "user signed in");
+
+const encoder = new TextEncoder();
+await client.stream.append("events", encoder.encode("raw-bytes-payload"));
 
 // Read
 const records = await client.stream.read("events", {
@@ -8304,6 +8316,8 @@ await client.stream.groupAck("events",
   { group: "processors" }
 );
 ```
+
+`append()` auto-encodes strings as UTF-8 and auto-serializes plain objects to JSON. Use `Uint8Array` only when you need exact raw bytes on the wire.
 
 ## StreamWorker (high-level)
 

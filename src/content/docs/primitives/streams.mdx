@@ -401,10 +401,14 @@ async with FloClient("localhost:9000") as client:
 const client = new FloClient("localhost:9000");
 await client.connect();
 
-// Append
+// Append plain objects directly (auto-serialized to JSON)
 const result = await client.stream.append(
-  "events", encode('{"event":"signup"}')
+  "events",
+  { event: "signup", user: "alice" }
 );
+
+// Strings are UTF-8 encoded automatically
+await client.stream.append("events", "user signed up");
 
 // Read from beginning
 const records = await client.stream.read("events", {
