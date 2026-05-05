@@ -29,6 +29,15 @@ npm run build     # output in dist/
 npm run preview   # preview the built site
 ```
 
+## Agent-Friendly Artifacts
+
+The docs build also generates two machine-oriented files in `public/`:
+
+- `llms.txt` is a compact index of canonical documentation pages.
+- `llms-full.md` is a single concatenated Markdown corpus for agent consumption.
+
+These files are generated from `src/content/docs/` by `npm run build:llms`. Do not edit them by hand.
+
 ## Deployment
 
 Deployed automatically to GitHub Pages via `.github/workflows/deploy.yml` on every push to `main`. The site is served at the custom domain `docs.floruntime.io`.
