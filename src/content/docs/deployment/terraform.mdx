@@ -253,6 +253,28 @@ The cluster bootstraps automatically — the first node to come up forms the clu
 | `cluster_node_id` | `number` | `0` | Unique node ID within the cluster (1, 2, 3, …) |
 | `cluster_seeds` | `list(string)` | `[]` | Gossip seed addresses (`host:gossip_port`) |
 
+### Persistent Storage
+
+By default Flo writes to the droplet's root disk, which means a `terraform apply -replace=...` wipes all data. Set `volume_size > 0` to provision a DigitalOcean block-storage volume, attach it at boot, and mount it at `data_dir`. The volume carries `prevent_destroy = true`, so it survives droplet replacement.
+
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `volume_size` | `number` | `0` | Volume size in GB. `0` keeps data on the root disk |
+| `volume_name` | `string` | `""` | Volume name. Empty auto-derives `<droplet>-data` |
+| `volume_filesystem_type` | `string` | `"ext4"` | Filesystem for new volumes: `ext4` or `xfs`. Re-attached volumes keep their existing filesystem |
+
+```hcl
+module "flo" {
+  source  = "floruntime/flo/digitalocean"
+  version = "~> 0.1"
+
+  ssh_key_ids = [data.digitalocean_ssh_key.me.id]
+  flo_version = "v0.1.0"
+
+  volume_size = 50  # GB — survives droplet replacement
+}
+```
+
 ## Outputs
 
 | Output | Description |
@@ -270,6 +292,9 @@ The cluster bootstraps automatically — the first node to come up forms the clu
 | `raft_port` | Raft replication port |
 | `gossip_port` | SWIM gossip port |
 | `firewall_id` | Firewall ID (empty when `create_firewall = false`) |
+| `volume_id` | Volume ID (empty when `volume_size = 0`) |
+| `volume_name` | Volume name (empty when `volume_size = 0`) |
+| `volume_urn` | Volume URN (empty when `volume_size = 0`) |
 
 ## Operational Notes
 
@@ -292,7 +317,7 @@ systemctl status flo
 
 ### Data directory
 
-Data lives in `/var/lib/flo` (owned by `flo:flo`, mode `0750`). The systemd unit has `ProtectSystem=strict` with only `ReadWritePaths=/var/lib/flo` — Flo cannot write elsewhere on the filesystem.
+Data lives in `/var/lib/flo` (owned by `flo:flo`, mode `0750`). The systemd unit has `ProtectSystem=strict` with only `ReadWritePaths=<data_dir>` — Flo cannot write elsewhere on the filesystem. When `volume_size > 0`, that path is the mount point for the attached block-storage volume; cloud-init formats blank volumes and adds an `/etc/fstab` entry with `nofail,discard` so the mount survives reboots.
 
 ### Rolling config changes
 
