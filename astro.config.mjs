@@ -162,6 +162,7 @@ export default defineConfig({
           label: 'Deployment',
           items: [
             { slug: 'deployment/docker' },
+            { slug: 'deployment/terraform' },
             { slug: 'deployment/clustering' },
           ],
         },
