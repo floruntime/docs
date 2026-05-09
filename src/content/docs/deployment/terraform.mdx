@@ -266,7 +266,7 @@ By default Flo writes to the droplet's root disk, which means a `terraform apply
 ```hcl
 module "flo" {
   source  = "floruntime/flo/digitalocean"
-  version = "~> 0.1"
+  version = "~> 0.0.2"
 
   ssh_key_ids = [data.digitalocean_ssh_key.me.id]
   flo_version = "v0.1.0"
