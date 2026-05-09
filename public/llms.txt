@@ -2,7 +2,7 @@
 
 Flo is a unified distributed runtime that provides streams, key-value storage, queues, time-series storage, actions, workflows, and stream processing in a single binary.
 
-Generated: 2026-05-05
+Generated: 2026-05-09
 Canonical docs site: https://docs.floruntime.io/
 Canonical full corpus: https://docs.floruntime.io/llms-full.md
 
@@ -45,6 +45,7 @@ Docker and clustering guidance for running Flo.
 
 - Clustering: https://docs.floruntime.io/deployment/clustering/
 - Docker Deployment: https://docs.floruntime.io/deployment/docker/
+- DigitalOcean Terraform Module: https://docs.floruntime.io/deployment/terraform/
 
 ### Reference
 CLI, REST, Redis compatibility, and wire protocol details.

@@ -2,7 +2,7 @@
 
 This is a generated concatenation of the canonical Flo docs. Prefer the source pages for narrow citations; use this file when an agent benefits from a single loadable corpus.
 
-Generated: 2026-05-05
+Generated: 2026-05-09
 Canonical docs site: https://docs.floruntime.io/
 
 ## Table of Contents
@@ -28,6 +28,7 @@ Canonical docs site: https://docs.floruntime.io/
 - Deployment
   - Clustering (/deployment/clustering/)
   - Docker Deployment (/deployment/docker/)
+  - DigitalOcean Terraform Module (/deployment/terraform/)
 - Reference
   - CLI Reference (/reference/cli/)
   - Redis Compatibility (/reference/redis/)
@@ -6536,6 +6537,375 @@ The data directory structure:
 cd flo
 docker build -t flo:custom .
 ```
+
+---
+
+## DigitalOcean Terraform Module
+
+Source path: src/content/docs/deployment/terraform.mdx
+Canonical URL: https://docs.floruntime.io/deployment/terraform/
+
+The [terraform-digitalocean-flo](https://github.com/floruntime/terraform-digitalocean-flo) module provisions a production-ready Flo node on DigitalOcean. It handles the droplet, firewall, cloud-init installation, and optional cluster formation in a single `terraform apply`.
+
+**Registry:** [`floruntime/flo/digitalocean`](https://registry.terraform.io/modules/floruntime/flo/digitalocean)
+
+## Quick Start
+
+```hcl
+module "flo" {
+  source  = "floruntime/flo/digitalocean"
+  version = "~> 0.0.1"
+
+  ssh_key_ids = [data.digitalocean_ssh_key.main.id]
+  flo_version = "v0.1.0" # pin in production
+}
+
+output "endpoint"  { value = module.flo.listen_endpoint }
+output "dashboard" { value = module.flo.dashboard_url }
+```
+
+```bash
+terraform init
+terraform apply
+
+# Point the CLI at your new node
+flo --server "$(terraform output -raw listen_endpoint)" kv set hello world
+```
+
+## What It Provisions
+
+| Resource | Purpose |
+|----------|---------|
+| **Droplet** | Ubuntu 24.04 LTS, configurable size/region |
+| **Firewall** | Inbound rules for SSH, wire protocol, dashboard, and cluster ports |
+| **Cloud-init** | Downloads Flo via `scripts/install.sh`, writes `flo.toml`, starts `flo.service` |
+| **Project attachment** | Optional — adds the droplet to a DigitalOcean project |
+
+The cloud-init script runs once per droplet. It:
+1. Installs `curl` and `ca-certificates` if needed
+2. Downloads and installs flo via the [install script](/getting-started/installation/) (optionally pinned to a version)
+3. Creates a `flo` system user
+4. Writes `/etc/flo/flo.toml` from the module inputs
+5. Creates and chowns the data directory
+6. Writes and enables a systemd unit (`flo.service`)
+
+## Port Layout
+
+Flo derives all secondary ports from `listen_port`:
+
+| Service | Default | Formula |
+|---------|---------|---------|
+| Wire protocol | `9000` | `listen_port` |
+| Prometheus metrics | `9001` | `listen_port + 1` |
+| Dashboard / REST API | `9002` | `listen_port + 2` |
+| Raft replication | `9500` | `listen_port + 500` |
+| SWIM gossip | `9600` | `listen_port + 600` |
+
+The firewall automatically opens the correct ports based on your settings:
+
+- **Wire protocol** — always open, gated by `api_allowed_cidrs`
+- **Dashboard** — open when `enable_dashboard = true`, gated by `dashboard_allowed_cidrs`
+- **Metrics** — open only when `expose_metrics = true`
+- **Raft + Gossip** — open when `cluster_enabled = true`, gated by `cluster_allowed_cidrs`
+
+## Single Node
+
+The simplest deployment — one droplet with all defaults:
+
+```hcl title="main.tf"
+terraform {
+  required_version = ">= 1.5.0"
+  required_providers {
+    digitalocean = { source = "digitalocean/digitalocean", version = ">= 2.40" }
+  }
+}
+
+provider "digitalocean" {
+  token = var.do_token
+}
+
+data "digitalocean_ssh_key" "main" {
+  name = var.ssh_key_name
+}
+
+module "flo" {
+  source  = "floruntime/flo/digitalocean"
+  version = "~> 0.0.1"
+
+  ssh_key_ids = [data.digitalocean_ssh_key.main.id]
+
+  environment = "prod"
+  region      = "lon1"
+  flo_version = "v0.1.0"
+}
+
+output "ipv4_address"  { value = module.flo.ipv4_address }
+output "listen_endpoint" { value = module.flo.listen_endpoint }
+output "dashboard_url"   { value = module.flo.dashboard_url }
+```
+
+```hcl title="variables.tfvars"
+do_token      = "dop_v1_..."
+ssh_key_name  = "my-key"
+```
+
+```bash
+terraform apply -var-file=variables.tfvars
+
+flo --server "$(terraform output -raw listen_endpoint)" kv set hello world
+open "$(terraform output -raw dashboard_url)"
+```
+
+## 3-Node Cluster
+
+Provision three droplets wired together via [reserved IPs](https://docs.digitalocean.com/products/networking/reserved-ips/) so the gossip seed list is stable from the first apply:
+
+```hcl title="main.tf"
+locals {
+  node_ids    = [1, 2, 3]
+  listen_port = 9000
+  gossip_port = local.listen_port + 600
+}
+
+# Reserve stable IPs for each node
+resource "digitalocean_reserved_ip" "node" {
+  for_each = toset([for id in local.node_ids : tostring(id)])
+  region   = "lon1"
+}
+
+# Build the seed list from those IPs
+locals {
+  seeds = [
+    for id in local.node_ids :
+    "${digitalocean_reserved_ip.node[tostring(id)].ip_address}:${local.gossip_port}"
+  ]
+}
+
+module "flo" {
+  for_each = toset([for id in local.node_ids : tostring(id)])
+  source   = "floruntime/flo/digitalocean"
+  version  = "~> 0.0.1"
+
+  ssh_key_ids = [data.digitalocean_ssh_key.main.id]
+
+  environment = "prod"
+  region      = "lon1"
+  flo_version = "v0.1.0"
+  listen_port = local.listen_port
+
+  cluster_enabled = true
+  cluster_node_id = tonumber(each.key)
+  cluster_seeds   = local.seeds
+}
+
+# Attach each reserved IP to its droplet
+resource "digitalocean_reserved_ip_assignment" "node" {
+  for_each   = module.flo
+  ip_address = digitalocean_reserved_ip.node[each.key].ip_address
+  droplet_id = each.value.droplet_id
+}
+```
+
+After apply, point your CLI at any node:
+
+```bash
+flo --server "$(terraform output -json listen_endpoints | jq -r '."1"')" \
+  kv set cluster ok
+```
+
+The cluster bootstraps automatically — the first node to come up forms the cluster, and the rest join via the seed list.
+
+## Configuration Reference
+
+### Required
+
+| Variable | Type | Description |
+|----------|------|-------------|
+| `ssh_key_ids` | `list(string)` | DigitalOcean SSH key IDs or fingerprints. At least one required. |
+
+### Naming & Placement
+
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `environment` | `string` | `"dev"` | Label used in droplet name and tags |
+| `region` | `string` | `"lon1"` | DigitalOcean region slug |
+| `droplet_size` | `string` | `"s-2vcpu-4gb"` | Droplet size. Flo benefits from multiple vCPUs (one shard per CPU) |
+| `image` | `string` | `"ubuntu-24-04-x64"` | Base image slug |
+| `tags` | `list(string)` | `[]` | Extra droplet tags |
+| `project_id` | `string` | `""` | Optional DO project ID |
+
+### Droplet Features
+
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `enable_backups` | `bool` | `false` | Weekly droplet backups |
+| `enable_monitoring` | `bool` | `true` | DO monitoring agent |
+| `enable_ipv6` | `bool` | `true` | Enable IPv6 |
+
+### Firewall
+
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `create_firewall` | `bool` | `true` | Create a DO firewall. Disable if you manage firewalls externally |
+| `ssh_allowed_cidrs` | `list(string)` | `["0.0.0.0/0", "::/0"]` | CIDRs allowed to reach SSH |
+| `api_allowed_cidrs` | `list(string)` | `["0.0.0.0/0", "::/0"]` | CIDRs allowed to reach the wire-protocol port |
+| `dashboard_allowed_cidrs` | `list(string)` | `["0.0.0.0/0", "::/0"]` | CIDRs allowed to reach the dashboard. **Restrict in production** |
+| `metrics_allowed_cidrs` | `list(string)` | `["0.0.0.0/0", "::/0"]` | CIDRs for Prometheus (only when `expose_metrics = true`) |
+| `expose_metrics` | `bool` | `false` | Open the metrics port on the firewall |
+| `cluster_allowed_cidrs` | `list(string)` | `["0.0.0.0/0", "::/0"]` | CIDRs for Raft and gossip traffic |
+| `extra_inbound_tcp_ports` | `list(number)` | `[]` | Additional TCP ports to open |
+
+### Flo Installation
+
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `flo_version` | `string` | `""` | Release tag for `install.sh`. Empty = latest. **Pin in production** |
+
+### Flo Runtime
+
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `listen_port` | `number` | `9000` | Wire-protocol port. Metrics = +1, Dashboard = +2 |
+| `bind_address` | `string` | `"0.0.0.0"` | Bind address for the wire listener |
+| `data_dir` | `string` | `"/var/lib/flo"` | Data directory. Created and chowned by cloud-init |
+| `shards` | `number` | `0` | Number of shards. `0` = auto-detect from CPU count |
+| `durability` | `string` | `"async_flush"` | Storage durability: `async_flush`, `sync_flush`, or `fsync` |
+| `hot_buffer_capacity` | `number` | `0` | In-memory hot buffer size in bytes. `0` = default |
+| `log_level` | `string` | `"info"` | Log level |
+| `enable_metrics` | `bool` | `true` | Enable Prometheus metrics endpoint |
+| `enable_dashboard` | `bool` | `true` | Enable dashboard HTTP API + web UI |
+| `dashboard_bind_address` | `string` | `"0.0.0.0"` | Bind address for the dashboard |
+
+### Cluster
+
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `cluster_enabled` | `bool` | `false` | Join this droplet to a Flo cluster |
+| `cluster_node_id` | `number` | `0` | Unique node ID within the cluster (1, 2, 3, …) |
+| `cluster_seeds` | `list(string)` | `[]` | Gossip seed addresses (`host:gossip_port`) |
+
+## Outputs
+
+| Output | Description |
+|--------|-------------|
+| `droplet_id` | DigitalOcean droplet ID |
+| `droplet_name` | Droplet name |
+| `ipv4_address` | Public IPv4 address |
+| `ipv4_address_private` | Private VPC IPv4 address |
+| `ipv6_address` | Public IPv6 address (empty if disabled) |
+| `urn` | Droplet URN |
+| `listen_endpoint` | `host:port` for the CLI and SDKs |
+| `dashboard_url` | Dashboard URL (empty when disabled) |
+| `metrics_endpoint` | Prometheus metrics URL (empty when disabled) |
+| `gossip_endpoint` | `host:gossip_port` — use in other nodes' `cluster_seeds` |
+| `raft_port` | Raft replication port |
+| `gossip_port` | SWIM gossip port |
+| `firewall_id` | Firewall ID (empty when `create_firewall = false`) |
+
+## Operational Notes
+
+### Service management
+
+Flo runs as the `flo` system user under systemd:
+
+```bash
+ssh root@$(terraform output -raw ipv4_address)
+
+# View logs
+journalctl -u flo -f
+
+# Restart
+systemctl restart flo
+
+# Check status
+systemctl status flo
+```
+
+### Data directory
+
+Data lives in `/var/lib/flo` (owned by `flo:flo`, mode `0750`). The systemd unit has `ProtectSystem=strict` with only `ReadWritePaths=/var/lib/flo` — Flo cannot write elsewhere on the filesystem.
+
+### Rolling config changes
+
+Cloud-init runs only on first boot. To roll a new config:
+
+**In-place** (no droplet replacement):
+```bash
+ssh root@<ip> 'vim /etc/flo/flo.toml && systemctl restart flo'
+```
+
+**Immutable** (replace the droplet):
+```bash
+terraform apply -replace=module.flo.digitalocean_droplet.this
+```
+
+### Resizing
+
+To resize a running droplet:
+
+```bash
+terraform apply -var="droplet_size=s-4vcpu-8gb"
+```
+
+This triggers a DO resize (which power-cycles the droplet). No data loss — Flo replays its log on restart.
+
+### Dashboard security
+
+The dashboard exposes administrative APIs. **Never leave `dashboard_allowed_cidrs` open to `0.0.0.0/0` in production.** Use one of:
+
+```hcl
+# Option 1: Restrict to your office/home IP
+dashboard_allowed_cidrs = ["203.0.113.5/32"]
+
+# Option 2: Bind to private interface, access via SSH tunnel
+dashboard_bind_address = "10.0.0.2"  # private VPC IP
+
+# Then: ssh -L 9002:localhost:9002 root@<ip>
+```
+
+### Metrics scraping
+
+The metrics port is not opened on the firewall by default. To scrape Prometheus metrics externally:
+
+```hcl
+expose_metrics         = true
+metrics_allowed_cidrs  = ["10.0.0.0/16"] # only your VPC
+```
+
+Or scrape locally via the DigitalOcean monitoring agent (which runs on-loopback).
+
+## Upgrading Flo
+
+To upgrade Flo on an existing droplet:
+
+```bash
+# SSH in and run the installer with the new version
+ssh root@<ip> 'curl -fsSL https://raw.githubusercontent.com/floruntime/flo/master/scripts/install.sh | sh -s -- --version v0.2.0'
+
+# Restart
+ssh root@<ip> 'systemctl restart flo'
+```
+
+For a clean rebuild, bump `flo_version` and replace the droplet:
+
+```bash
+terraform apply -var="flo_version=v0.2.0" -replace=module.flo.digitalocean_droplet.this
+```
+
+## Publishing to the Terraform Registry
+
+The module is designed for the public [Terraform Registry](https://registry.terraform.io). It lives in its own repo at [github.com/floruntime/terraform-digitalocean-flo](https://github.com/floruntime/terraform-digitalocean-flo) and follows the `terraform-<PROVIDER>-<NAME>` naming convention. Once pushed and tagged, the registry discovers it automatically — consumers reference it as:
+
+```hcl
+source  = "floruntime/flo/digitalocean"
+version = "~> 0.0.1"
+```
+
+## Next Steps
+
+- [Configuration reference](/getting-started/configuration/) — understand `flo.toml`
+- [Clustering deep-dive](/deployment/clustering/) — SWIM gossip and Raft consensus internals
+- [Docker deployment](/deployment/docker/) — run Flo with Docker Compose
 
 ---
 
