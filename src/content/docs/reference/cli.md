@@ -237,6 +237,20 @@ Show stream metadata.
 flo stream info <stream>
 ```
 
+### `flo stream delete`
+
+Delete a stream and all its data (records, metadata, and name registry). Aliased as `flo stream rm`.
+
+```bash
+flo stream delete <name> [--force]
+```
+
+| Flag | Description |
+|------|-------------|
+| `--force`, `-f` | Delete even if the stream is not empty |
+
+Deleting a missing stream is a no-op (idempotent). A non-empty stream is refused unless `--force` is given. Consumer groups are namespace-level and are left intact. To drop only records while keeping the stream, use `flo stream trim`.
+
 ### `flo stream group`
 
 Manage consumer groups.
