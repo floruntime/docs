@@ -2,7 +2,7 @@
 
 This is a generated concatenation of the canonical Flo docs. Prefer the source pages for narrow citations; use this file when an agent benefits from a single loadable corpus.
 
-Generated: 2026-05-09
+Generated: 2026-06-03
 Canonical docs site: https://docs.floruntime.io/
 
 ## Table of Contents
@@ -1777,6 +1777,20 @@ flo stream trim events --maxbytes 1073741824
 flo stream trim events --maxlen 10000 --dry-run
 ```
 
+### Delete
+
+Drop an entire stream — its records, metadata, and name registry. This is the symmetric counterpart to `kv delete`; use `trim` when you only want to remove records but keep the stream.
+
+```bash
+# Delete an empty stream (alias: flo stream rm)
+flo stream delete events
+
+# Force-delete a stream that still has records
+flo stream delete events --force
+```
+
+Deleting a stream that does not exist is a no-op (idempotent), and the name can be reused immediately afterward. A non-empty stream is refused unless `--force` is passed. Consumer groups are **namespace-level** (a single group can fan in across many streams via a shared cursor), so deleting a stream intentionally leaves its groups untouched — delete the group separately with `flo stream group delete` if needed.
+
 ## Consumer Groups
 
 Consumer groups allow multiple consumers to process a stream cooperatively. Each record is delivered to **exactly one** consumer in the group. The server tracks a **Pending Entry List (PEL)** — records that have been delivered but not yet acknowledged.
@@ -1856,6 +1870,9 @@ flo stream group touch events --group processors --consumer worker-1 \
 ```bash
 # List all pending (delivered but unacked) records for a group
 flo stream group pending events --group processors
+
+# Filter to a single consumer's pending entries
+flo stream group pending events --group processors --consumer worker-1
 
 # Group metadata (consumer count, PEL size, last delivered ID)
 flo stream group info events --group processors
@@ -2064,6 +2081,8 @@ The thresholds for spilling between tiers are configurable per server (hot buffe
 
 - All appends are Raft-replicated before acknowledgment
 - Stream data, consumer group offsets, and pending state all survive server restarts
+- Consumer-group recovery is **at-least-once**: a group restores its ack-floor cursor across restart, so unacked and never-delivered records redeliver while acked records are skipped
+- Replay is deterministic — Stream IDs are anchored to the originating entry timestamp, so a record keeps the same ID when rebuilt from the log
 - After restart, new appends continue with monotonically increasing Stream IDs (no duplicates, no gaps)
 - Immediate consistency — a read right after restart returns all pre-restart data
 
@@ -3368,7 +3387,7 @@ sinks:
       namespace: analytics
 ```
 
-The job continuously polls `payment-events` and appends every record to `enriched-events`.
+The job polls `payment-events` on a fixed interval (`poll_interval_ms`, default 1000 ms), reading up to `batch_size` records per tick, and appends every record to `enriched-events`.
 
 ### Full Example with Operators
 
@@ -3415,7 +3434,8 @@ Sources define where the pipeline reads data. Two source kinds are supported: **
 
 ### Stream Source
 
-Reads records from a Flo stream, tracking offsets for exactly-once semantics:
+Reads records from a Flo stream, tracking a durable offset cursor for **at-least-once**
+processing (a crash redelivers at most the last debounce window — never skips records):
 
 ```yaml
 sources:
@@ -3424,7 +3444,8 @@ sources:
       name: click-events
       namespace: production
       partitions: 0           # single partition (integer)
-      batch_size: 500         # per-source override
+      batch_size: 500         # per-source override (records read per tick)
+      poll_interval_ms: 1000  # how often to read from the source (default: 1000)
 ```
 
 #### Partition Selection
@@ -3698,7 +3719,7 @@ Accumulates numeric values extracted from JSON records. Records are grouped by k
 | Tumbling | `window: tumbling`, `window_size: <seconds>` | Emits when window closes (on watermark) |
 | Count-based | `window: count`, `window_size: <n>` | Emits after every N records per key |
 
-Output format: `{"value": <result>, "count": <n>}`
+Output format: `{"key": <group-key>, "value": <result>, "count": <n>}` (the `key` is the grouping key set by a preceding `keyby`, or the record's key otherwise)
 
 ```yaml
 operators:
@@ -4109,8 +4130,10 @@ flo processing submit job.yaml -n staging
 
 Job state survives node restarts:
 
-- Submitted jobs persist and resume on restart
-- Stopped and cancelled job states are preserved
+- Submitted jobs persist and resume on restart — the execution pipeline is rebuilt for `RUNNING` jobs, not just the registry entry, so a job keeps consuming after restart instead of becoming an idle zombie
+- Stream-source pipelines resume from a **durable source cursor** rather than re-reading from the beginning. The cursor is persisted as a `processing_checkpoint` entry (debounced to ≥1s per pipeline to bound write amplification)
+- Recovery is **at-least-once**: a crash loses at most the debounce window, which redelivers — it never skips records
+- Stopped and cancelled job states are preserved (they stay idle on restart)
 - Rescaled parallelism is remembered
 - New job IDs don't collide with pre-restart IDs
 
@@ -5084,7 +5107,7 @@ plans:
     
     executors:
       - name: stripe-primary
-        action: "@actions/charge-stripe"
+        run: "@actions/charge-stripe"
         priority: 100
         retry:
           max_attempts: 3
@@ -5103,7 +5126,7 @@ plans:
           timeout_ms: 300000
 
       - name: adyen-fallback
-        action: "@actions/charge-adyen"
+        run: "@actions/charge-adyen"
         priority: 50
         retry:
           max_attempts: 2
@@ -5498,6 +5521,7 @@ trigger:
   consumer_group: wf-orders          # consumer group (optional, auto-generated)
   mode: shared                       # shared | exclusive | key_shared
   batch_size: 1                      # events per run (1 = single, >1 = array)
+  batch_timeout_ms: 5000             # poll interval / partial-batch flush (default 5000)
 
 start:
   run: "@actions/process-order"
@@ -5514,7 +5538,14 @@ The event payload becomes `$.input` inside the workflow and is accessible via JS
 | `namespace` | workflow's namespace | Source stream namespace |
 | `consumer_group` | `wf-{workflow_name}` | Consumer group name |
 | `mode` | `shared` | `shared` (competing consumers), `exclusive` (single consumer), `key_shared` (partition-key affinity) |
-| `batch_size` | `1` | Events per workflow run |
+| `batch_size` | `1` | Events per workflow run (`>1` delivers a JSON array) |
+| `batch_timeout_ms` | `5000` | Poll interval in milliseconds, and the time to wait before flushing a partial batch |
+
+:::note
+Stream triggers are **poll-based**, not event-push: the engine checks the source stream every
+`batch_timeout_ms` (default **5 s**), so newly appended events start runs within that interval rather
+than instantly. Lower `batch_timeout_ms` for tighter latency at the cost of more frequent polling.
+:::
 
 ---
 
@@ -5526,14 +5557,18 @@ Search attributes let you extract queryable fields from workflow input for filte
 searchAttributes:
   - name: customer_id
     type: string
-    from: input.customer_id
+    from: $.input.customer_id
   - name: order_amount
     type: number
-    from: input.amount
+    from: $.input.amount
   - name: created_at
     type: timestamp
-    from: input.timestamp
+    from: $.input.timestamp
 ```
+
+The `from` field is a [JSONPath](#input-mapping) expression and **must** use the
+`$.` prefix (e.g. `$.input.customer_id`), the same path grammar as `inputMapping`. A path that
+does not resolve yields a `null` attribute value.
 
 | Type | Description |
 |------|-------------|
@@ -5685,7 +5720,7 @@ plans:
     selection: health-weighted
     executors:
       - name: stripe-primary
-        action: "@actions/charge-stripe"
+        run: "@actions/charge-stripe"
         priority: 100
         retry:
           max_attempts: 3
@@ -5703,7 +5738,7 @@ plans:
           mode: async
           timeout_ms: 300000
       - name: adyen-fallback
-        action: "@actions/charge-adyen"
+        run: "@actions/charge-adyen"
         priority: 50
         retry:
           max_attempts: 2
@@ -6784,6 +6819,28 @@ The cluster bootstraps automatically — the first node to come up forms the clu
 | `cluster_node_id` | `number` | `0` | Unique node ID within the cluster (1, 2, 3, …) |
 | `cluster_seeds` | `list(string)` | `[]` | Gossip seed addresses (`host:gossip_port`) |
 
+### Persistent Storage
+
+By default Flo writes to the droplet's root disk, which means a `terraform apply -replace=...` wipes all data. Set `volume_size > 0` to provision a DigitalOcean block-storage volume, attach it at boot, and mount it at `data_dir`. The volume carries `prevent_destroy = true`, so it survives droplet replacement.
+
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `volume_size` | `number` | `0` | Volume size in GB. `0` keeps data on the root disk |
+| `volume_name` | `string` | `""` | Volume name. Empty auto-derives `<droplet>-data` |
+| `volume_filesystem_type` | `string` | `"ext4"` | Filesystem for new volumes: `ext4` or `xfs`. Re-attached volumes keep their existing filesystem |
+
+```hcl
+module "flo" {
+  source  = "floruntime/flo/digitalocean"
+  version = "~> 0.0.2"
+
+  ssh_key_ids = [data.digitalocean_ssh_key.me.id]
+  flo_version = "v0.1.0"
+
+  volume_size = 50  # GB — survives droplet replacement
+}
+```
+
 ## Outputs
 
 | Output | Description |
@@ -6801,6 +6858,9 @@ The cluster bootstraps automatically — the first node to come up forms the clu
 | `raft_port` | Raft replication port |
 | `gossip_port` | SWIM gossip port |
 | `firewall_id` | Firewall ID (empty when `create_firewall = false`) |
+| `volume_id` | Volume ID (empty when `volume_size = 0`) |
+| `volume_name` | Volume name (empty when `volume_size = 0`) |
+| `volume_urn` | Volume URN (empty when `volume_size = 0`) |
 
 ## Operational Notes
 
@@ -6823,7 +6883,7 @@ systemctl status flo
 
 ### Data directory
 
-Data lives in `/var/lib/flo` (owned by `flo:flo`, mode `0750`). The systemd unit has `ProtectSystem=strict` with only `ReadWritePaths=/var/lib/flo` — Flo cannot write elsewhere on the filesystem.
+Data lives in `/var/lib/flo` (owned by `flo:flo`, mode `0750`). The systemd unit has `ProtectSystem=strict` with only `ReadWritePaths=<data_dir>` — Flo cannot write elsewhere on the filesystem. When `volume_size > 0`, that path is the mount point for the attached block-storage volume; cloud-init formats blank volumes and adds an `/etc/fstab` entry with `nofail,discard` so the mount survives reboots.
 
 ### Rolling config changes
 
@@ -7153,6 +7213,20 @@ Show stream metadata.
 ```bash
 flo stream info <stream>
 ```
+
+### `flo stream delete`
+
+Delete a stream and all its data (records, metadata, and name registry). Aliased as `flo stream rm`.
+
+```bash
+flo stream delete <name> [--force]
+```
+
+| Flag | Description |
+|------|-------------|
+| `--force`, `-f` | Delete even if the stream is not empty |
+
+Deleting a missing stream is a no-op (idempotent). A non-empty stream is refused unless `--force` is given. Consumer groups are namespace-level and are left intact. To drop only records while keeping the stream, use `flo stream trim`.
 
 ### `flo stream group`
 

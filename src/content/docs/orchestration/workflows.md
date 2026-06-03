@@ -287,7 +287,7 @@ plans:
     
     executors:
       - name: stripe-primary
-        action: "@actions/charge-stripe"
+        run: "@actions/charge-stripe"
         priority: 100
         retry:
           max_attempts: 3
@@ -306,7 +306,7 @@ plans:
           timeout_ms: 300000
 
       - name: adyen-fallback
-        action: "@actions/charge-adyen"
+        run: "@actions/charge-adyen"
         priority: 50
         retry:
           max_attempts: 2
@@ -701,6 +701,7 @@ trigger:
   consumer_group: wf-orders          # consumer group (optional, auto-generated)
   mode: shared                       # shared | exclusive | key_shared
   batch_size: 1                      # events per run (1 = single, >1 = array)
+  batch_timeout_ms: 5000             # poll interval / partial-batch flush (default 5000)
 
 start:
   run: "@actions/process-order"
@@ -717,7 +718,14 @@ The event payload becomes `$.input` inside the workflow and is accessible via JS
 | `namespace` | workflow's namespace | Source stream namespace |
 | `consumer_group` | `wf-{workflow_name}` | Consumer group name |
 | `mode` | `shared` | `shared` (competing consumers), `exclusive` (single consumer), `key_shared` (partition-key affinity) |
-| `batch_size` | `1` | Events per workflow run |
+| `batch_size` | `1` | Events per workflow run (`>1` delivers a JSON array) |
+| `batch_timeout_ms` | `5000` | Poll interval in milliseconds, and the time to wait before flushing a partial batch |
+
+:::note
+Stream triggers are **poll-based**, not event-push: the engine checks the source stream every
+`batch_timeout_ms` (default **5 s**), so newly appended events start runs within that interval rather
+than instantly. Lower `batch_timeout_ms` for tighter latency at the cost of more frequent polling.
+:::
 
 ---
 
@@ -729,14 +737,18 @@ Search attributes let you extract queryable fields from workflow input for filte
 searchAttributes:
   - name: customer_id
     type: string
-    from: input.customer_id
+    from: $.input.customer_id
   - name: order_amount
     type: number
-    from: input.amount
+    from: $.input.amount
   - name: created_at
     type: timestamp
-    from: input.timestamp
+    from: $.input.timestamp
 ```
+
+The `from` field is a [JSONPath](#input-mapping) expression and **must** use the
+`$.` prefix (e.g. `$.input.customer_id`), the same path grammar as `inputMapping`. A path that
+does not resolve yields a `null` attribute value.
 
 | Type | Description |
 |------|-------------|
@@ -888,7 +900,7 @@ plans:
     selection: health-weighted
     executors:
       - name: stripe-primary
-        action: "@actions/charge-stripe"
+        run: "@actions/charge-stripe"
         priority: 100
         retry:
           max_attempts: 3
@@ -906,7 +918,7 @@ plans:
           mode: async
           timeout_ms: 300000
       - name: adyen-fallback
-        action: "@actions/charge-adyen"
+        run: "@actions/charge-adyen"
         priority: 50
         retry:
           max_attempts: 2
