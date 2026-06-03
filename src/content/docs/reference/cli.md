@@ -249,17 +249,23 @@ flo stream delete <name> [--force]
 |------|-------------|
 | `--force`, `-f` | Delete even if the stream is not empty |
 
-Deleting a missing stream is a no-op (idempotent). A non-empty stream is refused unless `--force` is given. Consumer groups are namespace-level and are left intact. To drop only records while keeping the stream, use `flo stream trim`.
+Deleting a missing stream is a no-op (idempotent). A non-empty stream is refused unless `--force` is given. Deleting a stream also deletes that stream's consumer groups (a same-named group on another stream is unaffected). To drop only records while keeping the stream, use `flo stream trim`.
 
 ### `flo stream group`
 
-Manage consumer groups.
+Manage consumer groups. A group is scoped to a single stream — every subcommand takes the `<stream>` it operates on, and wildcard/fan-in reads (`events.*`) are not supported.
 
 ```bash
-flo stream group create <stream> <group>
-flo stream group read <stream> <group> <consumer> [--count <n>]
-flo stream group ack <stream> <group> <offsets...>
-flo stream group status <stream> <group>
+flo stream group create <stream> --group <name> [--ack-timeout <ms>] [--max-deliver <n>]
+flo stream group read   <stream> --group <name> --consumer <id> [--limit <n>] [--block <ms>] [--no-ack]
+flo stream group ack    <stream> --group <name> --ids <id,...> [--consumer <id>]
+flo stream group nack   <stream> --group <name> --ids <id,...> [--delay <ms>]
+flo stream group touch  <stream> --group <name> --consumer <id> --ids <id,...> [--extend <ms>]
+flo stream group pending <stream> --group <name> [--consumer <id>]
+flo stream group info   <stream> --group <name>
+flo stream group join   <stream> <group> <consumer>
+flo stream group leave  <stream> --group <name> --consumer <id>
+flo stream group delete <stream> --group <name>
 ```
 
 ## Queues

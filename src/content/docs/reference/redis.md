@@ -98,7 +98,7 @@ For atomic increments specifically, prefer `INCR` / `kv.incr` — it's unconditi
 | Persistence | Every write is Raft-replicated and committed to UAL before responding. There is no `SAVE`/`BGSAVE` — Flo is always durable. |
 | Eviction | No `maxmemory` LRU eviction. Out-of-memory rejects new writes; configure TTLs explicitly. |
 | Pub/Sub | Not supported via RESP. Use [Streams](/primitives/stream) or [Streaming Updates](/primitives/kv#streaming-updates). |
-| Lua scripting | `EVAL`/`EVALSHA` not supported. Use [WASM Processing](/orchestration/processing) for server-side logic. |
+| Lua scripting | `EVAL`/`EVALSHA` not supported. Use [Stream Processing](/orchestration/processing) for server-side logic. |
 | Cluster slots | `CLUSTER` commands return a single-slot response. Flo's partitioning is internal and works without client awareness. |
 | Transactions | `MULTI/EXEC` returns an error. Use CAS or model multi-field state as a single JSON document. |
 | `OBJECT ENCODING` etc. | Not supported. |

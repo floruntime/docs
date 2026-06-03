@@ -854,6 +854,6 @@ The engine collects per-operator and per-pipeline metrics:
 - [Time-Series](/primitives/time-series/) — TS query and write semantics
 - [KV](/primitives/kv/) — KV storage used by `kv_lookup` operator and KV sinks
 - [Queues](/primitives/queues/) — queue sinks for task pipelines
-- [Actions](/orchestration/actions/) — WASM action registration and invocation
+- [Actions](/orchestration/actions/) — worker-hosted action registration and invocation
 - [Workflows](/orchestration/workflows/) — multi-step orchestration over actions
 
