@@ -1,30 +1,24 @@
 ---
 title: Actions
-description: Durable task execution with two models — deploy WASM modules that run inside Flo, or build external workers in Go, Python, JavaScript, or Zig that pull tasks over the wire. Built-in retries, timeouts, leases, labels, idempotency, and dead-letter handling.
+description: Durable task execution — register named action types and run them on external workers in Go, Python, JavaScript, Zig, or any language that speaks the wire protocol. Built-in retries, timeouts, leases, labels, idempotency, and dead-letter handling.
 ---
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
-Actions are **named, durable task types**. You register an action once, then invoke it on demand — Flo handles dispatch, retries, lease management, and dead-letter routing. The handler can run in two places:
+Actions are **named, durable task types**. You register an action once, then invoke it on demand — Flo handles dispatch, retries, lease management, and dead-letter routing.
 
-- **WASM** — Compile your logic to WebAssembly and deploy it to Flo. The action executes **inline** on the shard, with sub-millisecond overhead and zero network hops.
-- **User-hosted workers** — Run a long-lived process (in Go, Python, JS, Zig, or any language that speaks the wire protocol) that pulls tasks from Flo and reports results.
-
-Both models share the same invoke / status / list / delete API. The difference is where the code runs.
+Action handlers run in **user-hosted workers** — long-lived processes (in Go, Python, JS, Zig, or any language that speaks the wire protocol) that pull tasks from Flo and report results. Flo owns the durable task queue, delivery, retries, and lease tracking; your worker owns the logic.
 
 ```
 ┌──────────────┐                   ┌───────────────────────┐
 │  Client      │                   │  Flo Server (Shard)   │
 │              │  action invoke    │                       │
 │  flo action  │ ─────────────────▸│  ActionHandler        │
-│  invoke X    │                   │    ├─ WASM?  Execute  │◄── inline, ~µs
-│              │  ◀─ run_id ───────┤    │   inline         │
-│              │                   │    └─ User?  Queue    │
-└──────────────┘                   │         pending       │
-                                   └──────────┬────────────┘
+│  invoke X    │  ◀─ run_id ───────┤    └─ queue pending    │
+└──────────────┘                   └──────────┬────────────┘
                                               │
-┌──────────────┐   action_await                │ 
-│  Worker      │ ◄─────────────────────────────┘
+┌──────────────┐   action_await               │
+│  Worker      │ ◄────────────────────────────┘
 │  (Go/Py/JS)  │   task_id + payload
 │              │
 │  handler()   │
@@ -58,7 +52,7 @@ flo action status send-email-1
 #   send-email-1    pending    2026-03-14 10:00:00
 ```
 
-For user-hosted actions, nothing happens until a worker picks up the task. For WASM actions, the result is available immediately.
+Nothing happens until a worker picks up the task — the run stays `pending` until a registered worker awaits it, then transitions to `running` and `completed`.
 
 ---
 
@@ -71,7 +65,6 @@ A named task type stored in Flo's action registry. Each action has:
 | Field | Default | Description |
 |-------|---------|-------------|
 | `name` | — | Unique name within a namespace (max 256 chars) |
-| `type` | `user` | `user` (worker-hosted) or `wasm` (Flo-hosted) |
 | `timeout_ms` | `30000` | Max execution time before timeout |
 | `max_retries` | `3` | Retries before dead-lettering |
 | `retry_delay_ms` | `1000` | Base delay for exponential backoff |
@@ -79,21 +72,13 @@ A named task type stored in Flo's action registry. Each action has:
 | `version` | `1` | Auto-incremented on re-registration |
 | `enabled` | `true` | Can be disabled to block new invocations |
 
-WASM actions additionally have:
-
-| Field | Default | Description |
-|-------|---------|-------------|
-| `wasm_module` | — | WASM binary bytes |
-| `wasm_entrypoint` | `handle` | Export function name |
-| `wasm_memory_limit` | `16 MB` | Max linear memory (in pages of 64 KB) |
-
 ### Run
 
 A single invocation of an action. Every invoke creates a run with a unique ID.
 
 | Status | Description |
 |--------|-------------|
-| `pending` | Queued, waiting for a worker (or WASM execution) |
+| `pending` | Queued, waiting for a worker to claim it |
 | `running` | Claimed by a worker, currently executing |
 | `completed` | Finished successfully with output |
 | `failed` | Failed permanently (retries exhausted or explicit fail) |
@@ -113,113 +98,9 @@ Workers can run anywhere — on the same machine, in a container, across the net
 
 ---
 
-## Execution Models
+## How Actions Run
 
-### WASM Actions (Flo-Hosted)
-
-WASM actions execute **inside the Flo shard** with no network overhead. They're ideal for:
-
-- Pure data transformations (validation, enrichment, rules engines)
-- Low-latency operations (sub-millisecond execution)
-- Self-contained logic with no external dependencies
-
-The WASM module must export three functions:
-
-```
-handle(input_ptr: u32, input_len: u32) → i64
-alloc(size: u32) → u32
-dealloc(ptr: u32, size: u32) → void
-```
-
-`handle` receives the input bytes and returns a packed `i64`: the upper 32 bits are the output pointer, the lower 32 bits are the output length. Negative return values indicate errors:
-
-| Return Code | Meaning |
-|-------------|---------|
-| `-1` | Invalid input |
-| `-2` | Allocation failed |
-| `-3` | Execution error |
-
-Optional exports:
-
-| Export | Purpose |
-|--------|---------|
-| `init() → i32` | Called once after module instantiation |
-| `describe() → i64` | Returns a JSON description (packed ptr\|len) |
-
-#### Host Functions
-
-WASM guest code can call these host functions:
-
-| Function | Description |
-|----------|-------------|
-| `flo.log(level, msg_ptr, msg_len)` | Log a message (0=debug, 1=info, 2=warn, 3=error) |
-| `flo.kv_get(key_ptr, key_len, buf_ptr, buf_len) → i32` | Read from KV store |
-| `flo.kv_set(key_ptr, key_len, val_ptr, val_len) → i32` | Write to KV store |
-| `flo.kv_delete(key_ptr, key_len) → i32` | Delete from KV store |
-
-WASI shims (`wasi_snapshot_preview1.*`) are available for modules compiled with a WASI target.
-
-#### Concurrency
-
-Each shard allows up to 4 concurrent WASM executions (configurable via `max_concurrent_executions`). Additional invocations queue until a slot opens.
-
-#### Building a WASM Action
-
-Here's a complete rules engine in Zig targeting `wasm32-freestanding`:
-
-```zig
-// rules_engine.zig — Build with:
-//   zig build-lib -target wasm32-freestanding -O ReleaseSmall rules_engine.zig
-
-var heap: [65536]u8 = undefined;
-var heap_offset: usize = 0;
-
-export fn alloc(size: u32) u32 {
-    const s: usize = @intCast(size);
-    const aligned = (heap_offset + 7) & ~@as(usize, 7);
-    if (aligned + s > heap.len) return 0;
-    const ptr: [*]u8 = @ptrCast(&heap[aligned]);
-    heap_offset = aligned + s;
-    return @intFromPtr(ptr);
-}
-
-export fn dealloc(_: u32, _: u32) void {}
-
-export fn handle(input_ptr: [*]const u8, input_len: u32) i64 {
-    heap_offset = 0;
-    const input = input_ptr[0..input_len];
-
-    // Parse and evaluate rules against input...
-    const output = processRules(input);
-
-    const out_ptr = alloc(@intCast(output.len));
-    if (out_ptr == 0) return -2;
-    const dest: [*]u8 = @ptrFromInt(out_ptr);
-    @memcpy(dest[0..output.len], output);
-
-    return (@as(i64, out_ptr) << 32) | @as(i64, @intCast(output.len));
-}
-```
-
-Register it:
-
-```bash
-flo action register rules-engine --wasm ./rules_engine.wasm
-```
-
-Now invocations execute inline — no worker needed:
-
-```bash
-flo action invoke rules-engine '{"age": 25, "country": "US"}'
-# → Result: rules-engine-1  (completed immediately)
-
-flo action status rules-engine-1
-# → status: completed, output: {"eligible":true,"rules_evaluated":2,"rules_passed":2}
-```
-
-### User-Hosted Actions (Workers)
-
-User-hosted actions are executed by external worker processes. This is the model for:
+Actions are executed by external **worker** processes that pull tasks from Flo over the wire — the model for:
 
 - Actions that call external APIs (payment gateways, email services)
 - Long-running tasks (report generation, media processing)
@@ -927,7 +808,7 @@ steps:
       failure: flo.Failed
 ```
 
-When a workflow invokes a WASM action, the result is available synchronously. When it invokes a user-hosted action, the workflow parks in `waiting` until the worker reports completion.
+When a workflow invokes an action, it parks in `waiting` until a worker claims the task and reports completion, then resumes with the result.
 
 ---
 

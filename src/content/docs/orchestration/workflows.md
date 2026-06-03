@@ -67,9 +67,9 @@ steps:
 **2. Register the actions** the workflow calls:
 
 ```bash
-flo action register validate-order --wasm ./validate.wasm
-flo action register charge-payment --wasm ./charge.wasm
-flo action register create-shipment --wasm ./ship.wasm
+flo action register validate-order --timeout 30000 --max-retries 3
+flo action register charge-payment --timeout 30000 --max-retries 3
+flo action register create-shipment --timeout 30000 --max-retries 3
 ```
 
 **3. Deploy the workflow:**
@@ -143,7 +143,7 @@ Targets use a prefix to indicate what to invoke:
 
 | Prefix | Invokes | Example |
 |--------|---------|---------|
-| `@actions/` | A registered action (WASM or user-hosted) | `@actions/charge-stripe` |
+| `@actions/` | A registered action (worker-hosted) | `@actions/charge-stripe` |
 | `@plan/` | An inline plan defined in the same workflow | `@plan/payment` |
 | `@workflow/` | A child workflow (starts a nested run) | `@workflow/fulfillment` |
 
@@ -833,7 +833,7 @@ Validation errors are reported with error codes (E1xx–E5xx) and human-readable
 2. For `run` steps:
    - If `inputMapping` is set, resolve JSONPath references against `$.input` and `$.steps.*`
    - Invoke the target (action, plan, or child workflow)
-   - WASM actions complete synchronously; user-hosted actions may complete asynchronously
+   - Actions complete asynchronously — the step parks until a worker reports the result
    - If the action returns `pending` and `poll:` is configured, schedule the next poll
    - On outcome, check retries (if `failure` and retries remain, re-execute)
    - Follow the matching transition to the next step or terminal
