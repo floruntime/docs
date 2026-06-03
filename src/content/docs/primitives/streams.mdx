@@ -221,11 +221,20 @@ flo stream delete events
 flo stream delete events --force
 ```
 
-Deleting a stream that does not exist is a no-op (idempotent), and the name can be reused immediately afterward. A non-empty stream is refused unless `--force` is passed. Consumer groups are **namespace-level** (a single group can fan in across many streams via a shared cursor), so deleting a stream intentionally leaves its groups untouched — delete the group separately with `flo stream group delete` if needed.
+Deleting a stream that does not exist is a no-op (idempotent), and the name can be reused immediately afterward. A non-empty stream is refused unless `--force` is passed. Consumer groups are **scoped to their stream** (see [Consumer Groups](#consumer-groups)), so deleting a stream also deletes that stream's groups; a same-named group on another stream is unaffected.
 
 ## Consumer Groups
 
 Consumer groups allow multiple consumers to process a stream cooperatively. Each record is delivered to **exactly one** consumer in the group. The server tracks a **Pending Entry List (PEL)** — records that have been delivered but not yet acknowledged.
+
+A consumer group is **scoped to a single stream**: its identity is the `(stream, group)` pair, and its cursor and PEL belong to that one stream. The same group name used on two different streams gives two fully independent groups (separate cursors, separate PELs). A group read targets exactly one stream — **wildcard / fan-in reads are not supported**:
+
+```bash
+# ✗ rejected — a group cannot span multiple streams
+flo stream group read "events.*" --group g --consumer w1
+```
+
+To process events of many types through one group, write them to a **single stream** with a type discriminator in the payload (e.g. a JSON `"type"` field) and branch with [stream processing](/orchestration/processing/) — rather than spreading them across `events.login`, `events.logout`, … and trying to subscribe with a wildcard.
 
 ### Lifecycle
 
