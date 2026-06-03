@@ -5521,7 +5521,7 @@ trigger:
   consumer_group: wf-orders          # consumer group (optional, auto-generated)
   mode: shared                       # shared | exclusive | key_shared
   batch_size: 1                      # events per run (1 = single, >1 = array)
-  batch_timeout_ms: 5000             # poll interval / partial-batch flush (default 5000)
+  batch_timeout_ms: 5000             # fallback poll interval / partial-batch flush (default 5000)
 
 start:
   run: "@actions/process-order"
@@ -5539,12 +5539,13 @@ The event payload becomes `$.input` inside the workflow and is accessible via JS
 | `consumer_group` | `wf-{workflow_name}` | Consumer group name |
 | `mode` | `shared` | `shared` (competing consumers), `exclusive` (single consumer), `key_shared` (partition-key affinity) |
 | `batch_size` | `1` | Events per workflow run (`>1` delivers a JSON array) |
-| `batch_timeout_ms` | `5000` | Poll interval in milliseconds, and the time to wait before flushing a partial batch |
+| `batch_timeout_ms` | `5000` | Fallback poll interval (ms), and the time to wait before flushing a partial batch |
 
 :::note
-Stream triggers are **poll-based**, not event-push: the engine checks the source stream every
-`batch_timeout_ms` (default **5 s**), so newly appended events start runs within that interval rather
-than instantly. Lower `batch_timeout_ms` for tighter latency at the cost of more frequent polling.
+Appending to a stream **wakes its triggers immediately**, so runs normally start within a few
+milliseconds of the event — there is no need to wait for a poll. `batch_timeout_ms` is the
+**fallback** poll interval (default **5 s**): it bounds latency for events that arrive without a
+wake-up (e.g. appended before the trigger was registered) and sets the partial-batch flush window.
 :::
 
 ---
