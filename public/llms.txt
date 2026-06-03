@@ -2,7 +2,7 @@
 
 Flo is a unified distributed runtime that provides streams, key-value storage, queues, time-series storage, actions, workflows, and stream processing in a single binary.
 
-Generated: 2026-05-09
+Generated: 2026-06-03
 Canonical docs site: https://docs.floruntime.io/
 Canonical full corpus: https://docs.floruntime.io/llms-full.md
 
