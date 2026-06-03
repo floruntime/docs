@@ -82,7 +82,7 @@ sinks:
       namespace: analytics
 ```
 
-The job continuously polls `payment-events` and appends every record to `enriched-events`.
+The job polls `payment-events` on a fixed interval (`poll_interval_ms`, default 1000 ms), reading up to `batch_size` records per tick, and appends every record to `enriched-events`.
 
 ### Full Example with Operators
 
@@ -129,7 +129,8 @@ Sources define where the pipeline reads data. Two source kinds are supported: **
 
 ### Stream Source
 
-Reads records from a Flo stream, tracking offsets for exactly-once semantics:
+Reads records from a Flo stream, tracking a durable offset cursor for **at-least-once**
+processing (a crash redelivers at most the last debounce window — never skips records):
 
 ```yaml
 sources:
@@ -138,7 +139,8 @@ sources:
       name: click-events
       namespace: production
       partitions: 0           # single partition (integer)
-      batch_size: 500         # per-source override
+      batch_size: 500         # per-source override (records read per tick)
+      poll_interval_ms: 1000  # how often to read from the source (default: 1000)
 ```
 
 #### Partition Selection
@@ -412,7 +414,7 @@ Accumulates numeric values extracted from JSON records. Records are grouped by k
 | Tumbling | `window: tumbling`, `window_size: <seconds>` | Emits when window closes (on watermark) |
 | Count-based | `window: count`, `window_size: <n>` | Emits after every N records per key |
 
-Output format: `{"value": <result>, "count": <n>}`
+Output format: `{"key": <group-key>, "value": <result>, "count": <n>}` (the `key` is the grouping key set by a preceding `keyby`, or the record's key otherwise)
 
 ```yaml
 operators:
@@ -823,8 +825,10 @@ flo processing submit job.yaml -n staging
 
 Job state survives node restarts:
 
-- Submitted jobs persist and resume on restart
-- Stopped and cancelled job states are preserved
+- Submitted jobs persist and resume on restart — the execution pipeline is rebuilt for `RUNNING` jobs, not just the registry entry, so a job keeps consuming after restart instead of becoming an idle zombie
+- Stream-source pipelines resume from a **durable source cursor** rather than re-reading from the beginning. The cursor is persisted as a `processing_checkpoint` entry (debounced to ≥1s per pipeline to bound write amplification)
+- Recovery is **at-least-once**: a crash loses at most the debounce window, which redelivers — it never skips records
+- Stopped and cancelled job states are preserved (they stay idle on restart)
 - Rescaled parallelism is remembered
 - New job IDs don't collide with pre-restart IDs
 
