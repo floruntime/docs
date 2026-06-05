@@ -1,9 +1,11 @@
 ---
 title: REST API
-description: Dashboard HTTP API reference — all endpoints served on port 9002.
+description: Dashboard HTTP API reference — the endpoints served on port 9002 that power the web console.
 ---
 
-The Dashboard REST API runs on port **9002** (configurable via `dashboard_port` in `flo.toml`). It powers the web dashboard and can be used directly for monitoring, management, and ad-hoc operations.
+The Dashboard REST API runs on port **9002** (`listen_port + 2`, configurable via `dashboard_port` in `flo.toml`). It powers the [web console](/reference/web-console/) and can be used directly for monitoring, management, and ad-hoc operations.
+
+Read endpoints serve projection data directly. Write endpoints are proposed through the node's normal replication path, so they are durable just like a CLI or SDK call.
 
 ## Base URL
 
@@ -13,256 +15,374 @@ http://localhost:9002/api/v1
 
 ## Authentication
 
-When authentication is enabled, include a Bearer token:
+`GET /health` is always public. The `/api/v1/*` endpoints require auth **only when a key store exists** (i.e. after `flo server bootstrap`); a dev node started without bootstrap serves them openly.
+
+When auth is enabled:
+
+```
+POST /api/v1/auth/session     # body: { "api_key": "flo_sk_..." } → { "token": "..." }
+GET  /api/v1/auth/status      # { "auth_enabled": true, ... }
+```
+
+Send the session token as a Bearer header on every request:
 
 ```
 Authorization: Bearer <token>
 ```
 
-## Endpoints
+## Conventions
 
-### Server
+- **Namespaces** — Most resources are namespace-scoped. Pass `?namespace=<ns>` (defaults to `default`).
+- **List vs. detail** — A collection endpoint (e.g. `GET /streams`) returns an array of summaries; the detail endpoint (`GET /streams/:name`) returns the full record.
 
-#### `GET /api/v1/status`
+---
 
-Server health and version info.
+## Cluster & metrics
+
+### `GET /api/v1/cluster/stats`
+
+Cluster health, throughput, and the node/shard list.
 
 ```json
 {
-  "status": "healthy",
+  "rps": 45,
+  "active_connections": 12,
+  "uptime": "0d 4h 12m",
   "version": "0.12.0",
-  "uptime_seconds": 3600,
-  "shard_count": 8,
-  "node_id": 1
-}
-```
-
-#### `GET /api/v1/metrics`
-
-Aggregated metrics (JSON format — Prometheus metrics are on port 9001).
-
-```json
-{
-  "ops_total": 1234567,
-  "ops_per_second": 45000,
-  "connections_active": 12,
-  "memory_used_bytes": 1073741824,
-  "shards": [
-    {
-      "id": 0,
-      "partitions": 8,
-      "connections": 3,
-      "ops_per_second": 5600
-    }
+  "num_shards": 8,
+  "commands_total": 1234567,
+  "bytes_received": 9876543,
+  "bytes_sent": 5432198,
+  "subscriptions": 3,
+  "nodes": [
+    { "id": "shard-0", "status": "healthy", "role": "active" }
   ]
 }
 ```
 
-### KV
+### `GET /api/v1/metrics`
 
-#### `GET /api/v1/kv/:namespace/:key`
-
-Get a value.
-
-**Response** `200 OK`:
+Aggregated metrics in JSON (Prometheus metrics are exposed separately on port 9001).
 
 ```json
 {
-  "key": "user:123",
-  "value": "base64-encoded-data",
-  "version": 5,
-  "ttl_remaining": 3500
+  "server": {
+    "connections": 12,
+    "subscriptions": 3,
+    "commands_total": 1234567,
+    "bytes_received": 9876543,
+    "bytes_sent": 5432198,
+    "uptime_seconds": 15120
+  },
+  "streams": 5,
+  "queues": 3,
+  "kv_namespaces": 4,
+  "workflows": {
+    "active_runs": 2, "started_total": 40, "completed_total": 31,
+    "failed_total": 4, "cancelled_total": 1, "timed_out_total": 0,
+    "signals_delivered_total": 6, "timers_fired_total": 0,
+    "steps_executed_total": 120, "active_schedules": 1
+  }
 }
 ```
 
-**Response** `404 Not Found`:
+### `GET /health`
+
+Always-public liveness check (served at the root, not under `/api/v1`).
+
+---
+
+## Namespaces
+
+### `GET /api/v1/namespaces`
 
 ```json
-{ "error": "not_found", "key": "user:123" }
+[
+  {
+    "name": "production",
+    "stream_count": 2, "queue_count": 1, "kv_count": 7,
+    "workflow_count": 1, "processing_count": 3, "action_count": 3,
+    "is_system": false
+  }
+]
 ```
 
-#### `PUT /api/v1/kv/:namespace/:key`
+### `POST /api/v1/namespaces`
 
-Set a value.
+Create a namespace. Body: `{ "name": "production" }`.
 
-**Request body**:
+### `GET /api/v1/namespaces/:namespace`
+
+Namespace detail. Sub-collections: `GET /namespaces/:namespace/streams`, `/queues`, `/kv`.
+
+---
+
+## KV
+
+### `GET /api/v1/kv/namespaces`
+
+```json
+[
+  { "name": "production", "key_count": 7, "bytes_stored": 1840,
+    "get_ops": 0, "set_ops": 12, "delete_ops": 0 }
+]
+```
+
+### `GET /api/v1/kv/namespaces/:namespace/keys?prefix=<p>&limit=<n>`
+
+Scan keys. Returns `{ keys: [{ key, size, version }], count, has_more, cursor, namespace }` (here `version` is the entry LSN).
+
+### `GET /api/v1/kv/namespaces/:namespace/keys/:key`
 
 ```json
 {
-  "value": "base64-encoded-data",
-  "ttl_seconds": 3600,
-  "if_not_exists": false,
-  "cas_version": 4
+  "found": true, "key": "user:42", "namespace": "production",
+  "value": "...", "version": 3, "size": 128,
+  "updated_at": 1718900000000, "ttl_ms": null
 }
 ```
 
-**Response** `200 OK`:
+`version` here is the MVCC version count.
+
+### `GET /api/v1/kv/namespaces/:namespace/keys/:key/history`
 
 ```json
-{ "key": "user:123", "version": 5 }
+{ "key": "user:42", "namespace": "production", "version_count": 3,
+  "versions": [{ "version": 3, "term": 1, "timestamp_ms": 1718900000000, "size": 128, "tombstone": false }] }
 ```
 
-**Response** `409 Conflict` (CAS mismatch):
+### `PUT /api/v1/kv/namespaces/:namespace/keys/:key`
 
-```json
-{ "error": "conflict", "current_version": 6 }
-```
+Write a value. Body: `{ "value": "...", "ttl_seconds": 3600, "nx": false }`.
 
-#### `DELETE /api/v1/kv/:namespace/:key`
+### `DELETE /api/v1/kv/namespaces/:namespace/keys/:key`
 
 Delete a key.
 
-#### `GET /api/v1/kv/:namespace?prefix=<prefix>&limit=<n>`
+---
 
-Scan keys by prefix.
+## Streams
 
-### Queues
-
-#### `POST /api/v1/queue/:namespace/:queue/enqueue`
-
-Enqueue a message.
+### `GET /api/v1/streams?namespace=<ns>`
 
 ```json
-{
-  "payload": "base64-encoded-data",
-  "priority": 10,
-  "delay_ms": 0,
-  "dedup_key": "optional-key"
-}
+[
+  { "name": "events", "namespace": "production", "partitions": 16,
+    "ingest_rate": 0, "reads": 0, "retention": "7d" }
+]
 ```
 
-#### `POST /api/v1/queue/:namespace/:queue/dequeue`
+### `GET /api/v1/streams/:name?namespace=<ns>`
 
-Dequeue messages.
+Detail with `partitions[]` (record counts + bytes) and `consumer_groups[]` (members, pending, last-delivered cursor).
+
+### `GET /api/v1/streams/:name/messages?namespace=<ns>&limit=<n>`
+
+Records with `id_ms`, `id_seq`, `ual_index`, `size`, and the decoded `payload`. Sub-resources: `GET /streams/:name/groups/:group`, `/groups/:group/pending`, `/groups/:group/members`.
+
+---
+
+## Queues
+
+### `GET /api/v1/queues`
 
 ```json
-{ "count": 10, "visibility_timeout_ms": 60000 }
+[
+  { "name": "tasks", "namespace": "production", "ready": 24, "inflight": 0,
+    "pending": 24, "available": 24, "enqueued": 30, "dequeued": 6, "dlq_count": 0 }
+]
 ```
 
-#### `POST /api/v1/queue/:namespace/:queue/ack`
+### `GET /api/v1/queues/:name?namespace=<ns>`
 
-Acknowledge messages.
+Per-queue detail (same shape as the list item).
+
+### `GET /api/v1/queues/:name/messages?namespace=<ns>&limit=<n>`
+
+Messages with `seq`, `priority`, `state` (`ready` / `leased` / `dlq`), `attempts`, `lease_remaining_ms`, `size`, and `payload`.
+
+### `GET /api/v1/queues/:name/dlq?namespace=<ns>`
+
+Dead-letter entries.
+
+### Writes
+
+```
+POST   /api/v1/queues/:name/purge?namespace=<ns>
+POST   /api/v1/queues/:name/dlq/:seq/requeue?namespace=<ns>
+DELETE /api/v1/queues/:name/dlq/:seq?namespace=<ns>
+```
+
+---
+
+## Time Series
+
+Measurements are **namespace-scoped** — pass `?namespace=`.
+
+### `GET /api/v1/timeseries?namespace=<ns>`
 
 ```json
-{ "sequences": [1, 2, 3] }
+[ { "name": "cpu_usage", "series_count": 1, "field_count": 1, "points": 60 } ]
 ```
 
-#### `GET /api/v1/queue/:namespace/:queue/stats`
+### `GET /api/v1/timeseries/:measurement?namespace=<ns>`
 
-Queue statistics.
+Detail: `{ name, namespace, field_count, fields: [{ name, type }], series_count, retention }`.
+
+### `GET /api/v1/timeseries/:measurement/data?field=<f>&namespace=<ns>&from=<ms>&to=<ms>`
 
 ```json
-{
-  "name": "tasks",
-  "ready_count": 150,
-  "leased_count": 12,
-  "dlq_count": 3,
-  "total_enqueued": 50000,
-  "total_acked": 49835
-}
+{ "measurement": "cpu_usage", "field": "value", "series": [ { "timestamp": 1718900000000, "value": 41.1 } ] }
 ```
 
-### Streams
+### `GET | POST /api/v1/timeseries/floql`
 
-#### `POST /api/v1/stream/:namespace/:stream/append`
+Execute a FloQL query (`?q=` or a raw body).
 
-Append a record.
+---
+
+## Actions
+
+### `GET /api/v1/actions?namespace=<ns>`
 
 ```json
-{ "payload": "base64-encoded-data" }
+[
+  { "name": "send-email", "namespace": "production", "type": "user",
+    "version": 1, "enabled": true, "timeout_ms": 30000, "max_retries": 3,
+    "worker_count": 1,
+    "runs": { "total": 14, "pending": 7, "running": 0, "completed": 6,
+              "failed": 1, "cancelled": 0, "timed_out": 0 } }
+]
 ```
 
-#### `GET /api/v1/stream/:namespace/:stream?offset=<n>&count=<n>`
+### `GET /api/v1/actions/:name?namespace=<ns>`
 
-Read records from a stream.
+Detail with `runs`, `recent_runs[]` (input/output/error/source), and the `workers[]` handling the action.
 
-#### `GET /api/v1/stream/:namespace/:stream/info`
+### `GET /api/v1/actions/:name/runs?namespace=<ns>&limit=<n>`
 
-Stream metadata.
+Run history.
+
+### `POST /api/v1/actions/:name/invoke?namespace=<ns>`
+
+Invoke (async). Body is the input JSON. Returns `{ ok, action, namespace, status, run_id }`.
+
+---
+
+## Workers
+
+### `GET /api/v1/workers?namespace=<ns>`
 
 ```json
-{
-  "name": "events",
-  "first_offset": 0,
-  "last_offset": 99999,
-  "record_count": 100000,
-  "consumer_groups": ["processors", "analytics"]
-}
+[
+  { "worker_id": "worker-1", "status": "active", "worker_type": "action",
+    "namespace": "production", "machine_id": null, "current_load": 0,
+    "max_concurrent": 10, "tasks_completed": 6, "tasks_failed": 1,
+    "last_seen": 1718900000000, "registered_at": 1718900000000, "metadata": null,
+    "processes": [ { "name": "send-email", "kind": "action",
+                     "run_count": 6, "fail_count": 1, "last_run_at": 1718900009000 } ] }
+]
 ```
 
-### Time-Series
+### `GET /api/v1/workers/:id`
 
-#### `POST /api/v1/ts/:namespace/write`
+Single worker detail (same shape).
 
-Write points (InfluxDB line protocol in body).
+---
 
-```
-cpu,host=web-01 usage=82.5
-memory,host=web-01 used=4096,total=8192
-```
+## Processing
 
-#### `POST /api/v1/ts/:namespace/query`
-
-Execute a FloQL query.
+### `GET /api/v1/processing/jobs?namespace=<ns>`
 
 ```json
-{ "query": "cpu{host=web-01}[1h] | avg(5m)" }
+[
+  { "job_id": "job-...", "name": "events-filter", "namespace": "production",
+    "status": "RUNNING", "parallelism": 1, "batch_size": 100,
+    "created_at": 1718900000000, "records_processed": 1000 }
+]
 ```
 
-### Cluster
+### `GET /api/v1/processing/jobs/:id`
 
-#### `GET /api/v1/cluster/status`
+Detail with the full pipeline `yaml` and `savepoints[]`.
 
-Cluster membership and health.
+### Writes
+
+```
+POST   /api/v1/processing/jobs?namespace=<ns>            # body: pipeline YAML → { ok, job_id, status }
+PUT    /api/v1/processing/jobs/:id/stop?namespace=<ns>
+DELETE /api/v1/processing/jobs/:id?namespace=<ns>        # cancel
+```
+
+---
+
+## Workflows
+
+The console aliases `workflows` → `workflow/definitions` and `workflows/:id` → `workflow/runs/:id`.
+
+### `GET /api/v1/workflow/definitions?namespace=<ns>`
 
 ```json
-{
-  "nodes": [
-    { "id": 1, "address": "10.0.1.10:9000", "status": "alive", "shards": 8 },
-    { "id": 2, "address": "10.0.1.11:9000", "status": "alive", "shards": 8 },
-    { "id": 3, "address": "10.0.1.12:9000", "status": "suspect", "shards": 8 }
-  ],
-  "partition_count": 64,
-  "replication_factor": 3
-}
+[
+  { "name": "echo-workflow", "version": "1.0.0", "enabled": true,
+    "step_count": 1, "plan_count": 0, "has_schedule": false,
+    "has_trigger": false, "start_step": "start", "terminals": [], "steps": [] }
+]
 ```
 
-#### `GET /api/v1/cluster/partitions`
+### `GET /api/v1/workflow/definitions/:name?namespace=<ns>`
 
-Partition table — which node owns which partitions.
+Detail with the full `definition_yaml`, `status`, and `run_count`.
 
-### Namespaces
+```
+PUT /api/v1/workflow/definitions/:name/enable?namespace=<ns>
+PUT /api/v1/workflow/definitions/:name/disable?namespace=<ns>
+```
 
-#### `GET /api/v1/namespaces`
-
-List all namespaces.
-
-#### `POST /api/v1/namespaces`
-
-Create a namespace.
+### `GET /api/v1/workflow/runs?namespace=<ns>`
 
 ```json
-{ "name": "myapp" }
+[
+  { "run_id": "wfr-...", "workflow": "echo-workflow", "version": "1.0.0",
+    "status": "completed", "triggered_by": "manual", "current_step": null,
+    "started_at": 1718900000000, "completed_at": 1718900000310,
+    "duration_ms": 310, "error": null, "history_event_count": 6 }
+]
 ```
+
+### `POST /api/v1/workflow/runs?namespace=<ns>&workflow=<name>&version=<v>`
+
+Start a run. The request body is the input JSON. Returns `{ ok, run_id, workflow, status }`.
+
+### `GET /api/v1/workflow/runs/:id`
+
+Run detail with `current_step`, timing, `input`, `output`, `step_results`, and `pending_signals`.
+
+### `GET /api/v1/workflow/runs/:id/history`
+
+Event timeline: `[{ event_type, step_name, timestamp }]`.
+
+```
+DELETE /api/v1/workflow/runs/:id?namespace=<ns>          # cancel
+POST   /api/v1/workflow/runs/:id/signal?namespace=<ns>   # body: signal payload
+```
+
+---
 
 ## Error Format
 
-All errors follow a consistent format:
+Errors are returned as a JSON object with an `error` field:
 
 ```json
-{
-  "error": "error_code",
-  "message": "Human-readable description",
-  "details": {}
-}
+{ "error": "Human-readable description" }
 ```
 
-| HTTP Status | Error Code | Meaning |
-|-------------|-----------|---------|
-| 400 | `bad_request` | Invalid request parameters |
-| 401 | `unauthorized` | Missing or invalid auth token |
-| 404 | `not_found` | Resource not found |
-| 409 | `conflict` | CAS version conflict |
-| 429 | `overloaded` | Server at capacity, retry later |
-| 500 | `internal` | Server error |
-| 503 | `unavailable` | Node not ready or shutting down |
+| HTTP Status | Meaning |
+|-------------|---------|
+| 400 | Invalid request parameters |
+| 401 | Missing or invalid auth token |
+| 404 | Resource not found |
+| 409 | CAS / version conflict |
+| 429 | Server at capacity, retry later |
+| 500 | Server error |
+| 503 | Node not ready or shutting down |
