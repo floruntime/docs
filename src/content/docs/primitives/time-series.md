@@ -292,7 +292,7 @@ The TS Projection uses columnar storage optimized for time-series access pattern
 - **Write buffers** — Per-series, per-field in-memory buffers (1,024 points capacity). When full, flushed to an immutable columnar block.
 - **Columnar blocks** — Store timestamps and values separately for compression and vectorized aggregation. Each block tracks its min/max timestamp and point count.
 - **Block index** — Maps `(series_hash, field_hash, time_range)` → `(block)` for fast range lookups.
-- **Series key** — Each series is identified by `measurement + "\0" + field_name`, with tag sets hashed for routing.
+- **Series key** — Each series is identified by `namespace_hash + measurement + "\0" + field_name`. The 4-byte namespace prefix is what keeps the same measurement isolated across namespaces (see [Namespace Isolation](#namespace-isolation)); tag sets are hashed for routing.
 
 Queries scan both the active write buffer and flushed blocks. Aggregation functions (avg, sum, min, max, count) operate directly on the columnar layout.
 

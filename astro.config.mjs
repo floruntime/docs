@@ -170,6 +170,7 @@ export default defineConfig({
           label: 'Reference',
           items: [
             { slug: 'reference/cli', label: 'CLI' },
+            { slug: 'reference/web-console', label: 'Web Console' },
             { slug: 'reference/rest-api', label: 'REST API' },
             { slug: 'reference/wire-protocol' },
             { slug: 'reference/redis', label: 'Redis Compatibility' },

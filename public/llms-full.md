@@ -2,7 +2,7 @@
 
 This is a generated concatenation of the canonical Flo docs. Prefer the source pages for narrow citations; use this file when an agent benefits from a single loadable corpus.
 
-Generated: 2026-06-03
+Generated: 2026-06-05
 Canonical docs site: https://docs.floruntime.io/
 
 ## Table of Contents
@@ -33,6 +33,7 @@ Canonical docs site: https://docs.floruntime.io/
   - CLI Reference (/reference/cli/)
   - Redis Compatibility (/reference/redis/)
   - REST API (/reference/rest-api/)
+  - Web Console (/reference/web-console/)
   - Wire Protocol (/reference/wire-protocol/)
 - SDKs
   - Go SDK (/sdks/go/)
@@ -323,8 +324,8 @@ flo kv get greeting
           dead-letter handling. Workers poll for invocations and report results.
           Multi-step orchestration defined in YAML. Signals, timers, circuit breakers,
           and full state replay.
-          Stateful pipelines with windowing, watermarks, checkpointing, and WASM
-          operators. Sub-millisecond local hops.
+          Stateful pipelines with windowing, watermarks, checkpointing, and
+          built-in operators. Sub-millisecond local hops.
           Thread-per-shard, single Raft log per partition, hot-warm-cold storage tiering.
           Designed for predictable tail latency.
 
@@ -1789,11 +1790,20 @@ flo stream delete events
 flo stream delete events --force
 ```
 
-Deleting a stream that does not exist is a no-op (idempotent), and the name can be reused immediately afterward. A non-empty stream is refused unless `--force` is passed. Consumer groups are **namespace-level** (a single group can fan in across many streams via a shared cursor), so deleting a stream intentionally leaves its groups untouched — delete the group separately with `flo stream group delete` if needed.
+Deleting a stream that does not exist is a no-op (idempotent), and the name can be reused immediately afterward. A non-empty stream is refused unless `--force` is passed. Consumer groups are **scoped to their stream** (see [Consumer Groups](#consumer-groups)), so deleting a stream also deletes that stream's groups; a same-named group on another stream is unaffected.
 
 ## Consumer Groups
 
 Consumer groups allow multiple consumers to process a stream cooperatively. Each record is delivered to **exactly one** consumer in the group. The server tracks a **Pending Entry List (PEL)** — records that have been delivered but not yet acknowledged.
+
+A consumer group is **scoped to a single stream**: its identity is the `(stream, group)` pair, and its cursor and PEL belong to that one stream. The same group name used on two different streams gives two fully independent groups (separate cursors, separate PELs). A group read targets exactly one stream — **wildcard / fan-in reads are not supported**:
+
+```bash
+# ✗ rejected — a group cannot span multiple streams
+flo stream group read "events.*" --group g --consumer w1
+```
+
+To process events of many types through one group, write them to a **single stream** with a type discriminator in the payload (e.g. a JSON `"type"` field) and branch with [stream processing](/orchestration/processing/) — rather than spreading them across `events.login`, `events.logout`, … and trying to subscribe with a wildcard.
 
 ### Lifecycle
 
@@ -2394,7 +2404,7 @@ The TS Projection uses columnar storage optimized for time-series access pattern
 - **Write buffers** — Per-series, per-field in-memory buffers (1,024 points capacity). When full, flushed to an immutable columnar block.
 - **Columnar blocks** — Store timestamps and values separately for compression and vectorized aggregation. Each block tracks its min/max timestamp and point count.
 - **Block index** — Maps `(series_hash, field_hash, time_range)` → `(block)` for fast range lookups.
-- **Series key** — Each series is identified by `measurement + "\0" + field_name`, with tag sets hashed for routing.
+- **Series key** — Each series is identified by `namespace_hash + measurement + "\0" + field_name`. The 4-byte namespace prefix is what keeps the same measurement isolated across namespaces (see [Namespace Isolation](#namespace-isolation)); tag sets are hashed for routing.
 
 Queries scan both the active write buffer and flushed blocks. Aggregation functions (avg, sum, min, max, count) operate directly on the columnar layout.
 
@@ -2413,26 +2423,20 @@ Actions, workers, workflows, and stream processing.
 Source path: src/content/docs/orchestration/actions.mdx
 Canonical URL: https://docs.floruntime.io/orchestration/actions/
 
-Actions are **named, durable task types**. You register an action once, then invoke it on demand — Flo handles dispatch, retries, lease management, and dead-letter routing. The handler can run in two places:
+Actions are **named, durable task types**. You register an action once, then invoke it on demand — Flo handles dispatch, retries, lease management, and dead-letter routing.
 
-- **WASM** — Compile your logic to WebAssembly and deploy it to Flo. The action executes **inline** on the shard, with sub-millisecond overhead and zero network hops.
-- **User-hosted workers** — Run a long-lived process (in Go, Python, JS, Zig, or any language that speaks the wire protocol) that pulls tasks from Flo and reports results.
-
-Both models share the same invoke / status / list / delete API. The difference is where the code runs.
+Action handlers run in **user-hosted workers** — long-lived processes (in Go, Python, JS, Zig, or any language that speaks the wire protocol) that pull tasks from Flo and report results. Flo owns the durable task queue, delivery, retries, and lease tracking; your worker owns the logic.
 
 ```
 ┌──────────────┐                   ┌───────────────────────┐
 │  Client      │                   │  Flo Server (Shard)   │
 │              │  action invoke    │                       │
 │  flo action  │ ─────────────────▸│  ActionHandler        │
-│  invoke X    │                   │    ├─ WASM?  Execute  │◄── inline, ~µs
-│              │  ◀─ run_id ───────┤    │   inline         │
-│              │                   │    └─ User?  Queue    │
-└──────────────┘                   │         pending       │
-                                   └──────────┬────────────┘
+│  invoke X    │  ◀─ run_id ───────┤    └─ queue pending    │
+└──────────────┘                   └──────────┬────────────┘
                                               │
-┌──────────────┐   action_await                │ 
-│  Worker      │ ◄─────────────────────────────┘
+┌──────────────┐   action_await               │
+│  Worker      │ ◄────────────────────────────┘
 │  (Go/Py/JS)  │   task_id + payload
 │              │
 │  handler()   │
@@ -2466,7 +2470,7 @@ flo action status send-email-1
 #   send-email-1    pending    2026-03-14 10:00:00
 ```
 
-For user-hosted actions, nothing happens until a worker picks up the task. For WASM actions, the result is available immediately.
+Nothing happens until a worker picks up the task — the run stays `pending` until a registered worker awaits it, then transitions to `running` and `completed`.
 
 ---
 
@@ -2479,7 +2483,6 @@ A named task type stored in Flo's action registry. Each action has:
 | Field | Default | Description |
 |-------|---------|-------------|
 | `name` | — | Unique name within a namespace (max 256 chars) |
-| `type` | `user` | `user` (worker-hosted) or `wasm` (Flo-hosted) |
 | `timeout_ms` | `30000` | Max execution time before timeout |
 | `max_retries` | `3` | Retries before dead-lettering |
 | `retry_delay_ms` | `1000` | Base delay for exponential backoff |
@@ -2487,21 +2490,13 @@ A named task type stored in Flo's action registry. Each action has:
 | `version` | `1` | Auto-incremented on re-registration |
 | `enabled` | `true` | Can be disabled to block new invocations |
 
-WASM actions additionally have:
-
-| Field | Default | Description |
-|-------|---------|-------------|
-| `wasm_module` | — | WASM binary bytes |
-| `wasm_entrypoint` | `handle` | Export function name |
-| `wasm_memory_limit` | `16 MB` | Max linear memory (in pages of 64 KB) |
-
 ### Run
 
 A single invocation of an action. Every invoke creates a run with a unique ID.
 
 | Status | Description |
 |--------|-------------|
-| `pending` | Queued, waiting for a worker (or WASM execution) |
+| `pending` | Queued, waiting for a worker to claim it |
 | `running` | Claimed by a worker, currently executing |
 | `completed` | Finished successfully with output |
 | `failed` | Failed permanently (retries exhausted or explicit fail) |
@@ -2521,113 +2516,9 @@ Workers can run anywhere — on the same machine, in a container, across the net
 
 ---
 
-## Execution Models
+## How Actions Run
 
-### WASM Actions (Flo-Hosted)
-
-WASM actions execute **inside the Flo shard** with no network overhead. They're ideal for:
-
-- Pure data transformations (validation, enrichment, rules engines)
-- Low-latency operations (sub-millisecond execution)
-- Self-contained logic with no external dependencies
-
-The WASM module must export three functions:
-
-```
-handle(input_ptr: u32, input_len: u32) → i64
-alloc(size: u32) → u32
-dealloc(ptr: u32, size: u32) → void
-```
-
-`handle` receives the input bytes and returns a packed `i64`: the upper 32 bits are the output pointer, the lower 32 bits are the output length. Negative return values indicate errors:
-
-| Return Code | Meaning |
-|-------------|---------|
-| `-1` | Invalid input |
-| `-2` | Allocation failed |
-| `-3` | Execution error |
-
-Optional exports:
-
-| Export | Purpose |
-|--------|---------|
-| `init() → i32` | Called once after module instantiation |
-| `describe() → i64` | Returns a JSON description (packed ptr\|len) |
-
-#### Host Functions
-
-WASM guest code can call these host functions:
-
-| Function | Description |
-|----------|-------------|
-| `flo.log(level, msg_ptr, msg_len)` | Log a message (0=debug, 1=info, 2=warn, 3=error) |
-| `flo.kv_get(key_ptr, key_len, buf_ptr, buf_len) → i32` | Read from KV store |
-| `flo.kv_set(key_ptr, key_len, val_ptr, val_len) → i32` | Write to KV store |
-| `flo.kv_delete(key_ptr, key_len) → i32` | Delete from KV store |
-
-WASI shims (`wasi_snapshot_preview1.*`) are available for modules compiled with a WASI target.
-
-#### Concurrency
-
-Each shard allows up to 4 concurrent WASM executions (configurable via `max_concurrent_executions`). Additional invocations queue until a slot opens.
-
-#### Building a WASM Action
-
-Here's a complete rules engine in Zig targeting `wasm32-freestanding`:
-
-```zig
-// rules_engine.zig — Build with:
-//   zig build-lib -target wasm32-freestanding -O ReleaseSmall rules_engine.zig
-
-var heap: [65536]u8 = undefined;
-var heap_offset: usize = 0;
-
-export fn alloc(size: u32) u32 {
-    const s: usize = @intCast(size);
-    const aligned = (heap_offset + 7) & ~@as(usize, 7);
-    if (aligned + s > heap.len) return 0;
-    const ptr: [*]u8 = @ptrCast(&heap[aligned]);
-    heap_offset = aligned + s;
-    return @intFromPtr(ptr);
-}
-
-export fn dealloc(_: u32, _: u32) void {}
-
-export fn handle(input_ptr: [*]const u8, input_len: u32) i64 {
-    heap_offset = 0;
-    const input = input_ptr[0..input_len];
-
-    // Parse and evaluate rules against input...
-    const output = processRules(input);
-
-    const out_ptr = alloc(@intCast(output.len));
-    if (out_ptr == 0) return -2;
-    const dest: [*]u8 = @ptrFromInt(out_ptr);
-    @memcpy(dest[0..output.len], output);
-
-    return (@as(i64, out_ptr) << 32) | @as(i64, @intCast(output.len));
-}
-```
-
-Register it:
-
-```bash
-flo action register rules-engine --wasm ./rules_engine.wasm
-```
-
-Now invocations execute inline — no worker needed:
-
-```bash
-flo action invoke rules-engine '{"age": 25, "country": "US"}'
-# → Result: rules-engine-1  (completed immediately)
-
-flo action status rules-engine-1
-# → status: completed, output: {"eligible":true,"rules_evaluated":2,"rules_passed":2}
-```
-
-### User-Hosted Actions (Workers)
-
-User-hosted actions are executed by external worker processes. This is the model for:
+Actions are executed by external **worker** processes that pull tasks from Flo over the wire — the model for:
 
 - Actions that call external APIs (payment gateways, email services)
 - Long-running tasks (report generation, media processing)
@@ -3291,7 +3182,7 @@ steps:
       failure: flo.Failed
 ```
 
-When a workflow invokes a WASM action, the result is available synchronously. When it invokes a user-hosted action, the workflow parks in `waiting` until the worker reports completion.
+When a workflow invokes an action, it parks in `waiting` until a worker claims the task and reports completion, then resumes with the result.
 
 ---
 
@@ -4159,7 +4050,7 @@ The engine collects per-operator and per-pipeline metrics:
 - [Time-Series](/primitives/time-series/) — TS query and write semantics
 - [KV](/primitives/kv/) — KV storage used by `kv_lookup` operator and KV sinks
 - [Queues](/primitives/queues/) — queue sinks for task pipelines
-- [Actions](/orchestration/actions/) — WASM action registration and invocation
+- [Actions](/orchestration/actions/) — worker-hosted action registration and invocation
 - [Workflows](/orchestration/workflows/) — multi-step orchestration over actions
 
 ---
@@ -4887,9 +4778,9 @@ steps:
 **2. Register the actions** the workflow calls:
 
 ```bash
-flo action register validate-order --wasm ./validate.wasm
-flo action register charge-payment --wasm ./charge.wasm
-flo action register create-shipment --wasm ./ship.wasm
+flo action register validate-order --timeout 30000 --max-retries 3
+flo action register charge-payment --timeout 30000 --max-retries 3
+flo action register create-shipment --timeout 30000 --max-retries 3
 ```
 
 **3. Deploy the workflow:**
@@ -4963,7 +4854,7 @@ Targets use a prefix to indicate what to invoke:
 
 | Prefix | Invokes | Example |
 |--------|---------|---------|
-| `@actions/` | A registered action (WASM or user-hosted) | `@actions/charge-stripe` |
+| `@actions/` | A registered action (worker-hosted) | `@actions/charge-stripe` |
 | `@plan/` | An inline plan defined in the same workflow | `@plan/payment` |
 | `@workflow/` | A child workflow (starts a nested run) | `@workflow/fulfillment` |
 
@@ -5653,7 +5544,7 @@ Validation errors are reported with error codes (E1xx–E5xx) and human-readable
 2. For `run` steps:
    - If `inputMapping` is set, resolve JSONPath references against `$.input` and `$.steps.*`
    - Invoke the target (action, plan, or child workflow)
-   - WASM actions complete synchronously; user-hosted actions may complete asynchronously
+   - Actions complete asynchronously — the step parks until a worker reports the result
    - If the action returns `pending` and `poll:` is configured, schedule the next poll
    - On outcome, check retries (if `failure` and retries remain, re-execute)
    - Follow the matching transition to the next step or terminal
@@ -7227,17 +7118,23 @@ flo stream delete <name> [--force]
 |------|-------------|
 | `--force`, `-f` | Delete even if the stream is not empty |
 
-Deleting a missing stream is a no-op (idempotent). A non-empty stream is refused unless `--force` is given. Consumer groups are namespace-level and are left intact. To drop only records while keeping the stream, use `flo stream trim`.
+Deleting a missing stream is a no-op (idempotent). A non-empty stream is refused unless `--force` is given. Deleting a stream also deletes that stream's consumer groups (a same-named group on another stream is unaffected). To drop only records while keeping the stream, use `flo stream trim`.
 
 ### `flo stream group`
 
-Manage consumer groups.
+Manage consumer groups. A group is scoped to a single stream — every subcommand takes the `<stream>` it operates on, and wildcard/fan-in reads (`events.*`) are not supported.
 
 ```bash
-flo stream group create <stream> <group>
-flo stream group read <stream> <group> <consumer> [--count <n>]
-flo stream group ack <stream> <group> <offsets...>
-flo stream group status <stream> <group>
+flo stream group create <stream> --group <name> [--ack-timeout <ms>] [--max-deliver <n>]
+flo stream group read   <stream> --group <name> --consumer <id> [--limit <n>] [--block <ms>] [--no-ack]
+flo stream group ack    <stream> --group <name> --ids <id,...> [--consumer <id>]
+flo stream group nack   <stream> --group <name> --ids <id,...> [--delay <ms>]
+flo stream group touch  <stream> --group <name> --consumer <id> --ids <id,...> [--extend <ms>]
+flo stream group pending <stream> --group <name> [--consumer <id>]
+flo stream group info   <stream> --group <name>
+flo stream group join   <stream> <group> <consumer>
+flo stream group leave  <stream> --group <name> --consumer <id>
+flo stream group delete <stream> --group <name>
 ```
 
 ## Queues
@@ -7557,7 +7454,7 @@ For atomic increments specifically, prefer `INCR` / `kv.incr` — it's unconditi
 | Persistence | Every write is Raft-replicated and committed to UAL before responding. There is no `SAVE`/`BGSAVE` — Flo is always durable. |
 | Eviction | No `maxmemory` LRU eviction. Out-of-memory rejects new writes; configure TTLs explicitly. |
 | Pub/Sub | Not supported via RESP. Use [Streams](/primitives/stream) or [Streaming Updates](/primitives/kv#streaming-updates). |
-| Lua scripting | `EVAL`/`EVALSHA` not supported. Use [WASM Processing](/orchestration/processing) for server-side logic. |
+| Lua scripting | `EVAL`/`EVALSHA` not supported. Use [Stream Processing](/orchestration/processing) for server-side logic. |
 | Cluster slots | `CLUSTER` commands return a single-slot response. Flo's partitioning is internal and works without client awareness. |
 | Transactions | `MULTI/EXEC` returns an error. Use CAS or model multi-field state as a single JSON document. |
 | `OBJECT ENCODING` etc. | Not supported. |
@@ -7589,7 +7486,9 @@ Any RESP client library should connect with the same host/port settings you'd gi
 Source path: src/content/docs/reference/rest-api.md
 Canonical URL: https://docs.floruntime.io/reference/rest-api/
 
-The Dashboard REST API runs on port **9002** (configurable via `dashboard_port` in `flo.toml`). It powers the web dashboard and can be used directly for monitoring, management, and ad-hoc operations.
+The Dashboard REST API runs on port **9002** (`listen_port + 2`, configurable via `dashboard_port` in `flo.toml`). It powers the [web console](/reference/web-console/) and can be used directly for monitoring, management, and ad-hoc operations.
+
+Read endpoints serve projection data directly. Write endpoints are proposed through the node's normal replication path, so they are durable just like a CLI or SDK call.
 
 ## Base URL
 
@@ -7599,259 +7498,438 @@ http://localhost:9002/api/v1
 
 ## Authentication
 
-When authentication is enabled, include a Bearer token:
+`GET /health` is always public. The `/api/v1/*` endpoints require auth **only when a key store exists** (i.e. after `flo server bootstrap`); a dev node started without bootstrap serves them openly.
+
+When auth is enabled:
+
+```
+POST /api/v1/auth/session     # body: { "api_key": "flo_sk_..." } → { "token": "..." }
+GET  /api/v1/auth/status      # { "auth_enabled": true, ... }
+```
+
+Send the session token as a Bearer header on every request:
 
 ```
 Authorization: Bearer <token>
 ```
 
-## Endpoints
+## Conventions
 
-### Server
+- **Namespaces** — Most resources are namespace-scoped. Pass `?namespace=<ns>` (defaults to `default`).
+- **List vs. detail** — A collection endpoint (e.g. `GET /streams`) returns an array of summaries; the detail endpoint (`GET /streams/:name`) returns the full record.
 
-#### `GET /api/v1/status`
+---
 
-Server health and version info.
+## Cluster & metrics
+
+### `GET /api/v1/cluster/stats`
+
+Cluster health, throughput, and the node/shard list.
 
 ```json
 {
-  "status": "healthy",
+  "rps": 45,
+  "active_connections": 12,
+  "uptime": "0d 4h 12m",
   "version": "0.12.0",
-  "uptime_seconds": 3600,
-  "shard_count": 8,
-  "node_id": 1
-}
-```
-
-#### `GET /api/v1/metrics`
-
-Aggregated metrics (JSON format — Prometheus metrics are on port 9001).
-
-```json
-{
-  "ops_total": 1234567,
-  "ops_per_second": 45000,
-  "connections_active": 12,
-  "memory_used_bytes": 1073741824,
-  "shards": [
-    {
-      "id": 0,
-      "partitions": 8,
-      "connections": 3,
-      "ops_per_second": 5600
-    }
+  "num_shards": 8,
+  "commands_total": 1234567,
+  "bytes_received": 9876543,
+  "bytes_sent": 5432198,
+  "subscriptions": 3,
+  "nodes": [
+    { "id": "shard-0", "status": "healthy", "role": "active" }
   ]
 }
 ```
 
-### KV
+### `GET /api/v1/metrics`
 
-#### `GET /api/v1/kv/:namespace/:key`
-
-Get a value.
-
-**Response** `200 OK`:
+Aggregated metrics in JSON (Prometheus metrics are exposed separately on port 9001).
 
 ```json
 {
-  "key": "user:123",
-  "value": "base64-encoded-data",
-  "version": 5,
-  "ttl_remaining": 3500
+  "server": {
+    "connections": 12,
+    "subscriptions": 3,
+    "commands_total": 1234567,
+    "bytes_received": 9876543,
+    "bytes_sent": 5432198,
+    "uptime_seconds": 15120
+  },
+  "streams": 5,
+  "queues": 3,
+  "kv_namespaces": 4,
+  "workflows": {
+    "active_runs": 2, "started_total": 40, "completed_total": 31,
+    "failed_total": 4, "cancelled_total": 1, "timed_out_total": 0,
+    "signals_delivered_total": 6, "timers_fired_total": 0,
+    "steps_executed_total": 120, "active_schedules": 1
+  }
 }
 ```
 
-**Response** `404 Not Found`:
+### `GET /health`
+
+Always-public liveness check (served at the root, not under `/api/v1`).
+
+---
+
+## Namespaces
+
+### `GET /api/v1/namespaces`
 
 ```json
-{ "error": "not_found", "key": "user:123" }
+[
+  {
+    "name": "production",
+    "stream_count": 2, "queue_count": 1, "kv_count": 7,
+    "workflow_count": 1, "processing_count": 3, "action_count": 3,
+    "is_system": false
+  }
+]
 ```
 
-#### `PUT /api/v1/kv/:namespace/:key`
+### `POST /api/v1/namespaces`
 
-Set a value.
+Create a namespace. Body: `{ "name": "production" }`.
 
-**Request body**:
+### `GET /api/v1/namespaces/:namespace`
+
+Namespace detail. Sub-collections: `GET /namespaces/:namespace/streams`, `/queues`, `/kv`.
+
+---
+
+## KV
+
+### `GET /api/v1/kv/namespaces`
+
+```json
+[
+  { "name": "production", "key_count": 7, "bytes_stored": 1840,
+    "get_ops": 0, "set_ops": 12, "delete_ops": 0 }
+]
+```
+
+### `GET /api/v1/kv/namespaces/:namespace/keys?prefix=<p>&limit=<n>`
+
+Scan keys. Returns `{ keys: [{ key, size, version }], count, has_more, cursor, namespace }` (here `version` is the entry LSN).
+
+### `GET /api/v1/kv/namespaces/:namespace/keys/:key`
 
 ```json
 {
-  "value": "base64-encoded-data",
-  "ttl_seconds": 3600,
-  "if_not_exists": false,
-  "cas_version": 4
+  "found": true, "key": "user:42", "namespace": "production",
+  "value": "...", "version": 3, "size": 128,
+  "updated_at": 1718900000000, "ttl_ms": null
 }
 ```
 
-**Response** `200 OK`:
+`version` here is the MVCC version count.
+
+### `GET /api/v1/kv/namespaces/:namespace/keys/:key/history`
 
 ```json
-{ "key": "user:123", "version": 5 }
+{ "key": "user:42", "namespace": "production", "version_count": 3,
+  "versions": [{ "version": 3, "term": 1, "timestamp_ms": 1718900000000, "size": 128, "tombstone": false }] }
 ```
 
-**Response** `409 Conflict` (CAS mismatch):
+### `PUT /api/v1/kv/namespaces/:namespace/keys/:key`
 
-```json
-{ "error": "conflict", "current_version": 6 }
-```
+Write a value. Body: `{ "value": "...", "ttl_seconds": 3600, "nx": false }`.
 
-#### `DELETE /api/v1/kv/:namespace/:key`
+### `DELETE /api/v1/kv/namespaces/:namespace/keys/:key`
 
 Delete a key.
 
-#### `GET /api/v1/kv/:namespace?prefix=<prefix>&limit=<n>`
+---
 
-Scan keys by prefix.
+## Streams
 
-### Queues
-
-#### `POST /api/v1/queue/:namespace/:queue/enqueue`
-
-Enqueue a message.
+### `GET /api/v1/streams?namespace=<ns>`
 
 ```json
-{
-  "payload": "base64-encoded-data",
-  "priority": 10,
-  "delay_ms": 0,
-  "dedup_key": "optional-key"
-}
+[
+  { "name": "events", "namespace": "production", "partitions": 16,
+    "ingest_rate": 0, "reads": 0, "retention": "7d" }
+]
 ```
 
-#### `POST /api/v1/queue/:namespace/:queue/dequeue`
+### `GET /api/v1/streams/:name?namespace=<ns>`
 
-Dequeue messages.
+Detail with `partitions[]` (record counts + bytes) and `consumer_groups[]` (members, pending, last-delivered cursor).
+
+### `GET /api/v1/streams/:name/messages?namespace=<ns>&limit=<n>`
+
+Records with `id_ms`, `id_seq`, `ual_index`, `size`, and the decoded `payload`. Sub-resources: `GET /streams/:name/groups/:group`, `/groups/:group/pending`, `/groups/:group/members`.
+
+---
+
+## Queues
+
+### `GET /api/v1/queues`
 
 ```json
-{ "count": 10, "visibility_timeout_ms": 60000 }
+[
+  { "name": "tasks", "namespace": "production", "ready": 24, "inflight": 0,
+    "pending": 24, "available": 24, "enqueued": 30, "dequeued": 6, "dlq_count": 0 }
+]
 ```
 
-#### `POST /api/v1/queue/:namespace/:queue/ack`
+### `GET /api/v1/queues/:name?namespace=<ns>`
 
-Acknowledge messages.
+Per-queue detail (same shape as the list item).
+
+### `GET /api/v1/queues/:name/messages?namespace=<ns>&limit=<n>`
+
+Messages with `seq`, `priority`, `state` (`ready` / `leased` / `dlq`), `attempts`, `lease_remaining_ms`, `size`, and `payload`.
+
+### `GET /api/v1/queues/:name/dlq?namespace=<ns>`
+
+Dead-letter entries.
+
+### Writes
+
+```
+POST   /api/v1/queues/:name/purge?namespace=<ns>
+POST   /api/v1/queues/:name/dlq/:seq/requeue?namespace=<ns>
+DELETE /api/v1/queues/:name/dlq/:seq?namespace=<ns>
+```
+
+---
+
+## Time Series
+
+Measurements are **namespace-scoped** — pass `?namespace=`.
+
+### `GET /api/v1/timeseries?namespace=<ns>`
 
 ```json
-{ "sequences": [1, 2, 3] }
+[ { "name": "cpu_usage", "series_count": 1, "field_count": 1, "points": 60 } ]
 ```
 
-#### `GET /api/v1/queue/:namespace/:queue/stats`
+### `GET /api/v1/timeseries/:measurement?namespace=<ns>`
 
-Queue statistics.
+Detail: `{ name, namespace, field_count, fields: [{ name, type }], series_count, retention }`.
+
+### `GET /api/v1/timeseries/:measurement/data?field=<f>&namespace=<ns>&from=<ms>&to=<ms>`
 
 ```json
-{
-  "name": "tasks",
-  "ready_count": 150,
-  "leased_count": 12,
-  "dlq_count": 3,
-  "total_enqueued": 50000,
-  "total_acked": 49835
-}
+{ "measurement": "cpu_usage", "field": "value", "series": [ { "timestamp": 1718900000000, "value": 41.1 } ] }
 ```
 
-### Streams
+### `GET | POST /api/v1/timeseries/floql`
 
-#### `POST /api/v1/stream/:namespace/:stream/append`
+Execute a FloQL query (`?q=` or a raw body).
 
-Append a record.
+---
+
+## Actions
+
+### `GET /api/v1/actions?namespace=<ns>`
 
 ```json
-{ "payload": "base64-encoded-data" }
+[
+  { "name": "send-email", "namespace": "production", "type": "user",
+    "version": 1, "enabled": true, "timeout_ms": 30000, "max_retries": 3,
+    "worker_count": 1,
+    "runs": { "total": 14, "pending": 7, "running": 0, "completed": 6,
+              "failed": 1, "cancelled": 0, "timed_out": 0 } }
+]
 ```
 
-#### `GET /api/v1/stream/:namespace/:stream?offset=<n>&count=<n>`
+### `GET /api/v1/actions/:name?namespace=<ns>`
 
-Read records from a stream.
+Detail with `runs`, `recent_runs[]` (input/output/error/source), and the `workers[]` handling the action.
 
-#### `GET /api/v1/stream/:namespace/:stream/info`
+### `GET /api/v1/actions/:name/runs?namespace=<ns>&limit=<n>`
 
-Stream metadata.
+Run history.
+
+### `POST /api/v1/actions/:name/invoke?namespace=<ns>`
+
+Invoke (async). Body is the input JSON. Returns `{ ok, action, namespace, status, run_id }`.
+
+---
+
+## Workers
+
+### `GET /api/v1/workers?namespace=<ns>`
 
 ```json
-{
-  "name": "events",
-  "first_offset": 0,
-  "last_offset": 99999,
-  "record_count": 100000,
-  "consumer_groups": ["processors", "analytics"]
-}
+[
+  { "worker_id": "worker-1", "status": "active", "worker_type": "action",
+    "namespace": "production", "machine_id": null, "current_load": 0,
+    "max_concurrent": 10, "tasks_completed": 6, "tasks_failed": 1,
+    "last_seen": 1718900000000, "registered_at": 1718900000000, "metadata": null,
+    "processes": [ { "name": "send-email", "kind": "action",
+                     "run_count": 6, "fail_count": 1, "last_run_at": 1718900009000 } ] }
+]
 ```
 
-### Time-Series
+### `GET /api/v1/workers/:id`
 
-#### `POST /api/v1/ts/:namespace/write`
+Single worker detail (same shape).
 
-Write points (InfluxDB line protocol in body).
+---
 
-```
-cpu,host=web-01 usage=82.5
-memory,host=web-01 used=4096,total=8192
-```
+## Processing
 
-#### `POST /api/v1/ts/:namespace/query`
-
-Execute a FloQL query.
+### `GET /api/v1/processing/jobs?namespace=<ns>`
 
 ```json
-{ "query": "cpu{host=web-01}[1h] | avg(5m)" }
+[
+  { "job_id": "job-...", "name": "events-filter", "namespace": "production",
+    "status": "RUNNING", "parallelism": 1, "batch_size": 100,
+    "created_at": 1718900000000, "records_processed": 1000 }
+]
 ```
 
-### Cluster
+### `GET /api/v1/processing/jobs/:id`
 
-#### `GET /api/v1/cluster/status`
+Detail with the full pipeline `yaml` and `savepoints[]`.
 
-Cluster membership and health.
+### Writes
+
+```
+POST   /api/v1/processing/jobs?namespace=<ns>            # body: pipeline YAML → { ok, job_id, status }
+PUT    /api/v1/processing/jobs/:id/stop?namespace=<ns>
+DELETE /api/v1/processing/jobs/:id?namespace=<ns>        # cancel
+```
+
+---
+
+## Workflows
+
+The console aliases `workflows` → `workflow/definitions` and `workflows/:id` → `workflow/runs/:id`.
+
+### `GET /api/v1/workflow/definitions?namespace=<ns>`
 
 ```json
-{
-  "nodes": [
-    { "id": 1, "address": "10.0.1.10:9000", "status": "alive", "shards": 8 },
-    { "id": 2, "address": "10.0.1.11:9000", "status": "alive", "shards": 8 },
-    { "id": 3, "address": "10.0.1.12:9000", "status": "suspect", "shards": 8 }
-  ],
-  "partition_count": 64,
-  "replication_factor": 3
-}
+[
+  { "name": "echo-workflow", "version": "1.0.0", "enabled": true,
+    "step_count": 1, "plan_count": 0, "has_schedule": false,
+    "has_trigger": false, "start_step": "start", "terminals": [], "steps": [] }
+]
 ```
 
-#### `GET /api/v1/cluster/partitions`
+### `GET /api/v1/workflow/definitions/:name?namespace=<ns>`
 
-Partition table — which node owns which partitions.
+Detail with the full `definition_yaml`, `status`, and `run_count`.
 
-### Namespaces
+```
+PUT /api/v1/workflow/definitions/:name/enable?namespace=<ns>
+PUT /api/v1/workflow/definitions/:name/disable?namespace=<ns>
+```
 
-#### `GET /api/v1/namespaces`
-
-List all namespaces.
-
-#### `POST /api/v1/namespaces`
-
-Create a namespace.
+### `GET /api/v1/workflow/runs?namespace=<ns>`
 
 ```json
-{ "name": "myapp" }
+[
+  { "run_id": "wfr-...", "workflow": "echo-workflow", "version": "1.0.0",
+    "status": "completed", "triggered_by": "manual", "current_step": null,
+    "started_at": 1718900000000, "completed_at": 1718900000310,
+    "duration_ms": 310, "error": null, "history_event_count": 6 }
+]
 ```
+
+### `POST /api/v1/workflow/runs?namespace=<ns>&workflow=<name>&version=<v>`
+
+Start a run. The request body is the input JSON. Returns `{ ok, run_id, workflow, status }`.
+
+### `GET /api/v1/workflow/runs/:id`
+
+Run detail with `current_step`, timing, `input`, `output`, `step_results`, and `pending_signals`.
+
+### `GET /api/v1/workflow/runs/:id/history`
+
+Event timeline: `[{ event_type, step_name, timestamp }]`.
+
+```
+DELETE /api/v1/workflow/runs/:id?namespace=<ns>          # cancel
+POST   /api/v1/workflow/runs/:id/signal?namespace=<ns>   # body: signal payload
+```
+
+---
 
 ## Error Format
 
-All errors follow a consistent format:
+Errors are returned as a JSON object with an `error` field:
 
 ```json
-{
-  "error": "error_code",
-  "message": "Human-readable description",
-  "details": {}
-}
+{ "error": "Human-readable description" }
 ```
 
-| HTTP Status | Error Code | Meaning |
-|-------------|-----------|---------|
-| 400 | `bad_request` | Invalid request parameters |
-| 401 | `unauthorized` | Missing or invalid auth token |
-| 404 | `not_found` | Resource not found |
-| 409 | `conflict` | CAS version conflict |
-| 429 | `overloaded` | Server at capacity, retry later |
-| 500 | `internal` | Server error |
-| 503 | `unavailable` | Node not ready or shutting down |
+| HTTP Status | Meaning |
+|-------------|---------|
+| 400 | Invalid request parameters |
+| 401 | Missing or invalid auth token |
+| 404 | Resource not found |
+| 409 | CAS / version conflict |
+| 429 | Server at capacity, retry later |
+| 500 | Server error |
+| 503 | Node not ready or shutting down |
+
+---
+
+## Web Console
+
+Source path: src/content/docs/reference/web-console.md
+Canonical URL: https://docs.floruntime.io/reference/web-console/
+
+Flo ships an embedded **web console**: a single-page UI for inspecting and operating a running cluster. It is served by the same dashboard HTTP server as the [REST API](/reference/rest-api/) — no separate process to deploy.
+
+## Opening the console
+
+Start a node, then open the dashboard in a browser:
+
+```bash
+flo server start --port 9000 --data-dir /tmp/flo
+# Dashboard (web console + REST API) → http://localhost:9002
+```
+
+The dashboard listens on **`listen_port + 2`** (so `9000` → `9002`). Override it with `--dashboard-port`, or disable the dashboard entirely with `--no-dashboard`. The port is also configurable via `dashboard_port` in `flo.toml`.
+
+```
+http://localhost:9002
+```
+
+## Authentication
+
+The console follows the same auth model as the REST API:
+
+- **No bootstrap (dev):** if no key store exists, the dashboard is open — no login required.
+- **After `flo server bootstrap`:** the console prompts for an API key (`flo_sk_…`), exchanges it for a session token (`POST /api/v1/auth/session`), and sends it as a Bearer token on every request.
+
+`GET /health` is always public. See [Authentication](/reference/rest-api/#authentication) for details.
+
+## Namespace switcher
+
+Every screen is scoped to the **active namespace**, chosen from the switcher in the header. The namespace list is loaded live from `GET /api/v1/namespaces`. Switching namespaces re-scopes streams, queues, KV, time-series, actions, workers, processing jobs, and workflows.
+
+## Screens
+
+| Screen | What it shows |
+|--------|---------------|
+| **Overview** | Cluster summary (throughput, commands, shards, connections), a live command-rate sparkline, traffic/primitive counts, and the shard registry with per-shard health. |
+| **KV** | Browse keys by prefix, inspect a value with its MVCC version + TTL, view per-key version history, and write/delete keys. |
+| **Streams** | Per-stream record activity (a time-bucketed tape), partitions, consumer groups with their cursor positions and lag, and a message inspector with real payloads. |
+| **Queues** | Per-queue ready / in-flight / dead-letter counts, priority-ordered message inspection, dead-letter triage (requeue), and an enqueue helper. |
+| **Time Series** | Namespace-scoped measurements, per-field point charts pulled from the raw write buffers, a FloQL console, and a line-protocol ingest helper. |
+| **Actions** | Registered action types with run counts and error rates, a run history with real input/output/error payloads, the workers handling each action, and an invoke modal. |
+| **Workers** | Registered workers (action and stream), their status / load / heartbeat, throughput, per-process run and failure tallies, and the registry record. |
+| **Processing** | Stream-processing jobs with status and records-processed, the pipeline DAG parsed from the submitted YAML, savepoints, and lifecycle controls (submit / stop / cancel). |
+| **Workflows** | Workflow definitions with per-workflow run counts, run detail with per-step results and a live event-history timeline, and lifecycle controls (start / cancel / enable / disable). |
+
+## Reads vs. writes
+
+The dashboard thread has **read-only** access to the projections, so read endpoints serve data directly. Mutations (KV writes, queue requeue, action invoke, processing submit/stop/cancel, workflow start/cancel/enable/disable) are proposed through the node's normal write path, so they are durably replicated just like a CLI or SDK call.
+
+A few operations are intentionally CLI-only and surfaced in the console as a copyable command rather than a button — for example registering an action or creating a workflow definition. See the [CLI reference](/reference/cli/).
+
+## Programmatic access
+
+Everything the console renders is available over the [REST API](/reference/rest-api/) at `http://localhost:9002/api/v1/*`, so you can script monitoring and operations directly.
 
 ---
 
