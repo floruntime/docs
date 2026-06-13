@@ -83,13 +83,10 @@
         "--logo": "#46785a",
         "--ok": "#46785a",
         "--warn": "#9a7b3e",
-        "--code-bg": "#f0efe8",
-        "--code-line": "rgba(20,18,12,0.08)",
-        "--code-ink": "#2a2922",
-        "--code-k": "#7e5a92",
-        "--code-s": "#3f6b4e",
-        "--code-f": "#3c6fa0",
-        "--code-c": "#8a887c",
+        "--code-bg": "#1a1917",
+        "--code-line": "rgba(255,255,255,0.08)",
+        "--code-ink": "#e6e3da",
+        "--code-fg": "#e6e3da",
         "--border": "#e4e2d8",
         "--c-brand": "70 120 90",
         "--c-brand-deep": "60 107 79",
@@ -110,10 +107,10 @@
         "--c-slate-6": "111 109 99",
         "--c-slate-7": "74 72 64",
         "--c-slate-8": "31 30 26",
-        "--c-panel-bg": "240 239 232",
-        "--c-panel-border": "228 226 216",
-        "--c-panel-fg": "42 41 34",
-        "--c-panel-muted": "111 109 99"
+        "--c-panel-bg": "26 25 23",
+        "--c-panel-border": "42 41 36",
+        "--c-panel-fg": "230 227 218",
+        "--c-panel-muted": "139 137 124"
       }
     }
   },
