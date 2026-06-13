@@ -1,0 +1,37 @@
+---
+title: Welcome to FloRuntime
+lede: The Universal Distributed Runtime — Streams, KV, Queues, Time-Series, Actions, Workflows, and Stream Processing in a single binary. Thread-per-shard. Zero dependencies.
+---
+
+Flo is a single binary that unifies the data and orchestration primitives most systems stitch together from a half-dozen separate services. Instead of running Kafka for streams, Redis for KV, a queue broker, a time-series database, and a workflow engine — each with its own cluster, client, and operational surface — you run **one** process that speaks to all of them over a single wire protocol.
+
+Everything in Flo is backed by the same **Raft-replicated Unified Append Log**. Writes are replicated and committed before they're acknowledged; reads are served from local projections with no cross-node round-trip. The runtime is **thread-per-shard**: each partition is owned by exactly one core, which gives predictable tail latency and lock-free hot paths.
+
+## Primitives
+
+The data layer is four primitives, each tuned to a different access pattern but sharing one log, one consistency model, and one set of clients.
+
+<CardGroup cols={2}>
+  <Card title="KV" href="/primitives/kv">Strongly consistent, versioned key-value storage with CAS, TTL, blocking gets, and namespace isolation.</Card>
+  <Card title="Streams" href="/primitives/streams">Append-only commit logs with consumer groups, partitioning, tiered storage, and blocking reads.</Card>
+  <Card title="Queues" href="/primitives/queues">Priority queues with competing consumers, lease-based delivery, DLQ, and visibility timeouts.</Card>
+  <Card title="Time-Series" href="/primitives/time-series">Columnar time-series with InfluxDB line protocol, FloQL pipelines, retention, and downsampling.</Card>
+</CardGroup>
+
+## Orchestration
+
+On top of the data layer, Flo runs durable execution and pipelines — no separate cluster needed.
+
+<CardGroup cols={2}>
+  <Card title="Actions & Workers" href="/orchestration/actions">Durable execution of external logic with automatic retries, timeouts, and dead-letter handling; workers poll for invocations and report results.</Card>
+  <Card title="Workflows" href="/orchestration/workflows">Multi-step orchestration defined in YAML — signals, timers, circuit breakers, and full state replay.</Card>
+  <Card title="Stream Processing" href="/orchestration/processing">Stateful pipelines with windowing, watermarks, checkpointing, and built-in operators — sub-millisecond local hops.</Card>
+  <Card title="Architecture" href="/architecture/overview">Thread-per-shard, a single Raft log per partition, and hot-warm-cold storage tiering.</Card>
+</CardGroup>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Install Flo" href="/getting-started/installation">Get the binary on macOS, Linux, or Docker.</Card>
+  <Card title="Quick start" href="/getting-started/quickstart">Run the runtime and try every primitive in two minutes.</Card>
+</CardGroup>

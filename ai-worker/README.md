@@ -1,0 +1,82 @@
+# Flo docs — "Ask AI" Worker
+
+The Flo docs site ([docs.floruntime.io](https://docs.floruntime.io)) ships as a
+**static export** to GitHub Pages (`npx markline export`). Markline's built-in
+`/api/ai` route only runs on a Node/Vercel server, so on a static host the
+**Ask AI** assistant needs an external proxy.
+
+This Worker is that proxy. It holds the OpenRouter key as a Cloudflare **secret**
+on the edge — the browser only ever talks to the Worker, never to OpenRouter, and
+never sees the key. It enforces an origin allow-list, a per-IP rate limit, and a
+token cap so the endpoint can't be turned into an open relay to our paid LLM.
+
+The Worker source (`src/worker.ts`) is Markline's reference implementation,
+vendored unchanged so we control deploys; only `wrangler.toml` is customized for
+Flo. See [Credits & license](#credits--license).
+
+## Activate (about 2 minutes)
+
+```bash
+cd ai-worker
+npm install
+
+# 1) put the OpenRouter key on the edge (never committed, never in the browser)
+npx wrangler secret put MARKLINE_AI_KEY        # paste the OpenRouter key (sk-or-...)
+
+# 2) ship it
+npm run deploy
+```
+
+`wrangler.toml` is already configured for Flo:
+
+- `MARKLINE_AI_PROVIDER = "openrouter"`, `MARKLINE_AI_MODEL = "deepseek/deepseek-v4-flash"`
+- `MARKLINE_ALLOWED_ORIGIN = "https://docs.floruntime.io"`
+- served on the custom domain `ask.floruntime.io` — which is what
+  [`markline.json`](../markline.json)'s `ai.endpoint` points at.
+
+The custom-domain route needs the `floruntime.io` zone on this Cloudflare account.
+To skip the custom domain, delete the `routes` block in `wrangler.toml`, deploy,
+and set `ai.endpoint` in `markline.json` to the printed
+`https://flo-docs-ai.<account>.workers.dev` URL instead.
+
+Because `ai.endpoint` is set, Markline renders the Ask AI UI even in the static
+export — no docs rebuild is required for the Worker, but the Worker must be live
+for the button to work.
+
+## Configuration (`wrangler.toml` `[vars]`)
+
+| var | meaning |
+|---|---|
+| `MARKLINE_AI_PROVIDER` | `openai` · `openrouter` · `together` · `groq` · `fireworks` · `local` · `openai-compatible` |
+| `MARKLINE_AI_BASE_URL` | base URL override (required for `openai-compatible`) |
+| `MARKLINE_AI_MODEL` | model id, e.g. `deepseek/deepseek-v4-flash` |
+| `MARKLINE_AI_MAX_TOKENS` | response token cap (default 1024) |
+| `MARKLINE_ALLOWED_ORIGIN` | comma-separated docs origin(s) allowed to call the Worker; `*` allows any (not recommended) |
+| `MARKLINE_RATE_PER_MIN` | per-IP requests/min (default 10) |
+| `MARKLINE_SITE_NAME` | sent as `X-Title` to OpenRouter |
+| `MARKLINE_AI_SYSTEM_PROMPT` | optional system-prompt override |
+| `MARKLINE_AI_KEY` | **secret** — set with `wrangler secret put`, never in this file |
+
+## Pre-generated suggestions
+
+`markline.json` sets `ai.suggestions: true`, so `npx markline export` can
+pre-compute the per-page "Ask AI" suggestion chips into `public/ai-suggestions.json`
+using `MARKLINE_AI_KEY` from the build environment (see the docs
+`.github/workflows/deploy.yml`). It's cached by content hash and skipped
+gracefully when the key is unset, so the build never fails without it.
+
+## Cost & abuse
+
+A public AI endpoint is a relay to our paid LLM. This Worker ships with an
+**origin allow-list** (`MARKLINE_ALLOWED_ORIGIN`), a **per-IP rate limit**
+(`MARKLINE_RATE_PER_MIN`), and a **token cap** (`MARKLINE_AI_MAX_TOKENS`). The
+rate limit is per-isolate in-memory; for strict global limits, back it with
+Workers KV or a Durable Object.
+
+## Credits & license
+
+`src/worker.ts` and `tsconfig.json` are vendored verbatim from
+[Markline](https://github.com/markline-dev/markline) (`templates/ai-worker/`),
+which is **MIT-licensed** — Copyright (c) 2026 Markline. `wrangler.toml`,
+`package.json`, and this README are adapted for the Flo docs. The full upstream
+license and copyright notice are preserved in [`NOTICE`](./NOTICE).

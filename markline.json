@@ -1,0 +1,218 @@
+{
+  "name": "Flo",
+  "theme": {
+    "appearance": "dark",
+    "logo": { "light": "/logo-flo-light.svg", "dark": "/logo-flo-dark.svg", "text": "flo" },
+    "favicon": "/favicon.svg",
+    "colors": { "primary": "#46785a", "primaryDark": "#7faa8a" },
+    "buttonRadius": "7px",
+    "cssVariables": {
+      "dark": {
+        "--bg": "#121210",
+        "--bg-2": "#0e0e0c",
+        "--panel": "#171715",
+        "--panel-2": "#1a1a18",
+        "--panel-hi": "#1f1f1c",
+        "--ink": "#ece9e3",
+        "--ink-2": "#a3a097",
+        "--ink-3": "#6f6d65",
+        "--ink-4": "#4c4a44",
+        "--line": "#262521",
+        "--line-2": "#34332d",
+        "--line-soft": "#1e1d1a",
+        "--grid": "rgba(255,255,255,0.025)",
+        "--accent": "#7faa8a",
+        "--accent-ink": "#93be9d",
+        "--accent-dim": "rgba(127,170,138,0.14)",
+        "--accent-line": "rgba(127,170,138,0.34)",
+        "--on-accent": "#0d1410",
+        "--logo": "#7faa8a",
+        "--ok": "#7faa8a",
+        "--warn": "#c9a26b",
+        "--code-bg": "#0f0f0d",
+        "--code-line": "rgba(255,255,255,0.06)",
+        "--code-ink": "#cfccc3",
+        "--code-k": "#b58bc9",
+        "--code-s": "#8fbf9a",
+        "--code-f": "#6f9bd1",
+        "--code-c": "#6f6d65",
+        "--border": "#262521",
+        "--c-brand": "127 170 138",
+        "--c-brand-deep": "110 152 121",
+        "--c-brand-mute": "40 54 44",
+        "--c-on-brand": "13 20 16",
+        "--c-ink": "236 233 227",
+        "--c-ink-soft": "163 160 151",
+        "--c-ink-2": "163 160 151",
+        "--c-ink-3": "111 109 101",
+        "--c-paper": "18 18 16",
+        "--c-paper-2": "23 23 21",
+        "--c-slate-0": "23 23 21",
+        "--c-slate-1": "26 26 24",
+        "--c-slate-2": "31 31 28",
+        "--c-slate-3": "38 37 33",
+        "--c-slate-4": "52 51 45",
+        "--c-slate-5": "76 74 68",
+        "--c-slate-6": "111 109 101",
+        "--c-slate-7": "163 160 151",
+        "--c-slate-8": "236 233 227",
+        "--c-panel-bg": "15 15 13",
+        "--c-panel-border": "38 37 33",
+        "--c-panel-fg": "207 204 195",
+        "--c-panel-muted": "111 109 101"
+      },
+      "light": {
+        "--bg": "#f5f4ef",
+        "--bg-2": "#eeede6",
+        "--panel": "#ffffff",
+        "--panel-2": "#fbfaf5",
+        "--panel-hi": "#f0efe8",
+        "--ink": "#1f1e1a",
+        "--ink-2": "#4a4840",
+        "--ink-3": "#6f6d63",
+        "--ink-4": "#9a988c",
+        "--line": "#e4e2d8",
+        "--line-2": "#d2d0c4",
+        "--line-soft": "#eeede5",
+        "--grid": "rgba(20,18,12,0.04)",
+        "--accent": "#46785a",
+        "--accent-ink": "#3c6b4f",
+        "--accent-dim": "rgba(70,120,90,0.10)",
+        "--accent-line": "rgba(70,120,90,0.34)",
+        "--on-accent": "#ffffff",
+        "--logo": "#46785a",
+        "--ok": "#46785a",
+        "--warn": "#9a7b3e",
+        "--code-bg": "#f0efe8",
+        "--code-line": "rgba(20,18,12,0.08)",
+        "--code-ink": "#2a2922",
+        "--code-k": "#7e5a92",
+        "--code-s": "#3f6b4e",
+        "--code-f": "#3c6fa0",
+        "--code-c": "#8a887c",
+        "--border": "#e4e2d8",
+        "--c-brand": "70 120 90",
+        "--c-brand-deep": "60 107 79",
+        "--c-brand-mute": "209 224 214",
+        "--c-on-brand": "255 255 255",
+        "--c-ink": "31 30 26",
+        "--c-ink-soft": "74 72 64",
+        "--c-ink-2": "74 72 64",
+        "--c-ink-3": "111 109 99",
+        "--c-paper": "245 244 239",
+        "--c-paper-2": "255 255 255",
+        "--c-slate-0": "255 255 255",
+        "--c-slate-1": "251 250 245",
+        "--c-slate-2": "240 239 232",
+        "--c-slate-3": "228 226 216",
+        "--c-slate-4": "210 208 196",
+        "--c-slate-5": "154 152 140",
+        "--c-slate-6": "111 109 99",
+        "--c-slate-7": "74 72 64",
+        "--c-slate-8": "31 30 26",
+        "--c-panel-bg": "240 239 232",
+        "--c-panel-border": "228 226 216",
+        "--c-panel-fg": "42 41 34",
+        "--c-panel-muted": "111 109 99"
+      }
+    }
+  },
+  "topbar": {
+    "badge": "docs",
+    "links": [
+      { "label": "Home", "href": "/" },
+      { "label": "GitHub ↗", "href": "https://github.com/floruntime/flo" }
+    ],
+    "cta": { "label": "Quick start", "href": "/getting-started/quickstart" }
+  },
+  "navigation": {
+    "tabs": [
+      {
+        "id": "documentation",
+        "label": "Documentation",
+        "href": "/getting-started/introduction",
+        "match": ["__default__"],
+        "groups": [
+          {
+            "group": "Getting Started",
+            "pages": [
+              { "href": "/getting-started/introduction", "label": "Introduction" },
+              { "href": "/getting-started/installation", "label": "Installation" },
+              { "href": "/getting-started/quickstart", "label": "Quick start" },
+              { "href": "/getting-started/configuration", "label": "Configuration" }
+            ]
+          },
+          {
+            "group": "Primitives",
+            "pages": [
+              { "href": "/primitives/kv", "label": "KV" },
+              { "href": "/primitives/streams", "label": "Streams" },
+              { "href": "/primitives/queues", "label": "Queues" },
+              { "href": "/primitives/time-series", "label": "Time-Series" }
+            ]
+          },
+          {
+            "group": "Orchestration",
+            "pages": [
+              { "href": "/orchestration/actions", "label": "Actions" },
+              { "href": "/orchestration/workers", "label": "Workers" },
+              { "href": "/orchestration/workflows", "label": "Workflows" },
+              { "href": "/orchestration/processing", "label": "Stream Processing" }
+            ]
+          },
+          {
+            "group": "SDKs",
+            "pages": [
+              { "href": "/sdks/overview", "label": "Overview" },
+              { "href": "/sdks/go", "label": "Go" },
+              { "href": "/sdks/python", "label": "Python" },
+              { "href": "/sdks/javascript", "label": "JavaScript" },
+              { "href": "/sdks/zig", "label": "Zig" }
+            ]
+          },
+          {
+            "group": "Architecture",
+            "pages": [
+              { "href": "/architecture/overview", "label": "Overview" },
+              { "href": "/architecture/storage", "label": "Storage Internals" }
+            ]
+          },
+          {
+            "group": "Deployment",
+            "pages": [
+              { "href": "/deployment/docker", "label": "Docker" },
+              { "href": "/deployment/terraform", "label": "Terraform" },
+              { "href": "/deployment/clustering", "label": "Clustering" }
+            ]
+          },
+          {
+            "group": "Reference",
+            "pages": [
+              { "href": "/reference/cli", "label": "CLI" },
+              { "href": "/reference/web-console", "label": "Web Console" },
+              { "href": "/reference/rest-api", "label": "REST API" },
+              { "href": "/reference/wire-protocol", "label": "Wire Protocol" },
+              { "href": "/reference/redis", "label": "Redis Compatibility" }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "editUrl": "https://github.com/floruntime/docs/edit/main/docs",
+  "ai": {
+    "enabled": true,
+    "mode": "proxy",
+    "provider": "openrouter",
+    "model": "deepseek/deepseek-v4-flash",
+    "endpoint": "https://ask.floruntime.io",
+    "suggestions": true,
+    "label": "Ask AI",
+    "maxTokens": 1024,
+    "rateLimit": { "perMinute": 10 }
+  },
+  "seo": {
+    "title": "Flo — The Universal Distributed Runtime",
+    "description": "Flo unifies streams, key-value storage, queues, time-series, actions, workflows, and stream processing in a single binary. Thread-per-shard, Raft-replicated, zero dependencies."
+  }
+}

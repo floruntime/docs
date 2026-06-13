@@ -1,26 +1,14 @@
 {
   "name": "flo-docs",
-  "type": "module",
-  "version": "0.0.1",
+  "private": true,
   "scripts": {
-    "build:llms": "node ./scripts/generate-llms.mjs",
-    "dev": "astro dev",
-    "start": "astro dev",
-    "build": "npm run build:llms && astro build",
-    "preview": "astro preview",
-    "astro": "astro"
+    "dev": "markline dev",
+    "build": "markline build",
+    "start": "markline start",
+    "export": "markline export",
+    "preview": "node scripts/preview-out.mjs"
   },
   "dependencies": {
-    "@astrojs/starlight": "0.37.7",
-    "astro": "5.7.13",
-    "sharp": "^0.33.0"
-  },
-  "devDependencies": {
-    "@astrojs/check": "^0.9.0",
-    "typescript": "^5.7.0"
-  },
-  "overrides": {
-    "@astrojs/sitemap": "3.7.0",
-    "zod": "3.25.76"
+    "@markline/markline": "^0.1.4"
   }
 }

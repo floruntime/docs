@@ -1,0 +1,14 @@
+{
+  "name": "flo-docs-ai-worker",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Cloudflare Worker that proxies the Flo docs 'Ask AI' assistant on an OpenRouter key — for the static (GitHub Pages) docs deploy.",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20241106.0",
+    "wrangler": "^4.97.0"
+  }
+}
