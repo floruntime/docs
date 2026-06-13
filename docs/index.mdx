@@ -1,0 +1,97 @@
+---
+title: Flo
+lede: The Universal Distributed Runtime — Streams, KV, Queues, Time-Series, Actions, Workflows, and Stream Processing in a single binary. Thread-per-shard. Zero dependencies.
+---
+
+## Quickstart
+
+Get up and running in under a minute. Every primitive ships in one binary — no Kafka, no Redis, no separate workflow engine.
+
+<Tabs>
+  <Tab title="macOS">
+
+```bash
+# Install via Homebrew
+brew install floruntime/tap/flo
+
+# Start the runtime
+flo server start
+
+# Store and read a value
+flo kv set hello "world"
+flo kv get hello
+```
+
+  </Tab>
+  <Tab title="Linux">
+
+```bash
+# Download and install
+curl -fsSL https://get.floruntime.io | sh
+
+# Start the runtime
+flo server start
+
+# Create a stream and append an event
+flo stream create events
+flo stream append events '{"type":"login","user":"alice"}'
+```
+
+  </Tab>
+  <Tab title="Docker">
+
+```bash
+# Pull and run
+docker run -p 4222:4222 -p 9090:9090 floruntime/flo:latest
+
+# Use the CLI from another terminal
+flo kv set greeting "hello from docker"
+flo kv get greeting
+```
+
+  </Tab>
+</Tabs>
+
+## Primitives
+
+Four data primitives — all backed by the same Raft-replicated log, shaped to fit different access patterns.
+
+<CardGroup cols={2}>
+  <Card title="KV" href="/primitives/kv">Hash-indexed key-value store with MVCC, TTL, CAS, and prefix scans.</Card>
+  <Card title="Streams" href="/primitives/streams">Partitioned append-only logs with consumer groups and exactly-once delivery.</Card>
+  <Card title="Queues" href="/primitives/queues">Priority queues with lease-based delivery, dead-letter support, and visibility timeouts.</Card>
+  <Card title="Time-Series" href="/primitives/time-series">Columnar storage with InfluxDB line protocol ingest and the FloQL query language.</Card>
+</CardGroup>
+
+## Orchestration
+
+Durable execution, multi-step workflows, and real-time stream processing — no separate cluster needed.
+
+<CardGroup cols={2}>
+  <Card title="Actions" href="/orchestration/actions">Durable execution of external logic with automatic retries, timeouts, and dead-letter handling.</Card>
+  <Card title="Workers" href="/orchestration/workers">Long-running consumers that poll for action invocations and report results.</Card>
+  <Card title="Workflows" href="/orchestration/workflows">Multi-step orchestration with YAML definitions, signals, timers, and circuit breakers.</Card>
+  <Card title="Stream Processing" href="/orchestration/processing">Real-time stateful pipelines with windowing, checkpointing, watermarks, and built-in operators.</Card>
+</CardGroup>
+
+## SDKs
+
+Native clients with the full TCP wire protocol, plus drop-in Redis compatibility for KV.
+
+<CardGroup cols={4}>
+  <Card title="Go" href="/sdks/go">Native Go client with full TCP protocol support.</Card>
+  <Card title="Python" href="/sdks/python">Async Python client with asyncio transport.</Card>
+  <Card title="JavaScript" href="/sdks/javascript">Node.js and browser clients with TCP and WebSocket transports.</Card>
+  <Card title="Zig" href="/sdks/zig">Native Zig client for maximum performance.</Card>
+</CardGroup>
+
+## Architecture
+
+Understand how Flo works under the hood.
+
+<CardGroup cols={2}>
+  <Card title="Architecture Overview" href="/architecture/overview">Thread-per-shard design, Raft consensus, and the Unified Append Log.</Card>
+  <Card title="Storage Engine" href="/architecture/storage">Hot ring buffer → warm disk segments → cold remote storage.</Card>
+  <Card title="Deployment" href="/deployment/docker">Docker, clustering, and production configuration.</Card>
+  <Card title="Wire Protocol" href="/reference/wire-protocol">Binary protocol spec with TLV encoding.</Card>
+</CardGroup>

@@ -1,4 +1,25 @@
+# dependencies
 node_modules/
-dist/
-.astro/
+
+# markline / next build artifacts
+.markline/
+.next/
+out/
+
+# search index + generated llms files (regenerated on build)
+public/pagefind/
+public/llms.txt
+public/llms-full.txt
+public/ai-suggestions.json
+
+# cloudflare worker (ai-worker/) local state
+ai-worker/node_modules/
+ai-worker/.wrangler/
+
+# environment variables
+.env
+.env.*
+
+# misc
 .DS_Store
+*.log

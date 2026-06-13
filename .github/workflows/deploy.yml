@@ -1,4 +1,4 @@
-name: Deploy to GitHub Pages
+name: Deploy docs to GitHub Pages
 
 on:
   push:
@@ -12,31 +12,28 @@ permissions:
 
 concurrency:
   group: pages
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build site
-        run: npm run build
-
-      - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
+      - run: npm install
+      # Served from the custom domain docs.floruntime.io (see public/CNAME),
+      # so the site builds at the root path — no MARKLINE_BASE_PATH needed.
+      # MARKLINE_AI_KEY (an OpenRouter key, same as the Ask AI Worker) lets the
+      # build pre-generate Ask AI suggestions; it's skipped gracefully if unset.
+      - run: npx markline export
+        env:
+          MARKLINE_AI_KEY: ${{ secrets.MARKLINE_AI_KEY }}
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
         with:
-          path: dist/
+          path: out
 
   deploy:
     needs: build
@@ -45,6 +42,5 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - name: Deploy to GitHub Pages
-        id: deployment
+      - id: deployment
         uses: actions/deploy-pages@v4
