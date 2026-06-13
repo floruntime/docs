@@ -1,10 +1,7 @@
 # Flo docs
 
 Source for **[docs.floruntime.io](https://docs.floruntime.io)** — the Flo
-documentation site, built with [Markline](https://markline.dev) and themed to
-match the **Flo Console** ("calm") design: a near-monochrome warm-dark canvas
-(`#121210`) with one restrained sage accent (`#7faa8a`), plus a warm-cream light
-mode. The topbar uses the official `flo` wordmark from `branding/`.
+documentation site, built with [Markline](https://markline.dev).
 
 ## Run it
 
