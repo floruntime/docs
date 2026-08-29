@@ -48,11 +48,28 @@ hot_buffer_capacity = 67108864   # Per-partition ring buffer size in bytes (64 M
 
 Durability modes:
 
-| Mode | Behaviour |
-|------|-----------|
-| `sync` | `fsync` after every write — strongest guarantee, lowest throughput |
-| `async_flush` | Background flush every ~1 ms — default, highest throughput |
-| `ephemeral` | Skip WAL entirely — for caches or temporary data |
+| Mode | Behaviour | At risk on abrupt termination |
+|------|-----------|-------------------------------|
+| `sync` | Segment written and `fsync`ed before the write is acknowledged | Nothing |
+| `async_flush` | Segments written and `fsync`ed by a background task, **at most once per second** — the default | Up to ~1 second of acknowledged writes |
+| `ephemeral` | Never written to disk | Everything |
+
+**What `async_flush` risks, concretely.** An acknowledged write lives only in
+memory until the next segment flush, which runs at most once per second. If the
+process is killed (`SIGKILL`, OOM kill, power loss, host failure) you can lose
+up to roughly the last second of acknowledged writes. Everything older is on
+disk, `fsync`ed and published by atomic rename, so the store is never left
+torn or half-written — the loss is a clean tail truncation, not corruption.
+
+A **graceful** shutdown (`SIGTERM`, `docker stop`, `flo server stop`) flushes
+before exiting, so a normal restart loses nothing. The one-second window only
+applies when the process dies without running its shutdown path.
+
+:::note
+This window is **not** governed by `hot_flush_seconds`. That setting controls
+hot → warm tier migration, which is a storage-layout concern and does not
+affect what survives a crash.
+:::
 
 ### `[logging]`
 
@@ -88,8 +105,11 @@ pong_timeout_ms = 10000       # Close connection if no pong within this time
 [metrics]
 enabled = true
 # port = 0                # 0 = auto (listen_port + 1), so 9001 by default
-# bind = "0.0.0.0"
+# bind = "127.0.0.1"      # Localhost only by default
 ```
+
+Binds only when `enabled = true`. For a Prometheus server scraping from outside
+the container, set `bind = "0.0.0.0"` — the default is loopback-only.
 
 ### `[dashboard]`
 
@@ -100,6 +120,14 @@ enabled = true
 # bind = "127.0.0.1"      # Localhost only by default
 # cors_origins = "http://localhost:5173"
 ```
+
+:::note
+`bind` defaults to `127.0.0.1`. In an orchestrated deployment a readiness probe
+originating outside the container cannot reach a loopback listener, so the
+default presents as a service that never becomes ready. Set `bind = "0.0.0.0"`
+where the port is not publicly routable. See
+[Docker → Health Check](/deployment/docker#health-check).
+:::
 
 ### `[cluster]`
 
@@ -114,6 +142,12 @@ enabled = false
 # election_timeout_max_ms = 300
 # heartbeat_interval_ms = 50
 ```
+
+The Raft port is bound only when this node can actually have peers — that is,
+when any of `enabled = true`, `seeds`, an explicit `raft_port`, or
+`replication_factor > 1` is set. A plain single-node server does **not** listen
+on `listen_port + 500`, so there is no undeclared port to account for. The
+startup banner reports which of the two applies.
 
 ### `[cold_storage]`
 

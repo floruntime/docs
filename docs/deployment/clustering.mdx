@@ -31,6 +31,25 @@ FLO_CLUSTER_SEEDS=10.0.1.10:9000,10.0.1.11:9000
 FLO_NODE_ID=1
 ```
 
+### Ports
+
+A clustered node binds an additional Raft port for inter-node traffic:
+
+| Port | Purpose |
+|------|---------|
+| `listen_port` | Client wire protocol |
+| `listen_port + 500` | Raft RPC between nodes (9500 by default) |
+| `listen_port + 600` | Gossip, only when `gossip_port` is set |
+
+The Raft port is bound **only when the node can actually have peers** — when
+any of `[cluster] enabled = true`, `seeds`, an explicit `raft_port`, or
+`replication_factor > 1` is configured. A single-node server leaves it unbound,
+so it is not a port operators need to declare to an orchestrator. The startup
+banner reports either the bound port or `not listening (single-node)`.
+
+Raft and gossip ports carry unauthenticated inter-node traffic and must not be
+exposed outside the cluster's private network.
+
 ### Bootstrap
 
 The first node in a cluster bootstraps automatically when no seeds respond. Subsequent nodes join by contacting any existing member.

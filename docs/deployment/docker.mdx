@@ -14,6 +14,7 @@ docker pull ghcr.io/floruntime/flo:latest
 ```bash
 docker run -d \
   --name flo \
+  --security-opt seccomp=unconfined \
   -p 9000:9000 \
   -p 9001:9001 \
   -p 9002:9002 \
@@ -21,11 +22,60 @@ docker run -d \
   ghcr.io/floruntime/flo:latest
 ```
 
+:::note
+`--security-opt seccomp=unconfined` is required on Linux hosts. Flo's event
+loop uses io_uring, which Docker's default seccomp profile blocks — without it
+the server starts, logs `topology manifest created`, and then exits. See
+[io_uring and seccomp](#io-uring-and-seccomp) for the details and for a
+narrower profile.
+:::
+
 | Port | Purpose |
 |------|---------|
 | 9000 | Binary wire protocol (client traffic) |
-| 9001 | Prometheus metrics |
-| 9002 | Dashboard REST API |
+| 9001 | Prometheus metrics — only when `[metrics] enabled = true` |
+| 9002 | Dashboard REST API — only when `[dashboard] enabled = true` |
+
+Flo does **not** listen on any other port in a single-node deployment. In
+particular the Raft port (`listen_port + 500`, so 9500) is bound only when the
+node is actually clustered — see [Clustering](/deployment/clustering).
+
+## io_uring and seccomp
+
+On Linux, Flo's event loop is built on io_uring. Docker's default seccomp
+profile does not allow the `io_uring_setup`, `io_uring_enter` and
+`io_uring_register` syscalls, so under that profile Flo cannot start:
+
+```
+INF topology manifest created: shards=1 partitions=0 path=/data
+ERR io_uring is unavailable (PermissionDenied). ...
+Error starting runtime: error.PermissionDenied
+```
+
+The simplest fix is to run unconfined:
+
+```bash
+--security-opt seccomp=unconfined
+```
+
+If you would rather not drop the whole profile, copy Docker's
+[default profile](https://github.com/moby/moby/blob/master/profiles/seccomp/default.json)
+and add the three syscalls to its allowlist:
+
+```json
+{
+  "names": ["io_uring_setup", "io_uring_enter", "io_uring_register"],
+  "action": "SCMP_ACT_ALLOW"
+}
+```
+
+Then run with `--security-opt seccomp=/path/to/flo-seccomp.json`.
+
+:::note
+io_uring requires **Linux 5.1 or newer**. On older kernels Flo cannot start at
+all, and no seccomp profile will help. Kubernetes, Podman and containerd apply
+their own seccomp defaults — the same allowance is needed there.
+:::
 
 ## Docker Compose — Single Node
 
@@ -34,6 +84,8 @@ version: "3.8"
 services:
   flo:
     image: ghcr.io/floruntime/flo:latest
+    security_opt:
+      - seccomp:unconfined
     ports:
       - "9000:9000"
       - "9001:9001"
@@ -56,6 +108,8 @@ version: "3.8"
 services:
   flo-1:
     image: ghcr.io/floruntime/flo:latest
+    security_opt:
+      - seccomp:unconfined
     hostname: flo-1
     ports:
       - "9000:9000"
@@ -71,6 +125,8 @@ services:
 
   flo-2:
     image: ghcr.io/floruntime/flo:latest
+    security_opt:
+      - seccomp:unconfined
     hostname: flo-2
     ports:
       - "9010:9000"
@@ -86,6 +142,8 @@ services:
 
   flo-3:
     image: ghcr.io/floruntime/flo:latest
+    security_opt:
+      - seccomp:unconfined
     hostname: flo-3
     ports:
       - "9020:9000"
@@ -122,6 +180,8 @@ All `flo.toml` settings can be overridden with `FLO_` prefixed environment varia
 
 ## Health Check
 
+For a **liveness** probe inside the container, the CLI is enough:
+
 ```yaml
 healthcheck:
   test: ["CMD", "flo", "server", "status"]
@@ -129,6 +189,25 @@ healthcheck:
   timeout: 5s
   retries: 3
 ```
+
+For an orchestrator **readiness** probe that comes from outside the container,
+use `GET /health` on the dashboard port (see
+[REST API](/reference/rest-api#cluster-metrics)) — and set the dashboard's bind
+address, because it defaults to localhost only:
+
+```toml
+[dashboard]
+enabled = true
+bind = "0.0.0.0"
+```
+
+:::note
+`[dashboard] bind` defaults to `127.0.0.1`. A probe originating outside the
+container cannot reach a listener bound to loopback, so leaving the default in
+an orchestrated deployment presents as a service that never becomes ready —
+which reads like a broken health check rather than a bind address. Bind to
+`0.0.0.0` only where the dashboard port is not publicly routable.
+:::
 
 ## Volumes and Data Persistence
 
