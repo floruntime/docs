@@ -127,28 +127,52 @@ Typical failover time: **2-5 seconds** (SWIM detection + Raft election).
 flo cluster status
 ```
 
-### Replication Metrics
+### Prometheus Metrics
 
-The node exposes replication counters as JSON on the dashboard's metrics
-endpoint, under `replication`:
+The node serves the Prometheus exposition format on the metrics port
+(`listen_port + 1` by default, so `9001` for a node on `9000`):
 
 ```bash
-curl localhost:9002/api/v1/metrics
+curl localhost:9001/metrics
 ```
+
+`GET /health` on the same port returns a small JSON liveness document with the
+shard count and uptime.
+
+:::note
+**The metrics port binds to `127.0.0.1` by default.** `/metrics` and `/health`
+are unauthenticated — unlike the dashboard, which is API-key gated — so the
+endpoint is loopback-only unless you opt in. To scrape from another host set:
+
+```toml
+[metrics]
+bind = "0.0.0.0"
+```
+
+Prefer a node-local collector or a sidecar over exposing the port directly.
+:::
+
+Metric families include server counters (`flo_commands_total`,
+`flo_bytes_received_total`, `flo_connections_current`, `flo_uptime_seconds`),
+per-shard gauges (`flo_shard_*`), per-stream / per-queue / per-KV-namespace
+counters, workflow and processing aggregates, and the replication counters:
 
 | Metric | Description |
 |--------|-------------|
-| `follower_gaps_total` | Replication gaps detected on a follower |
-| `follower_entries_missing_total` | Entries inferred missing across all gaps |
-| `broadcast_oversize_skipped_total` | Committed entries too large to broadcast |
-| `broadcast_send_failures_total` | Per-peer sends that failed and were not retried |
-| `last_gap_received_index` | Entry index at which a gap was last observed |
+| `flo_replication_follower_gaps_total` | Replication gaps detected on a follower |
+| `flo_replication_follower_entries_missing_total` | Entries inferred missing across all gaps |
+| `flo_replication_broadcast_oversize_skipped_total` | Committed entries too large to broadcast |
+| `flo_replication_broadcast_send_failures_total` | Per-peer sends that failed and were not retried |
+| `flo_replication_last_gap_received_index` | Entry index at which a gap was last observed |
+
+The same replication counters are also available as JSON from the dashboard at
+`GET /api/v1/metrics`, under `replication`.
 
 :::note
-**Alarm on these counters.** Cross-node entry replication is currently
-best-effort broadcast: there is no acknowledgement, send-side gap detection, or
-repair path. If a follower misses a committed entry it stays missing — the
-leader has already acked the client.
+**Alarm on the `flo_replication_*` counters.** Cross-node entry replication is
+currently best-effort broadcast: there is no acknowledgement, send-side gap
+detection, or repair path. If a follower misses a committed entry it stays
+missing — the leader has already acked the client.
 
 They exist so that failure is **visible** rather than silent. Any non-zero value
 means a replica has diverged and needs to be rebuilt from the leader.
@@ -157,12 +181,11 @@ Divergence detection is implemented; automatic repair is not — see
 :::
 
 :::note
-**A Prometheus text endpoint is not served yet.** The exporter exists in the
-codebase but nothing starts it at runtime, so there is no `/metrics` scrape
-target on port 9001 today. Cluster-level metric names such as
+**Some families are registered but not yet incremented.** Nothing records the
+per-shard or per-stream counters on the write paths, so `flo_shard_*` and the
+per-stream totals currently export as `0`. Cluster-level names such as
 `flo_cluster_nodes`, `flo_raft_leader_elections_total` and `flo_gossip_members`
-are not implemented either. Use the dashboard endpoint above until the exporter
-is wired up.
+are not implemented at all.
 :::
 
 ## Recommended Topologies
