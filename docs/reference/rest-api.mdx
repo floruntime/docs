@@ -193,9 +193,10 @@ DELETE /api/v1/streams/:name?namespace=<ns>&force=true    # force required for a
 DELETE /api/v1/streams/:name/groups/:group?namespace=<ns>
 ```
 
-`trim` requires exactly one bound (`max_len`, `max_age_s` or `max_bytes`) and
-returns `{ ok, stream, dry_run }`. Byte-based trim is not implemented yet and
-returns an explicit error rather than silently doing nothing.
+`trim` requires at least one bound and returns `{ ok, stream, dry_run }`. When
+several are supplied the most specific wins. Byte-based trim (`max_bytes`) is
+not implemented yet and returns an explicit error rather than silently doing
+nothing.
 
 There is no stream **compact** endpoint: Flo streams are append-only and trim is
 their retention primitive.
