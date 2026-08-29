@@ -32,7 +32,7 @@ Action handlers run in **user-hosted workers** — long-lived processes (in Go, 
 ### 1. Register an action
 
 ```bash
-flo action register send-email --timeout 60000 --max-retries 3
+flo action register send-email --owner platform-team --timeout 60000 --retries 3
 ```
 
 ### 2. Invoke it

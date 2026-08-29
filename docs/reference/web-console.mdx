@@ -41,7 +41,7 @@ Every screen is scoped to the **active namespace**, chosen from the switcher in 
 | **KV** | Browse keys by prefix, inspect a value with its MVCC version + TTL, view per-key version history, and write/delete keys. |
 | **Streams** | Per-stream record activity (a time-bucketed tape), partitions, consumer groups with their cursor positions and lag, and a message inspector with real payloads. |
 | **Queues** | Per-queue ready / in-flight / dead-letter counts, priority-ordered message inspection, dead-letter triage (requeue), and an enqueue helper. |
-| **Time Series** | Namespace-scoped measurements, per-field point charts pulled from the raw write buffers, a FloQL console, and a line-protocol ingest helper. |
+| **Time Series** | Namespace-scoped measurements, per-field point charts pulled from the raw write buffers, a FloQL console that executes queries server-side and renders the resulting series, and a line-protocol ingest helper. |
 | **Actions** | Registered action types with run counts and error rates, a run history with real input/output/error payloads, the workers handling each action, and an invoke modal. |
 | **Workers** | Registered workers (action and stream), their status / load / heartbeat, throughput, per-process run and failure tallies, and the registry record. |
 | **Processing** | Stream-processing jobs with status and records-processed, the pipeline DAG parsed from the submitted YAML, savepoints, and lifecycle controls (submit / stop / cancel). |
@@ -49,9 +49,9 @@ Every screen is scoped to the **active namespace**, chosen from the switcher in 
 
 ## Reads vs. writes
 
-The dashboard thread has **read-only** access to the projections, so read endpoints serve data directly. Mutations (KV writes, queue requeue, action invoke, processing submit/stop/cancel, workflow start/cancel/enable/disable) are proposed through the node's normal write path, so they are durably replicated just like a CLI or SDK call.
+The dashboard thread has **read-only** access to the projections, so read endpoints serve data directly. Mutations (KV writes, queue enqueue/purge/requeue, stream trim/delete, action invoke, processing submit/stop/cancel, workflow create/start/signal/cancel/enable/disable) are proposed through the node's normal write path, so they are durably replicated just like a CLI or SDK call.
 
-A few operations are intentionally CLI-only and surfaced in the console as a copyable command rather than a button — for example registering an action or creating a workflow definition. See the [CLI reference](/reference/cli/).
+Not every endpoint has a control in the UI yet — stream trim/delete, queue purge, and workflow create/signal are reachable over the [REST API](/reference/rest-api/) but are not surfaced as buttons. Some operations remain CLI-only and appear in the console as a copyable command, such as registering an action. See the [CLI reference](/reference/cli/).
 
 ## Programmatic access
 

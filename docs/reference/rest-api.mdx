@@ -168,9 +168,14 @@ Delete a key.
 ```json
 [
   { "name": "events", "namespace": "production", "partitions": 16,
-    "ingest_rate": 0, "reads": 0, "retention": "7d" }
+    "ingest_rate": 12840, "reads": 3110, "retention": "1d" }
 ]
 ```
+
+`ingest_rate` and `reads` are **cumulative record counts** from the stream's
+metrics, not per-second rates — derive a rate by sampling across polls.
+`retention` is rendered from the stream's persisted policy (`"1d"`,
+`"1000 records"`, …), or `"∞"` when none is set.
 
 ### `GET /api/v1/streams/:name?namespace=<ns>`
 
@@ -178,7 +183,22 @@ Detail with `partitions[]` (record counts + bytes) and `consumer_groups[]` (memb
 
 ### `GET /api/v1/streams/:name/messages?namespace=<ns>&limit=<n>`
 
-Records with `id_ms`, `id_seq`, `ual_index`, `size`, and the decoded `payload`. Sub-resources: `GET /streams/:name/groups/:group`, `/groups/:group/pending`, `/groups/:group/members`.
+Records with `id_ms`, `id_seq`, `ual_index`, `size`, and the decoded `payload`. Sub-resources: `GET /streams/:name/groups/:group`, `/groups/:group/pending`, `/groups/:group/members` — all namespace-scoped via `?namespace=`.
+
+### Writes
+
+```
+POST   /api/v1/streams/:name/trim?namespace=<ns>          # &max_len= | &max_age_s= | &max_bytes= | &dry_run=
+DELETE /api/v1/streams/:name?namespace=<ns>&force=true    # force required for a non-empty stream
+DELETE /api/v1/streams/:name/groups/:group?namespace=<ns>
+```
+
+`trim` requires exactly one bound (`max_len`, `max_age_s` or `max_bytes`) and
+returns `{ ok, stream, dry_run }`. Byte-based trim is not implemented yet and
+returns an explicit error rather than silently doing nothing.
+
+There is no stream **compact** endpoint: Flo streams are append-only and trim is
+their retention primitive.
 
 ---
 
@@ -208,10 +228,16 @@ Dead-letter entries.
 ### Writes
 
 ```
+POST   /api/v1/queues/:name?namespace=<ns>                # body: payload  (&priority= &delay_ms=)
 POST   /api/v1/queues/:name/purge?namespace=<ns>
 POST   /api/v1/queues/:name/dlq/:seq/requeue?namespace=<ns>
 DELETE /api/v1/queues/:name/dlq/:seq?namespace=<ns>
 ```
+
+Enqueue takes the raw request body as the message payload and returns
+`{ ok, queue, seq }`. Purge removes every live (ready + leased) message and
+returns the real count as `{ ok, purged }`; dead-letter entries are not
+per-queue addressable and are left intact.
 
 ---
 
@@ -235,9 +261,31 @@ Detail: `{ name, namespace, field_count, fields: [{ name, type }], series_count,
 { "measurement": "cpu_usage", "field": "value", "series": [ { "timestamp": 1718900000000, "value": 41.1 } ] }
 ```
 
+Add `&tags=host=web-01,env=prod` to scope to matching tag-series. Tags are a
+real series dimension, and a filter constrains only the tags it names — so
+`?tags=host=web-01` also matches points tagged `host=web-01,env=prod`. Omit it
+to span every tag-series.
+
 ### `GET | POST /api/v1/timeseries/floql`
 
-Execute a FloQL query (`?q=` or a raw body).
+Execute a FloQL query — `?q=<url-encoded>` or a raw request body. The query is
+parsed, its source resolved across all shards, and the pipeline stages run
+server-side.
+
+```json
+{
+  "query": "cpu{host=web-01}[1h] | window(5m) | avg()",
+  "series": [
+    { "key": "cpu", "field": "value", "point_count": 12,
+      "tags": [ { "key": "host", "value": "web-01" } ],
+      "points": [ { "timestamp": 1718900000000, "value": 41.1 } ] }
+  ]
+}
+```
+
+Source tag filters are applied, including partial sets, `!=`, and the glob
+operators `=~` / `!~`. A parse or execution failure returns the standard
+`{ "error": "…" }` shape.
 
 ---
 
@@ -248,12 +296,18 @@ Execute a FloQL query (`?q=` or a raw body).
 ```json
 [
   { "name": "send-email", "namespace": "production", "type": "user",
-    "version": 1, "enabled": true, "timeout_ms": 30000, "max_retries": 3,
-    "worker_count": 1,
+    "owner": "platform-team", "version": 1, "enabled": true,
+    "timeout_ms": 60000, "max_retries": 5, "worker_count": 1,
+    "latency": { "count": 6, "avg_ms": 412, "p99_ms": 980 },
     "runs": { "total": 14, "pending": 7, "running": 0, "completed": 6,
               "failed": 1, "cancelled": 0, "timed_out": 0 } }
 ]
 ```
+
+`owner`, `timeout_ms` and `max_retries` are persisted on the action record
+(set them with `flo action register --owner --timeout --retries`). `latency` is
+computed from completed runs — `avg_ms` over all of them, `p99_ms` over a
+bounded sample.
 
 ### `GET /api/v1/actions/:name?namespace=<ns>`
 
@@ -298,9 +352,22 @@ Single worker detail (same shape).
 [
   { "job_id": "job-...", "name": "events-filter", "namespace": "production",
     "status": "RUNNING", "parallelism": 1, "batch_size": 100,
-    "created_at": 1718900000000, "records_processed": 1000 }
+    "created_at": 1718900000000, "records_processed": 1000,
+    "metrics": { "records_in": 1000, "records_out": 950,
+                 "throughput_per_sec": 16.6, "output_per_sec": 15.8,
+                 "last_read_count": 100, "batch_size": 100, "idle_ms": 210,
+                 "watermark_ms": 1718899998000, "watermark_lag_ms": 2000,
+                 "latency_last_ms": 1.4, "latency_avg_ms": 1.9,
+                 "latency_max_ms": 7.2, "running": true } }
 ]
 ```
+
+`metrics` is present on both the list and the detail. Rates are derived against
+the job's elapsed lifetime; `last_read_count` vs `batch_size` indicates
+saturation and `idle_ms` is the age of the last poll. `running` is false for a
+stopped job, where the live gauges read zero but cumulative counts remain.
+Latency is per-tick processing time, measured only on ticks that actually read
+records so idle polls don't skew the average.
 
 ### `GET /api/v1/processing/jobs/:id`
 
@@ -363,9 +430,15 @@ Run detail with `current_step`, timing, `input`, `output`, `step_results`, and `
 Event timeline: `[{ event_type, step_name, timestamp }]`.
 
 ```
-DELETE /api/v1/workflow/runs/:id?namespace=<ns>          # cancel
-POST   /api/v1/workflow/runs/:id/signal?namespace=<ns>   # body: signal payload
+POST   /api/v1/workflow/definitions?namespace=<ns>                    # body: workflow YAML/JSON
+DELETE /api/v1/workflow/runs/:id?namespace=<ns>                       # cancel
+POST   /api/v1/workflow/runs/:id/signal?namespace=<ns>&signal=<type>  # body: signal payload
 ```
+
+`POST /workflow/definitions` defines a workflow from the request body and
+returns `{ ok, name, status }`; the top-level `name:` in the definition is used
+to route it. `signal` **requires** `?signal=<type>` (`?type=` is accepted too) —
+the request body is the optional payload.
 
 ---
 

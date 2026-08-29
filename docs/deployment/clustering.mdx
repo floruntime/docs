@@ -138,6 +138,16 @@ Key cluster metrics on port 9001:
 | `flo_raft_leader_elections_total` | Leader election count |
 | `flo_raft_replication_lag` | Replication lag in entries |
 | `flo_gossip_members` | Active SWIM members |
+| `flo_replication_follower_gaps_total` | Replication gaps detected on a follower |
+| `flo_replication_follower_entries_missing_total` | Entries inferred missing across all gaps |
+| `flo_replication_broadcast_oversize_skipped_total` | Committed entries too large to broadcast |
+| `flo_replication_broadcast_send_failures_total` | Per-peer sends that failed and were not retried |
+
+:::note
+**Alarm on the `flo_replication_*` counters.** Cross-node entry replication is currently best-effort broadcast: there is no acknowledgement, send-side gap detection, or repair path. If a follower misses a committed entry it stays missing — the leader has already acked the client.
+
+These counters exist so that failure is **visible** rather than silent. Any non-zero value means a replica has diverged and needs to be rebuilt from the leader. Divergence detection is implemented; automatic repair is not — see [issue #16](https://github.com/floruntime/flo/issues/16).
+:::
 
 ## Recommended Topologies
 

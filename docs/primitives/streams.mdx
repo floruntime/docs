@@ -200,7 +200,8 @@ flo stream trim events --before 1703350800000-0
 # Remove records older than 1 hour
 flo stream trim events --maxage 3600
 
-# Trim to a byte budget
+# Byte-based trim is NOT implemented yet — this returns an explicit error
+# rather than silently trimming nothing.
 flo stream trim events --maxbytes 1073741824
 
 # Preview what would be trimmed (no changes made)
