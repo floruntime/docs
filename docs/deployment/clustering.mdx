@@ -127,17 +127,43 @@ Typical failover time: **2-5 seconds** (SWIM detection + Raft election).
 flo cluster status
 ```
 
-### Prometheus Metrics
+### Replication Metrics
 
-Key cluster metrics on port 9001:
+The node exposes replication counters as JSON on the dashboard's metrics
+endpoint, under `replication`:
+
+```bash
+curl localhost:9002/api/v1/metrics
+```
 
 | Metric | Description |
 |--------|-------------|
-| `flo_cluster_nodes` | Number of nodes in the cluster |
-| `flo_cluster_partitions` | Total partition count |
-| `flo_raft_leader_elections_total` | Leader election count |
-| `flo_raft_replication_lag` | Replication lag in entries |
-| `flo_gossip_members` | Active SWIM members |
+| `follower_gaps_total` | Replication gaps detected on a follower |
+| `follower_entries_missing_total` | Entries inferred missing across all gaps |
+| `broadcast_oversize_skipped_total` | Committed entries too large to broadcast |
+| `broadcast_send_failures_total` | Per-peer sends that failed and were not retried |
+| `last_gap_received_index` | Entry index at which a gap was last observed |
+
+:::note
+**Alarm on these counters.** Cross-node entry replication is currently
+best-effort broadcast: there is no acknowledgement, send-side gap detection, or
+repair path. If a follower misses a committed entry it stays missing — the
+leader has already acked the client.
+
+They exist so that failure is **visible** rather than silent. Any non-zero value
+means a replica has diverged and needs to be rebuilt from the leader.
+Divergence detection is implemented; automatic repair is not — see
+[issue #16](https://github.com/floruntime/flo/issues/16).
+:::
+
+:::note
+**A Prometheus text endpoint is not served yet.** The exporter exists in the
+codebase but nothing starts it at runtime, so there is no `/metrics` scrape
+target on port 9001 today. Cluster-level metric names such as
+`flo_cluster_nodes`, `flo_raft_leader_elections_total` and `flo_gossip_members`
+are not implemented either. Use the dashboard endpoint above until the exporter
+is wired up.
+:::
 
 ## Recommended Topologies
 

@@ -16,6 +16,10 @@ Each data point consists of four components:
 
 A **series** is the unique combination of measurement + tag set + field name. Each series maintains its own write buffer and block chain.
 
+Tag sets are **order-independent**: `host=a,env=b` and `env=b,host=a` are the
+same series. Tags are stored alongside the series, so they survive a restart and
+can be matched on at query time rather than only compared for exact equality.
+
 ## Writing Data
 
 ### Single Point
@@ -93,6 +97,34 @@ flo ts read cpu --tags host=web-01 --from -1h --format json
 
 The `--from` and `--to` flags accept relative durations (`-1h`, `-30m`, `-7d`) or absolute epoch-millisecond timestamps.
 
+### Filtering by Tag
+
+A tag filter constrains **only the tags it names**, so a partial filter matches
+any series whose tag set contains it:
+
+```bash
+# Written with two tags
+flo ts write cpu --tags host=web-01,env=prod --value 72.5
+
+# All three of these match it
+flo ts read cpu --tags host=web-01 --from -1h            # partial
+flo ts read cpu --tags env=prod --from -1h               # partial, other tag
+flo ts read cpu --tags env=prod,host=web-01 --from -1h   # full set, any order
+```
+
+Omitting `--tags` reads across **every** tag-series for the measurement and
+field, merged in timestamp order.
+
+The CLI's `--tags` is equality-only. For negation and wildcards, use FloQL
+source filters:
+
+| Operator | Meaning | Example |
+|----------|---------|---------|
+| `=` | Equals | `{host=web-01}` |
+| `!=` | Not equals — also matches series lacking the tag | `{env!=staging}` |
+| `=~` | Glob match (`*`, `?`) | `{host=~web-*}` |
+| `!~` | Glob non-match | `{path!~*-west}` |
+
 ### Structured Queries
 
 Aggregate data over time windows using built-in functions:
@@ -118,6 +150,10 @@ flo ts query temperature --tags sensor=A1 --from -24h --window 1h --agg max
 | `--window` | `1m` | Window size: `Ns`, `Nm`, `Nh`, `Nd` |
 | `--from` | `-1h` | Start time (relative or epoch ms) |
 | `--to` | now | End time |
+
+Windows are aligned to the epoch (`timestamp / window * window`), so a bucket's
+start does not shift with `--from` and the same point always lands in the same
+bucket across queries. Each row of the result is one window.
 
 ### Output Formats
 
