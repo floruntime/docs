@@ -200,11 +200,14 @@ Divergence detection is implemented; automatic repair is not — see
 :::
 
 :::note
-**Some families are registered but not yet incremented.** Nothing records the
-per-shard or per-stream counters on the write paths, so `flo_shard_*` and the
-per-stream totals currently export as `0`. Cluster-level names such as
-`flo_cluster_nodes`, `flo_raft_leader_elections_total` and `flo_gossip_members`
-are not implemented at all.
+**Cluster-level names such as `flo_cluster_nodes`,
+`flo_raft_leader_elections_total` and `flo_gossip_members` are not
+implemented** — do not build scrape configs or alerts on them. The families
+documented above are populated from the live write paths.
+
+One exception worth knowing: `flo_tiered_log_cold_hits_total` is always `0`.
+The read path consults the hot ring and the warm store only, so a cold-tier
+read is never counted there rather than the counter being unwired.
 :::
 
 ## Recommended Topologies
