@@ -88,7 +88,32 @@ Aggregated metrics in JSON (Prometheus metrics are exposed separately on port 90
 
 ### `GET /health`
 
-Always-public liveness check (served at the root, not under `/api/v1`).
+Liveness and readiness check. Served at the root, not under `/api/v1`, and
+always public — it is never gated by the admin token, so it is safe to point an
+orchestrator probe at it without provisioning credentials.
+
+```json
+{ "status": "ok" }
+```
+
+A `200` means the dashboard server is up and serving. Any other status, or a
+refused connection, means the node is not ready.
+
+**Stability:** `GET /health` is a stable endpoint. The path, its public status,
+and the `200` + `"status": "ok"` contract will not change within a major
+version. Fields may be *added* to the object, so parse it leniently rather than
+matching the body exactly — checking the HTTP status alone is the most durable
+probe.
+
+:::note
+This is served on the **dashboard** port (`listen_port + 2`, so 9002 by
+default), which requires `[dashboard] enabled = true`. `[dashboard] bind`
+defaults to `127.0.0.1`, so a probe from outside the container needs
+`bind = "0.0.0.0"` — see [Docker](/deployment/docker#health-check).
+
+The Prometheus exporter serves its own separate `/health` on `listen_port + 1`,
+which additionally reports the shard count.
+:::
 
 ---
 
