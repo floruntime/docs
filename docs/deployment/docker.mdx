@@ -118,8 +118,7 @@ services:
     environment:
       - FLO_DATA_DIR=/data
       - FLO_PORT=9000
-      - FLO_CLUSTER_SEEDS=flo-2:9000,flo-3:9000
-      - FLO_NODE_ID=1
+      - FLO_CLUSTER_SEEDS=flo-2:9500,flo-3:9500
     volumes:
       - flo-1-data:/data
 
@@ -135,8 +134,7 @@ services:
     environment:
       - FLO_DATA_DIR=/data
       - FLO_PORT=9000
-      - FLO_CLUSTER_SEEDS=flo-1:9000,flo-3:9000
-      - FLO_NODE_ID=2
+      - FLO_CLUSTER_SEEDS=flo-1:9500,flo-3:9500
     volumes:
       - flo-2-data:/data
 
@@ -152,8 +150,7 @@ services:
     environment:
       - FLO_DATA_DIR=/data
       - FLO_PORT=9000
-      - FLO_CLUSTER_SEEDS=flo-1:9000,flo-2:9000
-      - FLO_NODE_ID=3
+      - FLO_CLUSTER_SEEDS=flo-1:9500,flo-2:9500
     volumes:
       - flo-3-data:/data
 

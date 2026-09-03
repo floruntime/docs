@@ -99,6 +99,12 @@ ping_interval_ms = 30000      # Heartbeat ping interval (0 = disabled)
 pong_timeout_ms = 10000       # Close connection if no pong within this time
 ```
 
+`[server] bind` is the interface this node serves on — for clients and, in a
+cluster, for peers. `0.0.0.0` (the default) listens everywhere and lets peers
+reach the node at whatever address they see it from; a specific address is
+also what the node advertises to its peers. `--bind` overrides it on the
+command line.
+
 ### `[metrics]`
 
 ```toml

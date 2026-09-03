@@ -16,20 +16,21 @@ Flo clusters consist of multiple nodes that coordinate via:
 
 ### Seed Nodes
 
-Each node needs at least one seed address to join the cluster:
+A joining node needs at least one seed: the **Raft port** of a node already in
+the cluster, as `host:port`. The host may be an IPv4 address or a DNS name
+(a Compose service name works); peer links are IPv4 only.
 
 ```toml title="flo.toml"
 [cluster]
-seeds = ["10.0.1.10:9000", "10.0.1.11:9000", "10.0.1.12:9000"]
-node_id = 1
+seeds = ["10.0.1.10:9500", "10.0.1.11:9500"]
 ```
 
-Or via environment variables:
+Or on the command line: `flo server start --join 10.0.1.10:9500`.
 
-```bash
-FLO_CLUSTER_SEEDS=10.0.1.10:9000,10.0.1.11:9000
-FLO_NODE_ID=1
-```
+Peers reach each other at the address a node advertises: its `[server] bind`
+address when that names an interface, otherwise the address the seed saw it
+connect from. A node bound to `0.0.0.0` therefore needs no extra
+configuration; a node bound to one interface is reached on that interface.
 
 ### Ports
 
@@ -56,14 +57,16 @@ The first node in a cluster bootstraps automatically when no seeds respond. Subs
 
 ```bash
 # First node (bootstraps)
-flo server start --node-id 1 --port 9000
+flo server start --port 9000 --raft-port 9500
 
-# Second node (joins via seed)
-flo server start --node-id 2 --port 9000 --seeds 10.0.1.10:9000
+# Second node (joins via the first node's Raft port)
+flo server start --port 9000 --join 10.0.1.10:9500
 
 # Third node
-flo server start --node-id 3 --port 9000 --seeds 10.0.1.10:9000,10.0.1.11:9000
+flo server start --port 9000 --join 10.0.1.10:9500,10.0.1.11:9500
 ```
+
+Node ids are derived from `hostname:port` unless `--node-id` is given.
 
 ## Partitioning
 
@@ -226,7 +229,7 @@ read is never counted there rather than the counter being unwired.
 
 ```toml
 [cluster]
-seeds = ["10.0.1.10:9000", "10.0.1.11:9000", "10.0.1.12:9000"]
+seeds = ["10.0.1.10:9500", "10.0.1.11:9500"]
 replication_factor = 3
 partition_count = 128
 
