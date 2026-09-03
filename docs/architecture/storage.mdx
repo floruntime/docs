@@ -186,6 +186,7 @@ Each shard gets a fixed memory budget. Default split for a 2 GB shard:
 ├── SYSTEM                              # Topology lock (shards, partitions, version)
 ├── 00000/                              # Shard 0 (zero-padded 5 digits)
 │   ├── MANIFEST                        # Latest snapshot ref + cold segment index
+│   ├── HARDSTATE                       # Raft node id, current term, vote (28 bytes)
 │   ├── segs/
 │   │   ├── 0000000001.flseg            # UAL segment (10-digit zero-padded first index)
 │   │   ├── 0000000257.flseg
@@ -196,6 +197,7 @@ Each shard gets a fixed memory budget. Default split for a 2 GB shard:
 │   └── cold.fcold                      # (optional) Cold tier manifest
 ├── 00001/
 │   ├── MANIFEST
+│   ├── HARDSTATE
 │   ├── segs/
 │   └── snaps/
 └── ...{shard_count - 1}/
@@ -218,6 +220,12 @@ Written once on first boot. If `shards` or `partitions` don't match on restart, 
 
 One per shard — a JSON file tracking the latest snapshot pointer and cold segment inventory. No per-directory manifests to coordinate.
 
+### HARDSTATE
+
+One per shard — a fixed 28-byte, CRC-protected record of the node's identity and its Raft hard state: node id, current term, and the vote cast in that term. It is rewritten (`.tmp` → `fsync` → rename) before the node grants a vote or adopts a new term, never on the write path. On restart the node resumes one term past the stored one, so a node can neither vote twice in a term nor re-enter a term it already left. The stored node id also fixes the node's cluster identity: once written, it survives restarts and port changes, and a configured `[cluster] node_id` that disagrees with it is refused at startup.
+
+The Raft log itself is the segment files — index 1 (the first leadership no-op) onward. On boot the node rebuilds its in-memory Raft log (last index, term index, and the hot-ring tail) from the same pass over `segs/` that replays projections.
+
 ### Atomic Writes
 
-Both segments and snapshots are written atomically via `.tmp` → `fdatasync` → rename. If the process crashes before the rename, the previous file remains valid.
+Segments, snapshots and `HARDSTATE` are written atomically via `.tmp` → `fdatasync` → rename. If the process crashes before the rename, the previous file remains valid.
