@@ -222,7 +222,7 @@ One per shard — a JSON file tracking the latest snapshot pointer and cold segm
 
 ### HARDSTATE
 
-One per shard — a fixed 28-byte, CRC-protected record of the node's identity and its Raft hard state: node id, current term, and the vote cast in that term. It is rewritten (`.tmp` → `fsync` → rename) before the node grants a vote or adopts a new term, never on the write path. On restart the node resumes one term past the stored one, so a node can neither vote twice in a term nor re-enter a term it already left. The stored node id also fixes the node's cluster identity: once written, it survives restarts and port changes, and a configured `[cluster] node_id` that disagrees with it is refused at startup.
+One per shard — a fixed 28-byte, CRC-protected record of the node's identity and its Raft hard state: node id, current term, and the vote cast in that term. It is rewritten (`.tmp` → `fsync` → rename) before the node grants a vote or adopts a new term, never on the write path. On restart the node resumes one term past the stored one, so a node can neither vote twice in a term nor re-enter a term it already left. The stored node id also fixes the node's cluster identity: once written, it survives restarts and port changes, and a configured `[cluster] node_id` that disagrees with it is refused at startup with `NodeIdMismatch`.
 
 The Raft log itself is the segment files — index 1 (the first leadership no-op) onward. On boot the node rebuilds its in-memory Raft log (last index, term index, and the hot-ring tail) from the same pass over `segs/` that replays projections.
 
