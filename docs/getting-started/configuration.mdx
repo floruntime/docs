@@ -149,6 +149,9 @@ enabled = false
 # heartbeat_interval_ms = 50
 ```
 
+`node_id` is read on first boot and then stored in the data dir, which wins on
+every later boot; to change a node's id, start it from an empty data dir.
+
 The Raft port is bound only when this node can actually have peers — that is,
 when any of `enabled = true`, `seeds`, an explicit `raft_port`, or
 `replication_factor > 1` is set. A plain single-node server does **not** listen
