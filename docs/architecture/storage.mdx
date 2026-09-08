@@ -36,7 +36,7 @@ The CRC covers the header and payload together. Payload layout varies by entry t
 | **Warm** | Sealed disk segments (`.flseg` files), memory-mapped | Historical data, bounded by local disk space. |
 | **Cold** | S3/GCS/Azure Blob (planned) | Long-term archival, on-demand download. |
 
-When entries age out of the hot ring, they're flushed to warm segments. A warm store hash map keeps payload copies in memory (default 32 MB) so reads don't have to go to disk immediately.
+When entries age out of the hot ring, they're flushed to warm segments. A warm store hash map keeps payload copies in memory (default 32 MB) for the entry types whose reads go back to the log — streams and time series — so those reads don't have to go to disk immediately. KV entries are never copied there: the KV projection holds the value, and nothing reads a KV payload from the log.
 
 ### Segment Format
 
@@ -88,19 +88,19 @@ TS data has **no dedicated disk files**. All `ts_write` entries are appended to 
 
 When a write buffer fills, `flushBuffer()` records a block metadata entry (timestamps + UAL index range) and **discards the raw points**. Reconstructing historical block data requires replaying the UAL in `[ual_index_start..ual_index_end]`. This means hot reads (from the write buffer) are fast, while cold reads (from flushed blocks) require UAL replay.
 
-### Projection Router
+### One apply path
 
-Single fan-out point between the UAL and projections. Routes committed entries by type:
+Every committed entry is applied by exactly one function, whether it was just written on this node, replicated from a peer, or replayed from a segment at boot: the entry goes into the partition (hot ring plus the projection router) and then to the applier registered for its type. A live write proposes the entry, applies it through that path, and only then reads its response from projection state — the same state a restart rebuilds.
+
+The projection router owns the three in-memory projections:
 
 | Entry Types | Destination |
 |-------------|-------------|
-| `kv_put`, `kv_delete`, `kv_batch`, `cg_*` | KV Projection |
-| `queue_enqueue`, `queue_ack`, `queue_requeue` | Queue Projection |
+| `kv_put`, `kv_delete`, `kv_incr`, `kv_touch`, `kv_batch` | KV Projection |
+| `queue_enqueue`, `queue_ack`, `queue_nack`, `queue_lease`, `queue_purge` | Queue Projection |
 | `ts_write`, `ts_write_batch` | TS Projection |
-| `stream_append` | Nothing (data stays in UAL) |
-| `raft_noop`, `raft_config` | Nothing (consensus layer) |
 
-An `applied_index` guard ensures replayed entries are silently skipped.
+Every other type — stream appends, trims and deletes, consumer-group commits, namespaces, actions, workflows, processing jobs — has one registered applier in its subsystem, and an entry type may have one or the other, never both; the server refuses to start otherwise. Waiters, stream triggers and per-namespace metrics are notified from the same place, so a blocking read wakes on the apply, not on the request that caused it.
 
 ## Snapshots
 
@@ -151,7 +151,7 @@ When a node restarts, each partition recovers:
 
 1. **Load snapshot** — read MANIFEST, validate CRC, deserialize all projections
 2. **Open UAL** — discover warm segments on disk
-3. **Replay** — feed UAL entries from `snapshot_index + 1` through ProjectionRouter (same code path as live operation)
+3. **Replay** — feed UAL entries from `snapshot_index + 1` through the one apply path (the same code a live write and a replicated entry take)
 4. **Load cold manifest** — metadata only, no data fetched
 5. **Ready for traffic**
 
