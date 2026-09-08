@@ -90,7 +90,7 @@ When a write buffer fills, `flushBuffer()` records a block metadata entry (times
 
 ### One apply path
 
-Every committed entry is applied by exactly one function, whether it was just written on this node, replicated from a peer, or replayed from a segment at boot: the entry goes into the partition (hot ring plus the projection router) and then to the applier registered for its type. A live write proposes the entry, applies it through that path, and only then reads its response from projection state — the same state a restart rebuilds.
+Every committed entry is applied by exactly one function, whether it was just written on this node, replicated from a peer, or replayed from a segment at boot: the entry goes into the partition (the projection router, plus the hot ring for the types that read back from the log) and then to the applier registered for its type. A live write proposes the entry, applies it through that path, and only then reads its response from projection state — the same state a restart rebuilds.
 
 The projection router owns the three in-memory projections:
 
@@ -100,7 +100,7 @@ The projection router owns the three in-memory projections:
 | `queue_enqueue`, `queue_ack`, `queue_nack`, `queue_lease`, `queue_purge` | Queue Projection |
 | `ts_write`, `ts_write_batch` | TS Projection |
 
-Every other type — stream appends, trims and deletes, consumer-group commits, namespaces, actions, workflows, processing jobs — has one registered applier in its subsystem, and an entry type may have one or the other, never both; the server refuses to start otherwise. Waiters, stream triggers and per-namespace metrics are notified from the same place, so a blocking read wakes on the apply, not on the request that caused it.
+Every other type — stream appends, trims and deletes, consumer-group commits, namespaces, actions, workflows, processing jobs — has one registered applier in its subsystem, and an entry type may have one or the other, never both; the server refuses to start otherwise. Raft's own control entries (`raft_noop`, `raft_config`, `raft_snapshot`) belong to the consensus layer and have no applier. Blocking reads wake on the apply, not on the request that caused it.
 
 ## Snapshots
 
