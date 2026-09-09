@@ -140,6 +140,7 @@ where the port is not publicly routable. See
 ```toml
 [cluster]
 enabled = false
+# secret = "..."          # required whenever the Raft port is bound; same value on every node
 # node_id = 1
 # raft_port = 0           # 0 = auto (listen_port + 500)
 # seeds = "192.168.1.10:9500,192.168.1.11:9500"
@@ -148,6 +149,13 @@ enabled = false
 # election_timeout_max_ms = 300
 # heartbeat_interval_ms = 50
 ```
+
+`secret` is what a node proves it holds before another node treats it as a
+peer: the Raft port moves terms, membership and log contents, so it is never
+open. Every node in a cluster carries the same value; a node with a different
+one is refused at the handshake and both sides log it. The secret itself never
+crosses the wire. Generate one with `openssl rand -base64 32`. Starting the
+Raft listener without it is a startup error that names the key.
 
 `node_id` is read on first boot and then stored in the data dir, which wins on
 every later boot; to change a node's id, start it from an empty data dir.
