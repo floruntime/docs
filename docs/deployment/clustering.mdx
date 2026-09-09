@@ -27,7 +27,7 @@ seeds = ["10.0.1.10:9500", "10.0.1.11:9500"]
 ```
 
 Or on the command line: `flo server start --join 10.0.1.10:9500` (the secret
-still comes from the config file).
+comes from the config file, or from `FLO_CLUSTER_SECRET`).
 
 The secret is required whenever the Raft port is bound. A node that offers a
 different one never becomes a peer; the refusal is logged on both sides with
