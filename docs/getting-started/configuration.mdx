@@ -154,8 +154,10 @@ enabled = false
 peer: the Raft port moves terms, membership and log contents, so it is never
 open. Every node in a cluster carries the same value; a node with a different
 one is refused at the handshake and both sides log it. The secret itself never
-crosses the wire. Generate one with `openssl rand -base64 32`. Starting the
-Raft listener without it is a startup error that names the key.
+crosses the wire. Generate one with `openssl rand -base64 32`. It can also come
+from the `FLO_CLUSTER_SECRET` environment variable, for containers without a
+config file. Starting the Raft listener without it is a startup error that
+names the key.
 
 `node_id` is read on first boot and then stored in the data dir, which wins on
 every later boot; to change a node's id, start it from an empty data dir.
