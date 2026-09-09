@@ -43,13 +43,21 @@ When entries age out of the hot ring, they're flushed to warm segments. A warm s
 Each sealed segment is a `.flseg` file:
 
 ```
-[SegmentHeader]   magic "FLOSEG\0\0", version, segment_id, index range, entry count
+[SegmentHeader]   magic "FLO_SEG\0", version, partition id, index range, entry count, commit index at seal
 [Entry 0..N]      Sequential entries
 [SparseIndex]     Sampled every ~256 entries: index → file offset
 [SegmentFooter]   index_offset, index_count, crc32c
 ```
 
 The sparse index enables binary search by UAL index without scanning every entry. The footer CRC covers the entire segment — corruption is detected on read.
+
+### The durable log
+
+The Raft log of a shard lives in three places, and every entry is in exactly one of them: the hot ring, the segment writer's not-yet-flushed buffer, and the sealed segments. The buffer and the segments together are the durable log, and the Raft layer uses them for three things the ring cannot do:
+
+- **Restart applies only what was committed.** Each segment records the Raft commit index at the moment it was sealed. On boot, entries at or below the highest such watermark are replayed into the projections; entries above it are loaded into the Raft log only and applied once commit is re-established (immediately, on a single node; after the first successful AppendEntries round on a follower). A follower that flushed an uncommitted tail its next leader then truncates never applies that tail. Nothing is lost, only deferred: no client was acknowledged for it.
+- **Truncation reaches the files.** When a follower's log conflicts with its leader and a suffix is dropped, the same suffix is dropped from the writer's buffer and from any sealed segment that holds it: the segment is rewritten under its own name with only the entries below the cut, or deleted if nothing remains. Without this a later flush would put a second entry at the truncated index into a newer file, and replay would apply the wrong one.
+- **Catching a peer up from below the ring.** A follower that restarted, or was partitioned for longer than the ring holds, needs entries the ring has evicted. The log reads them from the writer's buffer or from the segment that covers the index, so as long as segments exist from index 1 any follower can be repaired from any point without a snapshot.
 
 ## Projections
 
