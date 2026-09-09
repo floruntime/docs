@@ -36,7 +36,7 @@ The CRC covers the header and payload together. Payload layout varies by entry t
 | **Warm** | Sealed disk segments (`.flseg` files), memory-mapped | Historical data, bounded by local disk space. |
 | **Cold** | S3/GCS/Azure Blob (planned) | Long-term archival, on-demand download. |
 
-When entries age out of the hot ring, they're flushed to warm segments. A warm store hash map keeps payload copies in memory (default 32 MB) for the entry types whose reads go back to the log — streams and time series — so those reads don't have to go to disk immediately. KV entries are never copied there: the KV projection holds the value, and nothing reads a KV payload from the log.
+When entries age out of the hot ring, they're flushed to warm segments. A warm store hash map keeps payload copies in memory (default 32 MB) for the stream read path, which fetches record payloads by index, so those reads don't have to go to disk immediately. KV entries are never copied there: the KV projection holds the value, and nothing reads a KV payload from the log.
 
 ### Segment Format
 
