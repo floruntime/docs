@@ -22,10 +22,16 @@ the cluster, as `host:port`. The host may be an IPv4 address or a DNS name
 
 ```toml title="flo.toml"
 [cluster]
+secret = "the same value on every node"
 seeds = ["10.0.1.10:9500", "10.0.1.11:9500"]
 ```
 
-Or on the command line: `flo server start --join 10.0.1.10:9500`.
+Or on the command line: `flo server start --join 10.0.1.10:9500` (the secret
+comes from the config file, or from `FLO_CLUSTER_SECRET`).
+
+The secret is required whenever the Raft port is bound. A node that offers a
+different one never becomes a peer; the refusal is logged on both sides with
+the address it came from.
 
 Peers reach each other at the address a node advertises: its `[server] bind`
 address when that names an interface, otherwise the address the seed saw it
@@ -229,6 +235,7 @@ read is never counted there rather than the counter being unwired.
 
 ```toml
 [cluster]
+secret = "the same value on every node"
 seeds = ["10.0.1.10:9500", "10.0.1.11:9500"]
 replication_factor = 3
 partition_count = 128
