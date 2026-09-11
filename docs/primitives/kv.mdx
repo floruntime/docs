@@ -64,7 +64,7 @@ flo kv set mykey "hello world"
 
 ```bash
 flo kv get mykey
-flo kv get mykey --format json   # includes version number
+flo kv get mykey -o json   # includes version number
 ```
 
 | Flag | Description |
@@ -233,7 +233,7 @@ CAS enables optimistic concurrency control. Read the current version, then condi
 
 ```bash
 # Step 1: read current value and version
-flo kv get counter --format json
+flo kv get counter -o json
 # {"key":"counter","value":"41","version":7}
 
 # Step 2: update only if version is still 7
@@ -265,7 +265,7 @@ The classic read-modify-write loop becomes:
 
 ```bash
 # 1. Read current state and version (PUT/GET both return the version)
-flo kv get account:42 --format json     # → value + version=11
+flo kv get account:42 -o json     # → value + version=11
 
 # 2. Compute new state client-side
 # 3. Conditional write — fails if anyone else changed the key
@@ -397,7 +397,7 @@ Inside a transaction, normal `kv` ops (`put`, `get`, `delete`, `incr`, `touch`, 
 
 ```bash
 # Open, write, commit
-TXN=$(flo kv begin user:42 --format json | jq -r .txn_id)
+TXN=$(flo kv begin user:42 -o json | jq -r .txn_id)
 flo kv set user:42:name "Jane"   --txn $TXN
 flo kv incr user:42:visits       --txn $TXN
 flo kv set user:42:last_seen "$(date -u +%s)" --txn $TXN

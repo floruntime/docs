@@ -27,7 +27,7 @@ terraform init
 terraform apply
 
 # Point the CLI at your new node
-flo --server "$(terraform output -raw listen_endpoint)" kv set hello world
+flo -e "$(terraform output -raw listen_endpoint)" kv set hello world
 ```
 
 ## What It Provisions
@@ -56,15 +56,14 @@ Flo derives all secondary ports from `listen_port`:
 | Wire protocol | `9000` | `listen_port` |
 | Prometheus metrics | `9001` | `listen_port + 1` |
 | Dashboard / REST API | `9002` | `listen_port + 2` |
-| Raft replication | `9500` | `listen_port + 500` |
-| SWIM gossip | `9600` | `listen_port + 600` |
+| Peer port (Raft between members) | `9500` | `listen_port + 500` |
 
 The firewall automatically opens the correct ports based on your settings:
 
 - **Wire protocol** — always open, gated by `api_allowed_cidrs`
 - **Dashboard** — open when `enable_dashboard = true`, gated by `dashboard_allowed_cidrs`
 - **Metrics** — open only when `expose_metrics = true`
-- **Raft + Gossip** — open when `cluster_enabled = true`, gated by `cluster_allowed_cidrs`
+- **Peer port** — open when `cluster_enabled = true`, gated by `cluster_allowed_cidrs`
 
 ## Single Node
 
@@ -80,6 +79,9 @@ terraform {
     digitalocean = { source = "digitalocean/digitalocean", version = ">= 2.40" }
   }
 }
+
+variable "do_token"     { type = string, sensitive = true }
+variable "ssh_key_name" { type = string }
 
 provider "digitalocean" {
   token = var.do_token
@@ -119,39 +121,38 @@ ssh_key_name  = "my-key"
 ```bash
 terraform apply -var-file=variables.tfvars
 
-flo --server "$(terraform output -raw listen_endpoint)" kv set hello world
+flo -e "$(terraform output -raw listen_endpoint)" kv set hello world
 open "$(terraform output -raw dashboard_url)"
 ```
 
 ## 3-Node Cluster
 
-Provision three droplets wired together via [reserved IPs](https://docs.digitalocean.com/products/networking/reserved-ips/) so the gossip seed list is stable from the first apply:
+Provision three droplets: node 1 is the first member, nodes 2 and 3 join it
+at its peer port. A [reserved IP](https://docs.digitalocean.com/products/networking/reserved-ips/)
+for node 1 keeps the seed address stable from the first apply. Every member
+proves the same `cluster_secret`, and a cluster runs one shard. The provider,
+the variables and `data.digitalocean_ssh_key.main` are declared as in the
+single-node example above, plus
+`variable "cluster_secret" { type = string, sensitive = true }`. The
+`cluster_first_member` input arrives with module version 0.1.0.
 
 ```hcl title="main.tf"
 locals {
   node_ids    = [1, 2, 3]
   listen_port = 9000
-  gossip_port = local.listen_port + 600
+  peer_port   = local.listen_port + 500
 }
 
-# Reserve stable IPs for each node
+# Reserve a stable IP for each node
 resource "digitalocean_reserved_ip" "node" {
   for_each = toset([for id in local.node_ids : tostring(id)])
   region   = "lon1"
 }
 
-# Build the seed list from those IPs
-locals {
-  seeds = [
-    for id in local.node_ids :
-    "${digitalocean_reserved_ip.node[tostring(id)].ip_address}:${local.gossip_port}"
-  ]
-}
-
 module "flo" {
   for_each = toset([for id in local.node_ids : tostring(id)])
   source   = "floruntime/flo/digitalocean"
-  version  = "~> 0.0.1"
+  version  = "~> 0.1.0"
 
   ssh_key_ids = [data.digitalocean_ssh_key.main.id]
 
@@ -159,10 +160,13 @@ module "flo" {
   region      = "lon1"
   flo_version = "v0.1.0"
   listen_port = local.listen_port
+  shards      = 1
 
-  cluster_enabled = true
-  cluster_node_id = tonumber(each.key)
-  cluster_seeds   = local.seeds
+  cluster_enabled      = true
+  cluster_node_id      = tonumber(each.key)
+  cluster_first_member = each.key == "1"
+  cluster_seeds        = each.key == "1" ? [] : ["${digitalocean_reserved_ip.node["1"].ip_address}:${local.peer_port}"]
+  cluster_secret       = var.cluster_secret
 }
 
 # Attach each reserved IP to its droplet
@@ -171,16 +175,23 @@ resource "digitalocean_reserved_ip_assignment" "node" {
   ip_address = digitalocean_reserved_ip.node[each.key].ip_address
   droplet_id = each.value.droplet_id
 }
+
+output "endpoints" {
+  value = {
+    for id, m in module.flo :
+    id => { listen = "${digitalocean_reserved_ip.node[id].ip_address}:${local.listen_port}" }
+  }
+}
 ```
 
 After apply, point your CLI at any node:
 
 ```bash
-flo --server "$(terraform output -json listen_endpoints | jq -r '."1"')" \
+flo -e "$(terraform output -json endpoints | jq -r '."1".listen')" \
   kv set cluster ok
 ```
 
-The cluster bootstraps automatically — the first node to come up forms the cluster, and the rest join via the seed list.
+Node 1 leads a group of one until nodes 2 and 3 have joined it; a restarted member keeps its role from its own data, so the same configuration applies on every later apply.
 
 ## Configuration Reference
 
@@ -219,7 +230,7 @@ The cluster bootstraps automatically — the first node to come up forms the clu
 | `dashboard_allowed_cidrs` | `list(string)` | `["0.0.0.0/0", "::/0"]` | CIDRs allowed to reach the dashboard. **Restrict in production** |
 | `metrics_allowed_cidrs` | `list(string)` | `["0.0.0.0/0", "::/0"]` | CIDRs for Prometheus (only when `expose_metrics = true`) |
 | `expose_metrics` | `bool` | `false` | Open the metrics port on the firewall |
-| `cluster_allowed_cidrs` | `list(string)` | `["0.0.0.0/0", "::/0"]` | CIDRs for Raft and gossip traffic |
+| `cluster_allowed_cidrs` | `list(string)` | `["0.0.0.0/0", "::/0"]` | CIDRs allowed to reach the peer port. **Restrict to the cluster's network** |
 | `extra_inbound_tcp_ports` | `list(number)` | `[]` | Additional TCP ports to open |
 
 ### Flo Installation
@@ -236,7 +247,7 @@ The cluster bootstraps automatically — the first node to come up forms the clu
 | `bind_address` | `string` | `"0.0.0.0"` | Bind address for the wire listener |
 | `data_dir` | `string` | `"/var/lib/flo"` | Data directory. Created and chowned by cloud-init |
 | `shards` | `number` | `0` | Number of shards. `0` = auto-detect from CPU count |
-| `durability` | `string` | `"async_flush"` | Storage durability: `async_flush`, `sync_flush`, or `fsync` |
+| `durability` | `string` | `"async_flush"` | Storage durability: `sync`, `async_flush`, or `ephemeral` |
 | `hot_buffer_capacity` | `number` | `0` | In-memory hot buffer size in bytes. `0` = default |
 | `log_level` | `string` | `"info"` | Log level |
 | `enable_metrics` | `bool` | `true` | Enable Prometheus metrics endpoint |
@@ -247,9 +258,11 @@ The cluster bootstraps automatically — the first node to come up forms the clu
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
-| `cluster_enabled` | `bool` | `false` | Join this droplet to a Flo cluster |
-| `cluster_node_id` | `number` | `0` | Unique node ID within the cluster (1, 2, 3, …) |
-| `cluster_seeds` | `list(string)` | `[]` | Gossip seed addresses (`host:gossip_port`) |
+| `cluster_enabled` | `bool` | `false` | Make this droplet a cluster member (first member or joiner) |
+| `cluster_first_member` | `bool` | `false` | This droplet starts the cluster and leads alone until others join; leave `cluster_seeds` empty |
+| `cluster_node_id` | `number` | `0` | This node's id in the cluster (1, 2, 3, …). `0` derives one from hostname and port, which collides on cloned images |
+| `cluster_seeds` | `list(string)` | `[]` | Peer ports of members to join (`host:listen_port + 500`); required unless `cluster_first_member = true` |
+| `cluster_secret` | `string` (sensitive) | `""` | The secret every member proves at the peer port; required when `cluster_enabled = true` |
 
 ### Persistent Storage
 
@@ -266,7 +279,7 @@ module "flo" {
   source  = "floruntime/flo/digitalocean"
   version = "~> 0.0.2"
 
-  ssh_key_ids = [data.digitalocean_ssh_key.me.id]
+  ssh_key_ids = [data.digitalocean_ssh_key.main.id]
   flo_version = "v0.1.0"
 
   volume_size = 50  # GB — survives droplet replacement
@@ -286,9 +299,8 @@ module "flo" {
 | `listen_endpoint` | `host:port` for the CLI and SDKs |
 | `dashboard_url` | Dashboard URL (empty when disabled) |
 | `metrics_endpoint` | Prometheus metrics URL (empty when disabled) |
-| `gossip_endpoint` | `host:gossip_port` — use in other nodes' `cluster_seeds` |
-| `raft_port` | Raft replication port |
-| `gossip_port` | SWIM gossip port |
+| `peer_endpoint` | `host:peer_port` — what joining nodes list in `cluster_seeds` |
+| `raft_port` | Peer port (`listen_port + 500`) |
 | `firewall_id` | Firewall ID (empty when `create_firewall = false`) |
 | `volume_id` | Volume ID (empty when `volume_size = 0`) |
 | `volume_name` | Volume name (empty when `volume_size = 0`) |
@@ -396,5 +408,5 @@ version = "~> 0.0.1"
 ## Next Steps
 
 - [Configuration reference](/getting-started/configuration/) — understand `flo.toml`
-- [Clustering deep-dive](/deployment/clustering/) — SWIM gossip and Raft consensus internals
+- [Clustering](/deployment/clustering/) — how members join, replicate and fail over
 - [Docker deployment](/deployment/docker/) — run Flo with Docker Compose

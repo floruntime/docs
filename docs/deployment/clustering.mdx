@@ -1,161 +1,215 @@
 ---
 title: Clustering
-lede: Multi-node cluster setup with SWIM gossip and Raft consensus.
+lede: Members hold one replicated log. The first member starts with --cluster; the rest join it.
 ---
 
 ## Overview
 
-Flo clusters consist of multiple nodes that coordinate via:
+A Flo cluster is a group of nodes holding the same log. One member leads at a
+time. Every write goes through the leader, reaches a majority of members
+before it is acknowledged, and is then applied on every member. Clients
+connect to any node: a write sent to a node that does not lead is carried to
+the leader over the peer link and answered on the node the client wrote to,
+once that node has applied it, so a client always reads its own writes.
+Reads are served locally by every node.
 
-- **SWIM gossip** — failure detection, membership protocol, metadata dissemination
-- **Raft consensus** — per-partition replication with leader election
-- **Controller Raft** — runs on Shard 0, manages the global partition table
-- **Partition Table** — maps each partition to its owning node(s)
+Membership is recorded in the log itself. A configuration entry names the
+members, every member applies the same entry, and a restarted member learns
+its group from its own data directory.
 
-## Cluster Formation
+:::note
+**Two limits of the current release.** A cluster replicates one shard: leave
+`shards` at its default (it resolves to one on a member) or set it to 1; more
+is refused at start. And there is no `remove` yet: a member that leaves for
+good keeps counting toward the majority until it is removed — see
+[issue #95](https://github.com/floruntime/flo/issues/95).
+:::
 
-### Seed Nodes
+## Starting a Cluster
 
-A joining node needs at least one seed: the **Raft port** of a node already in
-the cluster, as `host:port`. The host may be an IPv4 address or a DNS name
-(a Compose service name works); peer links are IPv4 only.
+Every member proves the same shared secret at the peer port. Put it in
+`flo.toml` or in the `FLO_CLUSTER_SECRET` environment variable; generate one
+with `openssl rand -base64 32`. A node refuses to bind the peer port without
+one.
 
-```toml title="flo.toml"
+```toml title="flo.toml (every member)"
 [cluster]
 secret = "the same value on every node"
-seeds = ["10.0.1.10:9500", "10.0.1.11:9500"]
 ```
 
-Or on the command line: `flo server start --join 10.0.1.10:9500` (the secret
-comes from the config file, or from `FLO_CLUSTER_SECRET`).
+### The first member
 
-The secret is required whenever the Raft port is bound. A node that offers a
-different one never becomes a peer; the refusal is logged on both sides with
-the address it came from.
+```bash
+flo server start --cluster
+```
 
-Peers reach each other at the address a node advertises: its `[server] bind`
-address when that names an interface, otherwise the address the seed saw it
-connect from. A node bound to `0.0.0.0` therefore needs no extra
-configuration; a node bound to one interface is reached on that interface.
+It leads a group of one until others join. `[cluster] enabled = true` in the
+config file means the same as `--cluster`.
+
+### Joining
+
+```bash
+flo server start --join 10.0.1.10:9500
+```
+
+A seed is any member's **peer port** (`listen_port + 500`), as `host:port`;
+the host may be an IPv4 address or a DNS name (a Compose service name works).
+Several seeds are comma-separated. In the config file the same thing is
+`seeds = ["10.0.1.10:9500"]` with `enabled` left off.
+
+The joiner starts with no vote and asks the members it can reach, once a
+second, to be added. The leader writes a configuration entry naming it, one
+change at a time, and from then on it is a member. `flo cluster status` shows
+`joining` until that happens; a node still asking after thirty seconds logs
+what to check (the seed addresses, the secret, and that the group has room —
+a group holds at most 8 members).
+
+### Restarting a member
+
+Start it the same way it was started before, with `--cluster` or `--join`.
+Its membership comes from its log, not from the flags: a member restarted with
+`--join` needs no seed to be up to know its group, and a first member
+restarted with `--cluster` follows whatever configuration its log holds.
+
+A data directory that belonged to a group refuses to run without either flag:
+started plainly it would lead alone and take writes the group never sees.
+
+### What is refused at start
+
+| Situation | Answer |
+|-----------|--------|
+| `--cluster` and `--join` together | one starts the first member, the other joins; pass one |
+| `raft_port` set with neither | pick `--cluster` or `--join`, or remove the port |
+| `--join` with no seed whose address resolves | check the seed addresses, or start the first member with `--cluster` |
+| more than one shard in cluster mode | leave `shards` at its default or set 1 |
+| a key `[cluster]` does not read | the line names the keys that exist |
 
 ### Ports
 
-A clustered node binds an additional Raft port for inter-node traffic:
-
 | Port | Purpose |
 |------|---------|
-| `listen_port` | Client wire protocol |
-| `listen_port + 500` | Raft RPC between nodes (9500 by default) |
-| `listen_port + 600` | Gossip, only when `gossip_port` is set |
+| `listen_port` | Client wire protocol (9000 by default) |
+| `listen_port + 1` | Prometheus metrics |
+| `listen_port + 2` | Dashboard and REST API |
+| `listen_port + 500` | Peer port: Raft RPCs and forwarded writes between members (9500 by default) |
 
-The Raft port is bound **only when the node can actually have peers** — when
-any of `[cluster] enabled = true`, `seeds`, an explicit `raft_port`, or
-`replication_factor > 1` is configured. A single-node server leaves it unbound,
-so it is not a port operators need to declare to an orchestrator. The startup
-banner reports either the bound port or `not listening (single-node)`.
+The peer port is bound only by a node started with `--cluster`, `--join`, or
+`seeds`; a single node leaves it unbound, so there is no undeclared port to
+account for. It carries membership and log contents and must not be
+reachable from outside the cluster's private network; the secret authenticates
+peers, it does not encrypt the link.
 
-Raft and gossip ports carry unauthenticated inter-node traffic and must not be
-exposed outside the cluster's private network.
+Node ids are derived from `hostname:port` unless `--node-id` is given, and
+are stored in the data directory on first boot; to change one, start from an
+empty data directory.
 
-### Bootstrap
-
-The first node in a cluster bootstraps automatically when no seeds respond. Subsequent nodes join by contacting any existing member.
-
-```bash
-# First node (bootstraps)
-flo server start --port 9000 --raft-port 9500
-
-# Second node (joins via the first node's Raft port)
-flo server start --port 9000 --join 10.0.1.10:9500
-
-# Third node
-flo server start --port 9000 --join 10.0.1.10:9500,10.0.1.11:9500
-```
-
-Node ids are derived from `hostname:port` unless `--node-id` is given.
-
-## Partitioning
-
-Data is distributed across nodes using hash-based partitioning:
+## Writes and Reads
 
 ```
-hash(key) → partition_id (0..N)
-partition_table[partition_id] → (leader_node, replica_nodes)
+client → any member
+  ├─ the member leads: append to its log, replicate, a majority acks,
+  │  apply, answer
+  └─ it does not: carry the request to the leader over the peer link,
+     hold the client until this member has applied the result, answer
 ```
 
-The default partition count is 64. Each partition is a Raft group with a configurable replication factor (default: 3).
+A client never needs to know which node leads. What it can see:
 
-### Partition Assignment
+| Answer | Meaning | What to do |
+|--------|---------|------------|
+| `unavailable: electing a leader — retry` | no leader was known within 5 s | retry |
+| `unavailable: the leader is not reachable from this node — retry` | this node has no link to the leader | retry, or use another node |
+| `unavailable: lost leadership before commit — write may still apply` | the leader changed while the write waited | see below |
+| `unavailable: commit not confirmed in time — write may still apply` | the leader waited a failover timeout for a majority | see below |
+| `unavailable: leader changed, write not applied — retry` | the entry was overwritten by a new leader | retry |
+| `too many writes waiting for the leader` | 1024 forwarded writes are already held on this node | back off |
 
-The Controller Raft on Shard 0 manages partition assignments:
+The two "may still apply" answers are honest: the entry is in a log and a
+later leader holding it will commit it. A KV write can be sent again freely.
+A stream append or a queue push is not idempotent — read back before
+re-sending.
 
-| Event | Action |
-|-------|--------|
-| Node joins | Rebalance partitions to include new node |
-| Node leaves (graceful) | Migrate partitions before shutdown |
-| Node fails (detected by SWIM) | Raft elects new leader from remaining replicas |
-| Manual rebalance | Trigger via REST API or CLI |
-
-## Replication
-
-Each partition is a Raft group. The leader handles all writes; followers replicate:
-
-```
-Client → Leader Node → Raft propose
-  → Replicate to quorum (N/2+1 nodes)
-  → Commit → Apply to UAL → Update Projections
-  → Respond to client
-```
-
-### Replication Factor
-
-```toml
-[cluster]
-replication_factor = 3  # 1 leader + 2 followers per partition
-```
-
-With `replication_factor = 3`, the cluster tolerates 1 node failure per partition without data loss. With `replication_factor = 5`, it tolerates 2.
+Reads are local. On the node a client wrote to, the write is visible when the
+response arrives; on other members within about a heartbeat.
 
 ## Failure Handling
 
-### SWIM Protocol
+### Failover
 
-SWIM (Scalable Weakly-consistent Infection-style Membership) detects failures in O(log N) time:
+One setting governs timing:
 
-1. Each node periodically **pings** a random peer
-2. If no response, requests **indirect pings** through other members
-3. If still no response, marks the node as **suspect**
-4. After a configurable timeout, marks as **failed**
+```toml
+[cluster]
+failover_timeout_ms = 1500   # default; minimum 100
+```
 
-Parameters:
+A leader unheard for between half and all of it is replaced; heartbeats go
+out at a sixth of it. A leader that cannot reach a majority for that long
+steps down and answers every write it was holding. Elections are a poll
+first, so a member that was cut off does not depose a live leader when it
+returns. Typical failover is one to three seconds at the default.
 
-| Setting | Default | Description |
-|---------|---------|-------------|
-| `gossip.interval_ms` | 1000 | Ping interval |
-| `gossip.suspect_timeout_ms` | 5000 | Time before suspect → failed |
-| `gossip.indirect_checks` | 3 | Number of indirect ping relays |
+The default is deliberately generous: a busy disk's fsync must not look like
+a dead leader. Lower it only on fast, quiet disks.
 
-### Leader Election
+### Durability and the diverged state
 
-When a Raft leader fails:
+With `durability = "sync"` an acknowledgement means the write is on disk on a
+majority. A leader whose log contradicts history a member has committed is a
+bug, and the member refuses it.
 
-1. SWIM detects the failure
-2. Followers notice missing heartbeats
-3. A follower with the most up-to-date log starts a pre-vote
-4. If pre-vote succeeds, starts an election
-5. New leader elected and begins accepting writes
+With `async_flush` (the default) an acknowledgement comes from memory and is
+flushed within a second. A majority that crashes inside that window can lose
+acknowledged writes, and the survivors' logs follow the new leader.
 
-Typical failover time: **2-5 seconds** (SWIM detection + Raft election).
+Either way, a member whose applied state no longer matches the group marks
+itself **diverged**: it stops taking part (writes are refused with
+`unavailable: this node's data diverged from the group and it takes no
+writes; use another node`, reads still serve what it has), `flo cluster
+status` says `diverged`, and its log says what to do: stop it, delete its data
+directory, and start it again with `--join`.
+
+### A member that lost its data
+
+Start it with `--join`, never with `--cluster`: with `--cluster` an empty data
+directory leads a group of one and takes writes until the old group speaks,
+then ends up diverged with those writes lost.
 
 ## Monitoring
 
-### Cluster Status
+### Cluster status
 
 ```bash
 flo cluster status
 ```
 
-### Prometheus Metrics
+```
+Cluster Status
+──────────────
+Node ID:    flo-24e3b2
+Address:    127.0.0.1:9000
+Role:       leader
+Leader:     flo-24e3b2
+Term:       3
+Members:    3
+```
+
+| Role | Meaning |
+|------|---------|
+| `leader` | this node takes writes for the group |
+| `follower` | a member; writes are carried to the leader |
+| `electing` | a member choosing a leader; `Leader: none` |
+| `joining` | asking to be added; not a member yet |
+| `diverged` | stopped taking part; see above |
+
+`--output json` gives the same as one object, with `"leader_id": null` while
+none is known. A single node reports itself as the leader of a one-member
+group.
+
+`flo cluster members` and `flo cluster transfer-leader` are accepted by the
+CLI but not yet implemented by the server ([issue #95](https://github.com/floruntime/flo/issues/95)).
+
+### Prometheus metrics
 
 The node serves the Prometheus exposition format on the metrics port
 (`listen_port + 1` by default, so `9001` for a node on `9000`):
@@ -165,7 +219,9 @@ curl localhost:9001/metrics
 ```
 
 `GET /health` on the same port returns a small JSON liveness document with the
-shard count and uptime.
+shard count and uptime. It does not yet carry the node's role, so a load
+balancer cannot use it to route around a diverged member
+([issue #96](https://github.com/floruntime/flo/issues/96)).
 
 :::note
 **The metrics port binds to `127.0.0.1` by default.** `/metrics` and `/health`
@@ -183,63 +239,62 @@ Prefer a node-local collector or a sidecar over exposing the port directly.
 Metric families include server counters (`flo_commands_total`,
 `flo_bytes_received_total`, `flo_connections_current`, `flo_uptime_seconds`),
 per-shard gauges (`flo_shard_*`), per-stream / per-queue / per-KV-namespace
-counters, workflow and processing aggregates, and the replication counters:
+counters, workflow and processing aggregates, and the peer link counters:
 
 | Metric | Description |
 |--------|-------------|
-| `flo_replication_follower_gaps_total` | Replication gaps detected on a follower |
-| `flo_replication_follower_entries_missing_total` | Entries inferred missing across all gaps |
-| `flo_replication_broadcast_oversize_skipped_total` | Committed entries too large to broadcast |
-| `flo_replication_broadcast_send_failures_total` | Per-peer sends that failed and were not retried |
-| `flo_replication_last_gap_received_index` | Entry index at which a gap was last observed |
+| `flo_replication_peers_linked` | Peer links up right now |
+| `flo_replication_peer_disconnects_total` | Links that went down |
+| `flo_replication_handshake_failures_total` | Peers refused at the handshake (a wrong secret, mostly) |
+| `flo_replication_frames_rejected_total` | Frames that failed a check; each closed its link |
+| `flo_replication_frames_dropped_total` | Frames the shard could not queue |
+| `flo_replication_slow_peer_drops_total` | Links dropped for not reading |
 
-The same replication counters are also available as JSON from the dashboard at
-`GET /api/v1/metrics`, under `replication`.
-
-:::note
-**Alarm on the `flo_replication_*` counters.** Cross-node entry replication is
-currently best-effort broadcast: there is no acknowledgement, send-side gap
-detection, or repair path. If a follower misses a committed entry it stays
-missing — the leader has already acked the client.
-
-They exist so that failure is **visible** rather than silent. Any non-zero value
-means a replica has diverged and needs to be rebuilt from the leader.
-Divergence detection is implemented; automatic repair is not — see
-[issue #16](https://github.com/floruntime/flo/issues/16).
-:::
+The same counters are available as JSON from the dashboard at
+`GET /api/v1/metrics`, under `replication`. A `peers_linked` that stays below
+the member count minus one names a link that is down.
 
 :::note
-**Cluster-level names such as `flo_cluster_nodes`,
-`flo_raft_leader_elections_total` and `flo_gossip_members` are not
-implemented** — do not build scrape configs or alerts on them. The families
-documented above are populated from the live write paths.
-
-One exception worth knowing: `flo_tiered_log_cold_hits_total` is always `0`.
-The read path consults the hot ring and the warm store only, so a cold-tier
-read is never counted there rather than the counter being unwired.
+There are no `flo_raft_*` families yet (role, term, commit index, per-member
+lag); `flo cluster status` on each node is the signal until they land
+([issue #96](https://github.com/floruntime/flo/issues/96)). A counter such as
+`flo_tiered_log_cold_hits_total` is always `0`: the read path consults the hot
+ring and the warm store only.
 :::
 
-## Recommended Topologies
-
-### Development
-
-1 node, shard_count = 1, no replication.
-
-### Small Production
-
-3 nodes, replication_factor = 3. Tolerates 1 node failure.
-
-### Large Production
-
-5+ nodes, replication_factor = 3, 128+ partitions. Allows rolling upgrades with maintained quorum.
+## Configuration
 
 ```toml
 [cluster]
-secret = "the same value on every node"
-seeds = ["10.0.1.10:9500", "10.0.1.11:9500"]
-replication_factor = 3
-partition_count = 128
+enabled = false              # true starts the first member (same as --cluster)
+# secret = "..."             # required whenever the peer port is bound
+# node_id = 1                # default: derived from hostname:port, then stored
+# node_name = "..."          # optional, for people; ids are what the group uses
+# raft_port = 0              # 0 = listen_port + 500
+# seeds = ["10.0.1.10:9500"] # peer ports of members to join
+# failover_timeout_ms = 1500 # minimum 100
+```
 
-[node]
-shard_count = 8  # Match CPU core count
+These are the only keys `[cluster]` reads; any other key is refused at
+start, not ignored, and the line names the ones that exist. There are no
+per-timer settings (everything derives from `failover_timeout_ms`), no
+replication factor (every member holds a full copy, so it is the cluster
+size), and no gossip (members talk over the peer port).
+
+## Recommended Topologies
+
+**Development.** One node; nothing to configure.
+
+**Production.** Three members (tolerates one failure) or five (tolerates two),
+the peer port reachable only inside the private network, and
+`durability = "sync"` where an acknowledged write must survive a majority
+crash.
+
+```toml title="flo.toml (a joining member)"
+[storage]
+durability = "sync"
+
+[cluster]
+secret = "the same value on every node"
+seeds = ["10.0.1.10:9500"]
 ```
