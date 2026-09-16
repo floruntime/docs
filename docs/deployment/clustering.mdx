@@ -20,9 +20,10 @@ its group from its own data directory.
 :::note
 **Two limits of the current release.** A cluster replicates one shard: leave
 `shards` at its default (it resolves to one on a member) or set it to 1; more
-is refused at start. And there is no `remove` yet: a member that leaves for
-good keeps counting toward the majority until it is removed — see
-[issue #95](https://github.com/floruntime/flo/issues/95).
+is refused at start, and so is a data directory that was written with more
+than one shard — a member starts from an empty one. And there is no `remove`
+yet: a member that leaves for good keeps counting toward the majority until it
+is removed — see [issue #95](https://github.com/floruntime/flo/issues/95).
 :::
 
 ## Starting a Cluster
@@ -120,9 +121,11 @@ A client never needs to know which node leads. What it can see:
 | `unavailable: electing a leader — retry` | no leader was known within 5 s | retry |
 | `unavailable: the leader is not reachable from this node — retry` | this node has no link to the leader | retry, or use another node |
 | `unavailable: lost leadership before commit — write may still apply` | the leader changed while the write waited | see below |
+| `unavailable: lost the link to the leader — write may still apply` | the link the write went over dropped before an answer came | see below |
 | `unavailable: commit not confirmed in time — write may still apply` | the leader waited a failover timeout for a majority | see below |
 | `unavailable: leader changed, write not applied — retry` | the entry was overwritten by a new leader | retry |
 | `too many writes waiting for the leader` | 1024 forwarded writes are already held on this node | back off |
+| `too many writes waiting for commit on the leader` | the leader could not take one more forwarded write | back off |
 
 The two "may still apply" answers are honest: the entry is in a log and a
 later leader holding it will commit it. A KV write can be sent again freely.
@@ -165,9 +168,9 @@ acknowledged writes, and the survivors' logs follow the new leader.
 Either way, a member whose applied state no longer matches the group marks
 itself **diverged**: it stops taking part (writes are refused with
 `unavailable: this node's data diverged from the group and it takes no
-writes; use another node`, reads still serve what it has), `flo cluster
-status` says `diverged`, and its log says what to do: stop it, delete its data
-directory, and start it again with `--join`.
+writes; use another node`, reads still serve what it has), and `flo cluster
+status` and its log both say what to do: stop it, delete its data directory,
+and start it again with `--join` naming a live member — not `--cluster`.
 
 ### A member that lost its data
 
