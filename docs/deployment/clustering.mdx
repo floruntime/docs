@@ -125,6 +125,7 @@ A client never needs to know which node leads. What it can see:
 | `unavailable: leader changed, write not applied — retry` | the entry was overwritten by a new leader | retry |
 | `too many writes waiting for the leader` | 1024 forwarded writes are already held on this node | back off |
 | `too many writes waiting for commit on the leader` | the leader could not take one more forwarded write | back off |
+| `overloaded: too many writes waiting for commit — back off and retry` | 1024 writes are already waiting for a commit on the leader | back off |
 
 The two "may still apply" answers are honest: the entry is in a log and a
 later leader holding it will commit it. A KV write can be sent again freely.
