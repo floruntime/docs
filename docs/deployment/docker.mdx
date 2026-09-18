@@ -18,7 +18,7 @@ docker run -d \
   -p 9000:9000 \
   -p 9001:9001 \
   -p 9002:9002 \
-  -v flo-data:/data \
+  -v flo-data:/data/flo \
   ghcr.io/floruntime/flo:latest
 ```
 
@@ -91,10 +91,7 @@ services:
       - "9001:9001"
       - "9002:9002"
     volumes:
-      - flo-data:/data
-    environment:
-      - FLO_DATA_DIR=/data
-      - FLO_PORT=9000
+      - flo-data:/data/flo
     restart: unless-stopped
 
 volumes:
@@ -103,56 +100,56 @@ volumes:
 
 ## Docker Compose — 3-Node Cluster
 
+The first member starts with `--cluster`; the others join it at its peer port
+(`listen_port + 500`). Every member proves the same secret, here from the
+environment. The image's own config (`/etc/flo/flo.toml`) stays on the command
+line: it is what puts the data under the mounted volume and binds the metrics
+and dashboard ports to every interface. A cluster replicates one shard, and
+the image's automatic shard count resolves to one.
+
 ```yaml
 version: "3.8"
+x-flo: &flo
+  image: ghcr.io/floruntime/flo:latest
+  security_opt:
+    - seccomp:unconfined
+  environment:
+    - FLO_CLUSTER_SECRET=change-me-same-on-every-node
+  restart: unless-stopped
+
 services:
   flo-1:
-    image: ghcr.io/floruntime/flo:latest
-    security_opt:
-      - seccomp:unconfined
+    <<: *flo
     hostname: flo-1
+    command: ["server", "start", "-c", "/etc/flo/flo.toml", "--cluster"]
     ports:
       - "9000:9000"
       - "9001:9001"
       - "9002:9002"
-    environment:
-      - FLO_DATA_DIR=/data
-      - FLO_PORT=9000
-      - FLO_CLUSTER_SEEDS=flo-2:9500,flo-3:9500
     volumes:
-      - flo-1-data:/data
+      - flo-1-data:/data/flo
 
   flo-2:
-    image: ghcr.io/floruntime/flo:latest
-    security_opt:
-      - seccomp:unconfined
+    <<: *flo
     hostname: flo-2
+    command: ["server", "start", "-c", "/etc/flo/flo.toml", "--join", "flo-1:9500"]
     ports:
       - "9010:9000"
       - "9011:9001"
       - "9012:9002"
-    environment:
-      - FLO_DATA_DIR=/data
-      - FLO_PORT=9000
-      - FLO_CLUSTER_SEEDS=flo-1:9500,flo-3:9500
     volumes:
-      - flo-2-data:/data
+      - flo-2-data:/data/flo
 
   flo-3:
-    image: ghcr.io/floruntime/flo:latest
-    security_opt:
-      - seccomp:unconfined
+    <<: *flo
     hostname: flo-3
+    command: ["server", "start", "-c", "/etc/flo/flo.toml", "--join", "flo-1:9500"]
     ports:
       - "9020:9000"
       - "9021:9001"
       - "9022:9002"
-    environment:
-      - FLO_DATA_DIR=/data
-      - FLO_PORT=9000
-      - FLO_CLUSTER_SEEDS=flo-1:9500,flo-2:9500
     volumes:
-      - flo-3-data:/data
+      - flo-3-data:/data/flo
 
 volumes:
   flo-1-data:
@@ -160,28 +157,30 @@ volumes:
   flo-3-data:
 ```
 
+Members find each other on the Compose network by service name; the peer port
+is never published. A joiner started before `flo-1` resolves exits, and
+`restart: unless-stopped` brings it back. A restarted member keeps the same
+command line: its membership comes from its volume. `flo cluster status`
+against any published port shows the role of that node.
+
 ## Environment Variables
 
-All `flo.toml` settings can be overridden with `FLO_` prefixed environment variables:
+The image reads two variables; everything else comes from `flo.toml` (mounted
+at `/etc/flo/flo.toml`) or from flags on the command line:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `FLO_DATA_DIR` | `./data` | Data directory path |
-| `FLO_PORT` | `9000` | Client protocol port |
-| `FLO_METRICS_PORT` | `9001` | Prometheus metrics port |
-| `FLO_DASHBOARD_PORT` | `9002` | Dashboard REST API port |
-| `FLO_SHARD_COUNT` | CPU count | Number of shard threads |
-| `FLO_NODE_ID` | auto | Unique node identifier |
-| `FLO_CLUSTER_SEEDS` | — | Comma-separated seed node addresses |
-| `FLO_LOG_LEVEL` | `info` | Logging level (debug, info, warn, err) |
+| `FLO_DATA_DIR` | `/data/flo` | Data directory the entrypoint prepares for the `flo` user |
+| `FLO_CLUSTER_SECRET` | — | The shared secret every member proves at the peer port |
 
 ## Health Check
 
-For a **liveness** probe inside the container, the CLI is enough:
+For a **liveness** probe inside the container, use the dashboard's `/health`
+(the image's own `HEALTHCHECK` does the same):
 
 ```yaml
 healthcheck:
-  test: ["CMD", "flo", "server", "status"]
+  test: ["CMD-SHELL", "curl -sf http://localhost:9002/health || exit 1"]
   interval: 10s
   timeout: 5s
   retries: 3
@@ -208,22 +207,23 @@ which reads like a broken health check rather than a bind address. Bind to
 
 ## Volumes and Data Persistence
 
-Always mount a volume at `/data` to persist data across container restarts:
+The image's config puts data under `/data/flo`; mount a volume there so it
+survives container restarts:
 
 ```bash
 docker volume create flo-data
-docker run -v flo-data:/data ghcr.io/floruntime/flo:latest
+docker run -v flo-data:/data/flo ghcr.io/floruntime/flo:latest
 ```
 
 The data directory structure:
 
 ```
-/data/
-├── {shard_id}/
-│   ├── uat/{partition_id}/      # UAL segments
-│   ├── snapshots/{partition_id}/ # Projection snapshots
-│   └── ts/{partition_id}/       # Time-series columnar files
-└── flo.toml                     # Config (if not using env vars)
+/data/flo/
+└── 00000/          # one directory per shard
+    ├── segs/       # the durable log
+    ├── snaps/      # projection snapshots
+    ├── HARDSTATE   # the node's id and its Raft term and vote
+    └── MANIFEST
 ```
 
 ## Building the Image

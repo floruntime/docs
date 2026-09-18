@@ -92,7 +92,7 @@ flo ts read cpu --tags host=web-01 --field system --from -1h
 flo ts read cpu --tags host=web-01 --from -1h --limit 100
 
 # Output as JSON
-flo ts read cpu --tags host=web-01 --from -1h --format json
+flo ts read cpu --tags host=web-01 --from -1h -o json
 ```
 
 The `--from` and `--to` flags accept relative durations (`-1h`, `-30m`, `-7d`) or absolute epoch-millisecond timestamps.
@@ -267,7 +267,7 @@ flo ts list cpu --fields
 flo ts list --limit 50
 
 # JSON output
-flo ts list --format json
+flo ts list -o json
 ```
 
 ### Delete

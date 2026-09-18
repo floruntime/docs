@@ -7,11 +7,11 @@ lede: Complete reference for the flo command-line interface.
 
 | Flag | Description |
 |------|-------------|
-| `--host <addr>` | Server address (default: `localhost:9000`) |
-| `--namespace <name>` | Namespace for operations (default: `default`) |
-| `--timeout <ms>` | Operation timeout in milliseconds |
-| `--format <fmt>` | Output format: `text`, `json` |
-| `--debug` | Enable debug output |
+| `-e, --endpoint <host:port>` | Server endpoint (default: `localhost:9000`) |
+| `-p, --port <port>` | Server port, when the host is the default |
+| `-n, --namespace <name>` | Namespace for operations (default: `default`) |
+| `-o, --output <fmt>` | Output format: `table`, `json`, `raw` |
+| `-v, --verbose` | Verbose output |
 
 ## Server
 
@@ -27,10 +27,12 @@ flo server start [options]
 |------|-------------|---------|
 | `-c, --config <path>` | Config file path | `flo.toml` |
 | `--port <port>` | Client protocol port | `9000` |
-| `--data-dir <path>` | Data directory | `./data` |
-| `--shard-count <n>` | Number of shard threads | CPU count |
-| `--node-id <id>` | Unique node identifier | auto |
-| `--seeds <addrs>` | Cluster seed addresses | — |
+| `--data-dir <path>` | Data directory | `~/.flo/data` |
+| `--shards <n>` | Number of shard threads; a cluster member runs 1 (the default resolves to it) | CPU count |
+| `--cluster` | Start as the first member of a cluster; leads alone until others join | — |
+| `--join <host:port,...>` | Join members that exist, by their peer port (`listen_port + 500`) | — |
+| `--node-id <id>` | Unique node identifier | derived from `hostname:port` |
+| `--raft-port <port>` | Peer port, with `--cluster` or `--join` | `listen_port + 500` |
 
 ### `flo server status`
 
@@ -182,7 +184,7 @@ flo kv rollback <txn-id>               # discard buffered ops
 Add `--txn <id>` to any of `set`, `get`, `delete`, `incr`, `touch`, `persist`, `exists` to run that operation inside the transaction:
 
 ```bash
-TXN=$(flo kv begin user:42 --format json | jq -r .txn_id)
+TXN=$(flo kv begin user:42 -o json | jq -r .txn_id)
 flo kv set  user:42:name "Jane" --txn "$TXN"
 flo kv incr user:42:visits      --txn "$TXN"
 flo kv commit "$TXN"
@@ -469,16 +471,14 @@ flo processing stop <job-id>
 
 ### `flo cluster status`
 
-Show cluster membership and partition distribution.
+Show this node's id, role (`leader`, `follower`, `electing`, `joining`,
+`diverged`), the leader it knows (`none` while electing or joining), the term
+and the member count. `-o json` gives the same as one object.
 
 ```bash
 flo cluster status
+flo cluster status -o json
 ```
 
-### `flo cluster rebalance`
-
-Trigger partition rebalancing.
-
-```bash
-flo cluster rebalance
-```
+`flo cluster members` and `flo cluster transfer-leader` are accepted by the
+CLI but not yet implemented by the server.

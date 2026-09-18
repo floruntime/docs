@@ -16,7 +16,7 @@ flo server start --config /etc/flo/flo.toml
 Generate a default config file with all options:
 
 ```bash
-flo server start --default-config > flo.toml
+flo config init
 ```
 
 ## Full Reference
@@ -139,15 +139,12 @@ where the port is not publicly routable. See
 
 ```toml
 [cluster]
-enabled = false
-# secret = "..."          # required whenever the Raft port is bound; same value on every node
+enabled = false              # true starts the first member of a cluster (same as --cluster)
+# secret = "..."             # required whenever the peer port is bound; same value on every node
 # node_id = 1
-# raft_port = 0           # 0 = auto (listen_port + 500)
-# seeds = "192.168.1.10:9500,192.168.1.11:9500"
-# replication_factor = 3
-# election_timeout_min_ms = 150
-# election_timeout_max_ms = 300
-# heartbeat_interval_ms = 50
+# raft_port = 0              # 0 = auto (listen_port + 500)
+# seeds = ["192.168.1.10:9500"]  # peer ports of members to join (same as --join)
+# failover_timeout_ms = 1500 # a leader unheard for this long is replaced; minimum 100
 ```
 
 `secret` is what a node proves it holds before another node treats it as a
@@ -162,11 +159,17 @@ names the key.
 `node_id` is read on first boot and then stored in the data dir, which wins on
 every later boot; to change a node's id, start it from an empty data dir.
 
-The Raft port is bound only when this node can actually have peers — that is,
-when any of `enabled = true`, `seeds`, an explicit `raft_port`, or
-`replication_factor > 1` is set. A plain single-node server does **not** listen
-on `listen_port + 500`, so there is no undeclared port to account for. The
-startup banner reports which of the two applies.
+The peer port is bound only when this node can have peers: `enabled = true`
+starts the first member of a cluster, `seeds` joins members that exist, and
+the two are not combined. A plain single-node server does **not** listen on
+`listen_port + 500`, so there is no undeclared port to account for; a
+`raft_port` set without either role is refused at start. The startup banner
+reports which applies.
+
+`failover_timeout_ms` is the one timing setting: a leader unheard for between
+half and all of it is replaced, heartbeats go out at a sixth of it. These are
+the only keys `[cluster]` reads; any other key is refused at start, not
+silently ignored. See [Clustering](/deployment/clustering).
 
 ### `[cold_storage]`
 
@@ -206,12 +209,9 @@ flo server start \
   --no-dashboard
 ```
 
-Clustering flags:
+Clustering flags — the first member, then one that joins it:
 
 ```bash
-flo server start \
-  --node-id 1 \
-  --raft-port 9500 \
-  --gossip-port 9600 \
-  --join "192.168.1.10:9500,192.168.1.11:9500"
+flo server start --cluster
+flo server start --join 192.168.1.10:9500
 ```
