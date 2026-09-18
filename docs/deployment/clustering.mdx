@@ -122,7 +122,6 @@ A client never needs to know which node leads. What it can see:
 | `unavailable: the leader is not reachable from this node — retry` | this node has no link to the leader | retry, or use another node |
 | `unavailable: lost leadership before commit — write may still apply` | the leader changed while the write waited | see below |
 | `unavailable: lost the link to the leader — write may still apply` | the link the write went over dropped before an answer came | see below |
-| `unavailable: commit not confirmed in time — write may still apply` | the leader waited a failover timeout for a majority | see below |
 | `unavailable: leader changed, write not applied — retry` | the entry was overwritten by a new leader | retry |
 | `too many writes waiting for the leader` | 1024 forwarded writes are already held on this node | back off |
 | `too many writes waiting for commit on the leader` | the leader could not take one more forwarded write | back off |
