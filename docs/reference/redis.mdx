@@ -95,7 +95,8 @@ For atomic increments specifically, prefer `INCR` / `kv.incr` — it's unconditi
 
 | Area | Behavior |
 |------|----------|
-| Persistence | Every write is Raft-replicated and committed to UAL before responding. There is no `SAVE`/`BGSAVE` — Flo is always durable. |
+| Persistence | Stream appends (`XADD`) and queue pushes (`LPUSH`/`RPUSH`) go through the log and are answered once they apply. Key-value writes over RESP (`SET`, `DEL`, `INCR`, …) go to the node's memory only: they are not replicated and do not survive a restart ([flo#106](https://github.com/floruntime/flo/issues/106)). Use the Flo protocol for durable key-value writes. |
+| Clusters | RESP writes are served by a single-node server; a multi-member group refuses them with `-ERR`. Use the Flo protocol on a cluster. |
 | Eviction | No `maxmemory` LRU eviction. Out-of-memory rejects new writes; configure TTLs explicitly. |
 | Pub/Sub | Not supported via RESP. Use [Streams](/primitives/stream) or [Streaming Updates](/primitives/kv#streaming-updates). |
 | Lua scripting | `EVAL`/`EVALSHA` not supported. Use [Stream Processing](/orchestration/processing) for server-side logic. |

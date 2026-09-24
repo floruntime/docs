@@ -122,15 +122,26 @@ A client never needs to know which node leads. What it can see:
 | `unavailable: the leader is not reachable from this node — retry` | this node has no link to the leader | retry, or use another node |
 | `unavailable: lost leadership before commit — write may still apply` | the leader changed while the write waited | see below |
 | `unavailable: lost the link to the leader — write may still apply` | the link the write went over dropped before an answer came | see below |
-| `unavailable: commit not confirmed in time — write may still apply` | the leader waited a failover timeout for a majority | see below |
 | `unavailable: leader changed, write not applied — retry` | the entry was overwritten by a new leader | retry |
 | `too many writes waiting for the leader` | 1024 forwarded writes are already held on this node | back off |
-| `too many writes waiting for commit on the leader` | the leader could not take one more forwarded write | back off |
+| `overloaded: too many writes waiting for commit — back off and retry` | 1024 writes are already waiting for a commit on the leader | back off |
+| `internal error: could not hold the request until commit — write may still apply` | the leader proposed the write but could not keep the request to answer it | see below |
+| `internal error: write committed but its answer was lost — do not resend` | the write committed and applied, but its answer could not be built | do not resend |
+| `internal error: write committed but not applied on this node — do not resend` | the group committed the write but this node could not apply it | do not resend |
 
-The two "may still apply" answers are honest: the entry is in a log and a
-later leader holding it will commit it. A KV write can be sent again freely.
-A stream append or a queue push is not idempotent — read back before
-re-sending.
+The "may still apply" answers are honest: the entry is in a log and a
+later leader holding it will commit it. What to do before sending it again
+depends on the write:
+
+- A plain KV put or delete can be sent again.
+- A KV increment, a JSON update, a stream append or a queue push cannot:
+  read back first.
+- A conditional KV put (`NX`, CAS) that now answers "condition not met" may
+  have met its condition the first time.
+- A workflow start with an idempotency key can be sent again: it answers
+  with the run the first one started.
+- A namespace create sent again answers `conflict: namespace already
+  exists` if the first one landed.
 
 Reads are local. On the node a client wrote to, the write is visible when the
 response arrives; on other members within about a heartbeat.
