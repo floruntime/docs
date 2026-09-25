@@ -111,6 +111,8 @@ flo stream append events 'hello' --json
 
 The response includes the assigned Stream ID (e.g., `1703350800000-0`).
 
+One append — all its records and headers together — takes at most 64 KiB.
+
 ### Read
 
 ```bash

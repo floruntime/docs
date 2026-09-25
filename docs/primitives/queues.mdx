@@ -55,7 +55,7 @@ flo queue enqueue tasks '{"urgent":true}' --priority 1
 flo queue enqueue tasks '{"scheduled":true}' --delay 60000
 ```
 
-The response returns the assigned sequence number.
+The response returns the assigned sequence number. A message takes at most 64 KiB.
 
 ### Dequeue
 
