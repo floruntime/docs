@@ -826,7 +826,7 @@ flo processing submit job.yaml -n staging
 Job state survives node restarts:
 
 - Submitted jobs persist and resume on restart — the execution pipeline is rebuilt for `RUNNING` jobs, not just the registry entry, so a job keeps consuming after restart instead of becoming an idle zombie
-- Stream-source pipelines resume from a **durable source cursor** rather than re-reading from the beginning. The cursor is persisted as a `processing_checkpoint` entry (debounced to ≥1s per pipeline to bound write amplification)
+- Stream- and time-series-source pipelines resume from a **durable source cursor** rather than re-reading from the beginning. The cursor is persisted as a `processing_checkpoint` entry (debounced to ≥1s per pipeline to bound write amplification)
 - Recovery is **at-least-once**: a crash loses at most the debounce window, which redelivers — it never skips records
 - Stopped and cancelled job states are preserved (they stay idle on restart)
 - Rescaled parallelism is remembered

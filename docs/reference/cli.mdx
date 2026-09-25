@@ -28,7 +28,7 @@ flo server start [options]
 | `-c, --config <path>` | Config file path | `flo.toml` |
 | `--port <port>` | Client protocol port | `9000` |
 | `--data-dir <path>` | Data directory | `~/.flo/data` |
-| `--shards <n>` | Number of shard threads; a cluster member runs 1 (the default resolves to it) | CPU count |
+| `--shards <n>` | Number of shard threads, at most 256; a cluster member runs 1 (the default resolves to it) | CPU count |
 | `--cluster` | Start as the first member of a cluster; leads alone until others join | — |
 | `--join <host:port,...>` | Join members that exist, by their peer port (`listen_port + 500`) | — |
 | `--node-id <id>` | Unique node identifier | derived from `hostname:port` |
@@ -68,7 +68,8 @@ flo kv get <key> [options]
 
 | Flag | Description |
 |------|-------------|
-| `--block <ms>` | Block until key appears |
+| `--wait <ms>` | Wait until the key exists (at most 5 minutes; 0 or anything longer means 5 minutes) |
+| `--block <ms>` | Wait for the key's next change (at most 5 minutes; 0 or anything longer means 5 minutes). On timeout, prints the unchanged value, or not found if the key is gone |
 
 ### `flo kv mget`
 
@@ -229,6 +230,7 @@ flo stream read <stream> [options]
 |------|-------------|
 | `--offset <n>` | Start offset |
 | `--count <n>` | Number of records |
+| `--block <ms>` | Wait for new records (at most 5 minutes; 0 or anything longer means 5 minutes) |
 | `--follow` | Follow mode (block for new records) |
 
 ### `flo stream info`
@@ -297,7 +299,7 @@ flo queue dequeue <queue> [options]
 | Flag | Description |
 |------|-------------|
 | `--count <n>` | Number of messages (default: 1) |
-| `--block <ms>` | Block until messages available |
+| `--block <ms>` | Wait for messages (at most 5 minutes; 0 or anything longer means 5 minutes) |
 | `--visibility <ms>` | Visibility timeout for leased messages |
 
 ### `flo queue ack`
@@ -424,6 +426,10 @@ Start a workflow execution.
 ```bash
 flo workflow start <name> [data]
 ```
+
+| Flag | Description |
+|------|-------------|
+| `--run-id <id>` | Choose the run's id. Ids of the form `wfr-<hex>-<hex>` are the server's and are refused |
 
 ### `flo workflow status`
 

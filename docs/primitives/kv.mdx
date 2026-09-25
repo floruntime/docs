@@ -69,8 +69,8 @@ flo kv get mykey -o json   # includes version number
 
 | Flag | Description |
 |------|-------------|
-| `--wait <ms>` | Wait until the key exists, then return (0 = the 5-minute maximum) |
-| `--block <ms>` | Wait for the **next version change**, even if the key already exists (0 = the 5-minute maximum) |
+| `--wait <ms>` | Wait until the key exists, then return (at most 5 minutes; 0 or anything longer means 5 minutes) |
+| `--block <ms>` | Wait for the **next version change**, even if the key already exists (at most 5 minutes; 0 or anything longer means 5 minutes) |
 | `--format <fmt>` | Output format: `json`, `table`, `raw` |
 | `-n <namespace>` | Target namespace |
 | `-r <routing-key>` | Explicit shard routing key |
@@ -78,7 +78,7 @@ flo kv get mykey -o json   # includes version number
 `--wait` and `--block` serve different purposes:
 
 - **`--wait`** is for coordination — one process creates a key, another waits for it to appear. If the key already exists, it returns immediately.
-- **`--block`** is for watching — subscribe to the next change on an existing key. Even if the key exists now, it waits for a newer version.
+- **`--block`** is for watching — subscribe to the next change on an existing key. Even if the key exists now, it waits for a newer version. If nothing changes in time, it returns the current value with its unchanged version, so a watcher can compare and ask again; a key that is gone returns not found.
 
 ```bash
 # Process A: wait for a result to appear

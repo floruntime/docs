@@ -137,7 +137,7 @@ Blocking reads wait for new data instead of returning empty results immediately.
 # Block up to 5 seconds for new records
 flo stream read events --block 5000 --start 0-0 --limit 5
 
-# Block as long as the server allows (0 = the 5-minute maximum)
+# Block as long as the server allows: 5 minutes
 flo stream read events --block 0 --start 0-0 --limit 5
 
 # Block for new records from the tail only (skip existing data)
@@ -507,7 +507,7 @@ try stream.groupAck("events", "processors", group_records.ids(), .{
 | From ID | `--start <id>` | Returns records starting at (or after) the given Stream ID |
 | Range | `--start <id> --end <id>` | Bounded range, inclusive on both ends |
 | Tail | `--start '$'` | Only records appended after the read begins |
-| Blocking | `--block <ms>` | Waits up to `<ms>` for new data (0, or more than 5 minutes, means 5 minutes) |
+| Blocking | `--block <ms>` | Waits up to `<ms>` for new data (at most 5 minutes; 0 or anything longer means 5 minutes) |
 | Follow | `--follow` | Continuous tail — keeps reading as new records arrive |
 | Partition | `--partition <n>` | Reads from a specific partition only |
 | Partition key | `--partition-key <key>` | Reads from the partition that key hashes to |
