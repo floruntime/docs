@@ -69,8 +69,8 @@ flo kv get mykey -o json   # includes version number
 
 | Flag | Description |
 |------|-------------|
-| `--wait <ms>` | Wait until the key exists, then return (at most 5 minutes; 0 or anything longer means 5 minutes) |
-| `--block <ms>` | Wait for the **next version change**, even if the key already exists (at most 5 minutes; 0 or anything longer means 5 minutes) |
+| `--wait <ms>` | Wait until the key exists, then return (at most 300000 ms, 5 minutes; 0 does not wait; a longer wait is refused) |
+| `--block <ms>` | Wait for the **next version change**, even if the key already exists (at most 300000 ms, 5 minutes; 0 does not wait; a longer wait is refused) |
 | `--format <fmt>` | Output format: `json`, `table`, `raw` |
 | `-n <namespace>` | Target namespace |
 | `-r <routing-key>` | Explicit shard routing key |
@@ -85,7 +85,7 @@ flo kv get mykey -o json   # includes version number
 flo kv get job:result --wait 30000
 
 # Process B: watch for config changes
-flo kv get config:feature-flags --block 0
+flo kv get config:feature-flags --block 300000
 ```
 
 ### Multi-key get
@@ -770,7 +770,7 @@ Store configuration per environment using namespaces, and watch for changes with
 flo kv set feature:dark-mode "true" -n production
 
 # Watch for config changes (long-poll)
-flo kv get feature:dark-mode --block 0 -n production
+flo kv get feature:dark-mode --block 300000 -n production
 ```
 
 ### Job Coordination

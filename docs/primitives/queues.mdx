@@ -80,8 +80,9 @@ If the queue is empty, a blocking dequeue waits for new messages instead of retu
 # Block up to 30 seconds for new messages
 flo queue dequeue tasks --block 30000
 
-# Block as long as the server allows: 5 minutes
-flo queue dequeue tasks --block 0
+# The longest wait the server allows: 5 minutes (a longer one is refused;
+# 0 does not wait)
+flo queue dequeue tasks --block 300000
 ```
 
 When a new message is enqueued, all blocking dequeue waiters on that queue are notified. If the timeout expires with no messages, an empty (but successful) result is returned.
