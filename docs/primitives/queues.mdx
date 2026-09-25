@@ -80,7 +80,7 @@ If the queue is empty, a blocking dequeue waits for new messages instead of retu
 # Block up to 30 seconds for new messages
 flo queue dequeue tasks --block 30000
 
-# Block indefinitely (0 = wait forever)
+# Block as long as the server allows (0 = the 5-minute maximum)
 flo queue dequeue tasks --block 0
 ```
 

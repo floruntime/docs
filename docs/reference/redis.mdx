@@ -59,7 +59,7 @@ Path syntax is a small JSONPath subset: `$`, `.field`, `.field.nested`, `[index]
 |-------|-----------|-------|
 | `LPUSH queue value` | `queue_enqueue` | |
 | `RPOP queue` | `queue_dequeue` | Single-message dequeue. |
-| `BRPOP queue timeout` | `queue_dequeue` + `block_ms` | Long-poll. |
+| `BRPOP queue timeout` | `queue_dequeue` + `block_ms` | Long-poll, at most 5 minutes; a timeout of 0 means 5 minutes, not forever. |
 
 Flo queues are leased / acked, not auto-removed. After `RPOP`, the message is held under a lease until ack/nack/expiry. See [Queues](/primitives/queue).
 

@@ -69,8 +69,8 @@ flo kv get mykey -o json   # includes version number
 
 | Flag | Description |
 |------|-------------|
-| `--wait <ms>` | Wait until the key exists, then return (0 = wait forever) |
-| `--block <ms>` | Wait for the **next version change**, even if the key already exists (0 = forever) |
+| `--wait <ms>` | Wait until the key exists, then return (0 = the 5-minute maximum) |
+| `--block <ms>` | Wait for the **next version change**, even if the key already exists (0 = the 5-minute maximum) |
 | `--format <fmt>` | Output format: `json`, `table`, `raw` |
 | `-n <namespace>` | Target namespace |
 | `-r <routing-key>` | Explicit shard routing key |
