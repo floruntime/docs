@@ -69,8 +69,8 @@ flo kv get mykey -o json   # includes version number
 
 | Flag | Description |
 |------|-------------|
-| `--wait <ms>` | Wait until the key exists, then return (0 = wait forever) |
-| `--block <ms>` | Wait for the **next version change**, even if the key already exists (0 = forever) |
+| `--wait <ms>` | Wait until the key exists, then return; `block_ms` on the wire (at most 300000 ms, 5 minutes; 0 does not wait; a longer wait is refused) |
+| `--block <ms>` | Wait for the **next version change**, even if the key already exists; `wait_ms` on the wire (at most 300000 ms, 5 minutes; 0 does not wait; a longer wait is refused) |
 | `--format <fmt>` | Output format: `json`, `table`, `raw` |
 | `-n <namespace>` | Target namespace |
 | `-r <routing-key>` | Explicit shard routing key |
@@ -78,14 +78,14 @@ flo kv get mykey -o json   # includes version number
 `--wait` and `--block` serve different purposes:
 
 - **`--wait`** is for coordination — one process creates a key, another waits for it to appear. If the key already exists, it returns immediately.
-- **`--block`** is for watching — subscribe to the next change on an existing key. Even if the key exists now, it waits for a newer version.
+- **`--block`** is for watching — subscribe to the next change on an existing key. Even if the key exists now, it waits for a newer version. If nothing changes in time, it returns the current value with its unchanged version, so a watcher can compare and ask again; a key that is gone returns not found.
 
 ```bash
 # Process A: wait for a result to appear
 flo kv get job:result --wait 30000
 
 # Process B: watch for config changes
-flo kv get config:feature-flags --block 0
+flo kv get config:feature-flags --block 300000
 ```
 
 ### Multi-key get
@@ -770,7 +770,7 @@ Store configuration per environment using namespaces, and watch for changes with
 flo kv set feature:dark-mode "true" -n production
 
 # Watch for config changes (long-poll)
-flo kv get feature:dark-mode --block 0 -n production
+flo kv get feature:dark-mode --block 300000 -n production
 ```
 
 ### Job Coordination

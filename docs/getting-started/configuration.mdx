@@ -28,8 +28,8 @@ flo config init
 port = 9000               # Client API port (binary protocol + WebSocket)
 bind = "0.0.0.0"          # Bind address
 data_dir = "~/.flo/data"  # Data directory for UAL segments and storage files
-shards = 0                # Number of shards (0 = auto-detect CPU count)
-# partition_count = 0     # Virtual partitions (0 = auto: max(4096, shards × 32))
+shards = 0                # Number of shards, at most 256 (0 = auto-detect CPU count)
+# partition_count = 0     # Virtual partitions, at most 16384 (0 = auto: max(4096, shards × 32))
 ```
 
 `shards` and `partition_count` define the on-disk data layout. **Cannot be changed after data exists without rebalancing.**

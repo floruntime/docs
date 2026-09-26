@@ -59,7 +59,7 @@ Path syntax is a small JSONPath subset: `$`, `.field`, `.field.nested`, `[index]
 |-------|-----------|-------|
 | `LPUSH queue value` | `queue_enqueue` | |
 | `RPOP queue` | `queue_dequeue` | Single-message dequeue. |
-| `BRPOP queue timeout` | `queue_dequeue` + `block_ms` | Long-poll. |
+| `BRPOP queue timeout` | — | Not supported. Use `flo queue dequeue --block` or an SDK for a blocking dequeue. |
 
 Flo queues are leased / acked, not auto-removed. After `RPOP`, the message is held under a lease until ack/nack/expiry. See [Queues](/primitives/queue).
 
@@ -68,7 +68,7 @@ Flo queues are leased / acked, not auto-removed. After `RPOP`, the message is he
 | Redis | Flo opcode | Notes |
 |-------|-----------|-------|
 | `XADD stream * field value` | `stream_append` | |
-| `XREAD COUNT n STREAMS stream id` | `stream_read` | |
+| `XREAD COUNT n STREAMS stream id` | `stream_read` | One stream. `BLOCK` is accepted but ignored: the read returns at once. |
 | `XLEN stream` | `stream_info` | |
 
 ## Optimistic concurrency: WATCH/MULTI/EXEC
