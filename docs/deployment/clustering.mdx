@@ -128,6 +128,10 @@ A client never needs to know which node leads. What it can see:
 | `internal error: could not hold the request until commit — write may still apply` | the leader proposed the write but could not keep the request to answer it | see below |
 | `internal error: write committed but its answer was lost — do not resend` | the write committed and applied, but its answer could not be built | do not resend |
 | `internal error: write committed but not applied on this node — do not resend` | the group committed the write but this node could not apply it | do not resend |
+| `overloaded: shard N is not keeping up; this request was not run — back off and retry` | the shard that owns the key has too many requests from this one unanswered | back off and retry |
+| `overloaded: shard N is behind on taking requests; this request was not run — back off and retry` | the shard that owns the key has not taken the requests already sent it | back off and retry |
+| `overloaded: too many requests in flight to other shards; this request was not run — back off and retry` | the shard your connection is on is waiting on too many answers | back off and retry |
+| `unavailable: shard N did not answer in 320 s — the request may still apply` | the shard that owns the key never answered | see below |
 
 The "may still apply" answers are honest: the entry is in a log and a
 later leader holding it will commit it. What to do before sending it again
@@ -264,19 +268,20 @@ counters, workflow and processing aggregates, and the peer link counters:
 | `flo_replication_frames_dropped_total` | Frames the shard could not queue |
 | `flo_replication_slow_peer_drops_total` | Links dropped for not reading |
 
-A node's shards hand each other client requests for keys they own. The
-per-shard series for that traffic:
-
-| Metric | Description |
-|--------|-------------|
-| `flo_shard_cross_shard_requests_in_flight{class}` | Client requests sent to another shard and not yet answered |
-| `flo_shard_cross_shard_overloaded_total{class}` | Requests refused before they ran (the client was answered `overloaded`) |
-| `flo_shard_cross_shard_timeouts_total{class}` | Requests another shard did not answer in time; the client was told they may still apply |
-| `flo_shard_replies_dropped_total` | Answers lost between shards. Anything but 0 is a bug — alert on it and report it |
-
 The same counters are available as JSON from the dashboard at
 `GET /api/v1/metrics`, under `replication`. A `peers_linked` that stays below
 the member count minus one names a link that is down.
+
+A node's shards hand each other client requests for keys they own. The
+per-shard series for that traffic (not in the JSON above):
+
+| Metric | Description |
+|--------|-------------|
+| `flo_shard_cross_shard_requests_in_flight{class="client_forward"}` | Client requests sent to another shard and not yet answered |
+| `flo_shard_oldest_cross_shard_wait_seconds` | How long the oldest of those has waited; a shard that stops answering shows here first |
+| `flo_shard_cross_shard_overloaded_total{class}` | Requests refused before they ran: a client answered `overloaded` (`client_forward`), or a workflow step failed (`engine`) |
+| `flo_shard_cross_shard_timeouts_total{class="client_forward"}` | Requests another shard did not answer in about 5 minutes; clients still connected were told they may still apply |
+| `flo_shard_replies_dropped_total` | Answers lost between shards: one came twice, or long after its request was given up on. Alert on anything but 0 |
 
 :::note
 There are no `flo_raft_*` families yet (role, term, commit index, per-member
