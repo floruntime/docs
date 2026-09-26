@@ -126,8 +126,7 @@ Payloads are allocated from the slab allocator, not embedded in the envelope. Th
 | **Raft group** | One log per cluster; the leader replicates every write to a majority before acknowledging it, and membership is a config entry in that log |
 | **Peer link** | One authenticated TCP link per node pair, carrying the Raft RPCs and writes forwarded to the leader |
 | **Controller Raft** | Runs on Shard 0, manages partition table |
-| **Partition Table** | Maps partition → node, updated on membership changes |
-| **Forwarder** | Routes requests to the correct node when partitions aren't local |
+| **Partition Table** | Maps partition → node, updated on membership changes (not yet used for routing) |
 
 ## Ports
 

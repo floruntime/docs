@@ -252,7 +252,7 @@ Prefer a node-local collector or a sidecar over exposing the port directly.
 
 Metric families include server counters (`flo_commands_total`,
 `flo_bytes_received_total`, `flo_connections_current`, `flo_uptime_seconds`),
-per-shard gauges (`flo_shard_*`), per-stream / per-queue / per-KV-namespace
+per-shard series (`flo_shard_*`), per-stream / per-queue / per-KV-namespace
 counters, workflow and processing aggregates, and the peer link counters:
 
 | Metric | Description |
@@ -263,6 +263,16 @@ counters, workflow and processing aggregates, and the peer link counters:
 | `flo_replication_frames_rejected_total` | Frames that failed a check; each closed its link |
 | `flo_replication_frames_dropped_total` | Frames the shard could not queue |
 | `flo_replication_slow_peer_drops_total` | Links dropped for not reading |
+
+A node's shards hand each other client requests for keys they own. The
+per-shard series for that traffic:
+
+| Metric | Description |
+|--------|-------------|
+| `flo_shard_cross_shard_requests_in_flight{class}` | Client requests sent to another shard and not yet answered |
+| `flo_shard_cross_shard_overloaded_total{class}` | Requests refused before they ran (the client was answered `overloaded`) |
+| `flo_shard_cross_shard_timeouts_total{class}` | Requests another shard did not answer in time; the client was told they may still apply |
+| `flo_shard_replies_dropped_total` | Answers lost between shards. Anything but 0 is a bug — alert on it and report it |
 
 The same counters are available as JSON from the dashboard at
 `GET /api/v1/metrics`, under `replication`. A `peers_linked` that stays below
