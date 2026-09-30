@@ -119,6 +119,57 @@ Shards communicate via 32-byte envelopes on lock-free MPSC ring buffers:
 
 Payloads are allocated from the slab allocator, not embedded in the envelope. This keeps the MPSC ring's cache line footprint minimal.
 
+### Cross-shard requests
+
+A node with several shards (a single node runs one per CPU by default; a
+cluster member runs one) hands each client request to the shard that owns
+its key. When that shard has no room for more from the shard your
+connection is on, the connection is paused, not refused: the node stops
+reading it until the request can go, so the requests behind it wait too
+and run in order, and waiting connections take turns a request at a time.
+A request that waits 3 s is refused with `overloaded … was not run`; one
+that goes is answered within about 3 s (at most 4) of when it first waited,
+or told it has no answer yet.
+
+A request that takes something — a dequeue, a group read or claim, a
+worker's await — is the exception: its answer carries what it took, so the
+node waits for that answer, up to 320 s. An SDK client times out first, and
+anything the request took returns when its lease ends.
+
+A client that closes its connection, or shuts down its sending side, while
+its request waits is treated as gone, and the request is not run. When it
+closes, its blocking reads on other shards are dropped (or, if that shard is
+busy, end at their block time). The Flo SDKs send one request at a time on a
+connection, so they never reach the 64 or 8 limits below.
+
+| Answer | Meaning | What to do |
+|--------|---------|------------|
+| `overloaded: shard N is not keeping up; this request was not run — back off and retry` | for 3 s, shard N (the one that owns the key) did not free room for more requests from the shard your connection is on | back off and retry |
+| `overloaded: shard N has no room for more blocking reads from shard M; this read was not run — retry` | for 3 s, shard N held its share of blocking reads from shard M (the one your connection is on): many consumers long-polling it | retry; if it persists, see `flo_shard_connections_paused{reason="slots"}` |
+| `overloaded: 64 requests on this connection are still waiting on other shards (the oldest on shard N); this request was not run — back off and retry` | for 3 s, none of this connection's 64 unanswered requests was answered | back off and retry |
+| `overloaded: this connection has 8 blocking reads waiting already; this request was not run — retry once one returns` | for 3 s, none of this connection's 8 blocking reads returned | retry once one returns, or read on another connection |
+| `unavailable: shard N did not answer in T s — retry` | shard N did not answer a read within about 3 s (at most 4) of when it first waited — a blocking read, its block time later | retry |
+| `unavailable: shard N did not answer in T s — the request may still apply` | shard N did not answer a write in that time, or a request that takes something in 320 s; shard N has the request and may still run it | read back before resending a write that is not idempotent; anything a dequeue or read took returns when its lease ends |
+
+Each shard keeps up to 4096 blocking reads and parked workers waiting
+(about 1.5 MB, allocated at start). On a node of several shards, 1024 of
+them are for the shard's own clients and 3072 for other shards', so neither
+side can crowd out the other; a connection's blocking reads, here and on
+other shards together, are at most 8 at a time. Past its part, a blocking
+read is answered at once, empty, and the log says `waiter pool full` (at
+most every 10 s).
+
+The per-shard series for this traffic:
+
+| Metric | Description |
+|--------|-------------|
+| `flo_shard_cross_shard_requests_in_flight{class="client_forward"}` | Client requests sent to another shard and not yet answered |
+| `flo_shard_oldest_cross_shard_wait_seconds` | How long the oldest of those has waited; a shard that stops answering shows here first |
+| `flo_shard_cross_shard_overloaded_total{class}` | Requests refused before they ran: a client answered `overloaded` after waiting (`client_forward`), or a workflow step failed (`engine`) |
+| `flo_shard_connections_paused{reason}` | Connections not being read: their next request cannot go yet — `in_flight` (64 of theirs unanswered), `blocking_reads` (8 blocking reads out), `slots` (the owning shard holds its share of this shard's requests — for blocking reads, often many long polls — or the request is queued behind connections already waiting for it), `inbox` (it has not taken this shard's earlier ones) — or `unsent_answers` (the client is not reading its answers) |
+| `flo_shard_cross_shard_timeouts_total{class="client_forward"}` | Requests another shard did not answer by their deadline (3 s; a blocking read, its block time and 3 s; a request that takes something, 320 s); their clients were told. A slow shard shows here, not only one that never answers |
+| `flo_shard_replies_dropped_total` | Answers lost between shards: one came twice, or long after its request was given up on. Alert on anything but 0 |
+
 ## Clustering
 
 | Component | Purpose |
