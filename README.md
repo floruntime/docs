@@ -36,7 +36,7 @@ docs/                # all content as .md / .mdx
   sdks/              # Go, Python, JavaScript, Zig
   architecture/      # overview, storage internals
   deployment/        # docker, terraform, clustering
-  reference/         # CLI, web console, REST API, wire protocol, Redis compat
+  reference/         # CLI, web console, REST API, wire protocol
 public/
   logo-flo-{light,dark}.svg   # Flo wordmark
   favicon.svg

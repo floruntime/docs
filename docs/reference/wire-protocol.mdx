@@ -12,7 +12,6 @@ Clients connect via TCP to the server's client port (default 9000). The first by
 | Magic Bytes | Protocol |
 |-------------|----------|
 | `FLO\x01` | Binary wire protocol |
-| `*`, `$`, `+`, `-` | RESP (Redis protocol) |
 | `GET`, `POST`, ... | HTTP (redirected to dashboard) |
 | WebSocket upgrade | WebSocket (binary protocol over WS frames) |
 
@@ -189,26 +188,3 @@ Some operations include optional TLV (Type-Length-Value) fields after the key an
 | `0x07` | Consumer group | Stream group operations |
 | `0x08` | Idempotency key | Action invoke |
 
-## RESP Compatibility
-
-Flo also accepts Redis RESP protocol on the same port. The Acceptor detects RESP by the leading character (`*`, `$`, `+`, `-`, `:`). RESP commands are translated to Flo operations:
-
-| RESP Command | Flo Operation |
-|-------------|---------------|
-| `SET key value [EX sec] [NX] [XX]` | `kv_put` |
-| `GET key` | `kv_get` |
-| `DEL key` | `kv_delete` |
-| `EXISTS key` | `kv_exists` |
-| `INCR key` / `INCRBY key n` / `DECR key` | `kv_incr` |
-| `EXPIRE key sec` | `kv_touch` |
-| `PERSIST key` | `kv_persist` |
-| `JSON.GET key [path]` | `kv_json_get` |
-| `JSON.SET key path value` | `kv_json_set` |
-| `JSON.DEL key [path]` | `kv_json_del` |
-| `SCAN cursor MATCH pattern` | `kv_scan` |
-| `LPUSH queue value` | `queue_enqueue` |
-| `RPOP queue` | `queue_dequeue` |
-| `XADD stream * field value` | `stream_append` |
-| `XREAD COUNT n STREAMS stream id` | `stream_read` |
-
-This allows Redis clients (`redis-cli`, `ioredis`, `redis-py`, `go-redis`, RedisInsight, etc.) to connect to Flo without modification for the operations above. See [Redis compatibility](/reference/redis) for the full mapping and known semantic differences.
