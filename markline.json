@@ -188,8 +188,7 @@
               { "href": "/reference/cli", "label": "CLI" },
               { "href": "/reference/web-console", "label": "Web Console" },
               { "href": "/reference/rest-api", "label": "REST API" },
-              { "href": "/reference/wire-protocol", "label": "Wire Protocol" },
-              { "href": "/reference/redis", "label": "Redis Compatibility" }
+              { "href": "/reference/wire-protocol", "label": "Wire Protocol" }
             ]
           }
         ]
