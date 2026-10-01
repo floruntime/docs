@@ -156,9 +156,9 @@ crosses the wire. Make one with `flo server secret`; a node accepts only a
 secret in the form it prints, so a value typed by hand is refused rather than
 trusted to be strong. It can also come from a file named by `secret_file`
 (readable by its owner alone), or from the `FLO_CLUSTER_SECRET` environment
-variable, for containers without a config file. Starting the Raft listener
-without it, or with a malformed one, is a startup error that says how to make
-one.
+variable, for containers without a config file; set only one of the three.
+Starting the Raft listener without it, with a malformed one, or with more than
+one source is a startup error that says what to change.
 
 `node_id` is read on first boot and then stored in the data dir, which wins on
 every later boot; to change a node's id, start it from an empty data dir.

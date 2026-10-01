@@ -31,9 +31,11 @@ is removed — see [issue #95](https://github.com/floruntime/flo/issues/95).
 Every member proves the same shared secret at the peer port. Make it once
 with `flo server secret` and give every member its output, in `flo.toml`, in a
 file only its owner can read (`secret_file`, mode 600), or in the
-`FLO_CLUSTER_SECRET` environment variable. A node refuses to bind the peer port
-without one, or with a secret `flo server secret` did not make — a value typed
-by hand is refused rather than trusted to be strong.
+`FLO_CLUSTER_SECRET` environment variable — one of the three, since a node
+setting more than one refuses to start rather than ignore the rest. A node
+refuses to bind the peer port without one, or with a secret `flo server secret`
+did not make — a value typed by hand is refused rather than trusted to be
+strong.
 
 ```bash
 flo server secret
