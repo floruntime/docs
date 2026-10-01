@@ -114,7 +114,7 @@ x-flo: &flo
   security_opt:
     - seccomp:unconfined
   environment:
-    - FLO_CLUSTER_SECRET=change-me-same-on-every-node
+    - FLO_CLUSTER_SECRET=${FLO_CLUSTER_SECRET}  # from `flo server secret`, the same on every node
   restart: unless-stopped
 
 services:
@@ -171,7 +171,7 @@ at `/etc/flo/flo.toml`) or from flags on the command line:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `FLO_DATA_DIR` | `/data/flo` | Data directory the entrypoint prepares for the `flo` user |
-| `FLO_CLUSTER_SECRET` | — | The shared secret every member proves at the peer port |
+| `FLO_CLUSTER_SECRET` | — | The shared secret every member proves at the peer port; only one made by `flo server secret` is accepted |
 
 ## Health Check
 

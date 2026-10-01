@@ -140,7 +140,8 @@ where the port is not publicly routable. See
 ```toml
 [cluster]
 enabled = false              # true starts the first member of a cluster (same as --cluster)
-# secret = "..."             # required whenever the peer port is bound; same value on every node
+# secret = "flo-secret-…"    # required whenever the peer port is bound; same value on every node
+# secret_file = "/path"      # or the secret in a file only its owner can read (mode 600)
 # node_id = 1
 # raft_port = 0              # 0 = auto (listen_port + 500)
 # seeds = ["192.168.1.10:9500"]  # peer ports of members to join (same as --join)
@@ -151,10 +152,13 @@ enabled = false              # true starts the first member of a cluster (same a
 peer: the Raft port moves terms, membership and log contents, so it is never
 open. Every node in a cluster carries the same value; a node with a different
 one is refused at the handshake and both sides log it. The secret itself never
-crosses the wire. Generate one with `openssl rand -base64 32`. It can also come
-from the `FLO_CLUSTER_SECRET` environment variable, for containers without a
-config file. Starting the Raft listener without it is a startup error that
-names the key.
+crosses the wire. Make one with `flo server secret`; a node accepts only a
+secret in the form it prints, so a value typed by hand is refused rather than
+trusted to be strong. It can also come from a file named by `secret_file`
+(readable by its owner alone), or from the `FLO_CLUSTER_SECRET` environment
+variable, for containers without a config file. Starting the Raft listener
+without it, or with a malformed one, is a startup error that says how to make
+one.
 
 `node_id` is read on first boot and then stored in the data dir, which wins on
 every later boot; to change a node's id, start it from an empty data dir.

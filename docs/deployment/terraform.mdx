@@ -133,7 +133,8 @@ for node 1 keeps the seed address stable from the first apply. Every member
 proves the same `cluster_secret`, and a cluster runs one shard. The provider,
 the variables and `data.digitalocean_ssh_key.main` are declared as in the
 single-node example above, plus
-`variable "cluster_secret" { type = string, sensitive = true }`. The
+`variable "cluster_secret" { type = string, sensitive = true }`, set to what
+`flo server secret` prints. The
 `cluster_first_member` input arrives with module version 0.1.0.
 
 ```hcl title="main.tf"
@@ -262,7 +263,7 @@ Node 1 leads a group of one until nodes 2 and 3 have joined it; a restarted memb
 | `cluster_first_member` | `bool` | `false` | This droplet starts the cluster and leads alone until others join; leave `cluster_seeds` empty |
 | `cluster_node_id` | `number` | `0` | This node's id in the cluster (1, 2, 3, …). `0` derives one from hostname and port, which collides on cloned images |
 | `cluster_seeds` | `list(string)` | `[]` | Peer ports of members to join (`host:listen_port + 500`); required unless `cluster_first_member = true` |
-| `cluster_secret` | `string` (sensitive) | `""` | The secret every member proves at the peer port; required when `cluster_enabled = true` |
+| `cluster_secret` | `string` (sensitive) | `""` | The secret every member proves at the peer port, made by `flo server secret`; required when `cluster_enabled = true` |
 
 ### Persistent Storage
 
