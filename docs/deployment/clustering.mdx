@@ -28,14 +28,24 @@ is removed — see [issue #95](https://github.com/floruntime/flo/issues/95).
 
 ## Starting a Cluster
 
-Every member proves the same shared secret at the peer port. Put it in
-`flo.toml` or in the `FLO_CLUSTER_SECRET` environment variable; generate one
-with `openssl rand -base64 32`. A node refuses to bind the peer port without
-one.
+Every member proves the same shared secret at the peer port. Make it once
+with `flo server secret` and give every member its output, in `flo.toml`, in a
+file only its owner can read (`secret_file`, mode 600), or in the
+`FLO_CLUSTER_SECRET` environment variable — one of the three, since a node
+setting more than one refuses to start rather than ignore the rest. A node
+refuses to bind the peer port without one, or with a secret `flo server secret`
+did not make — a value typed by hand is refused rather than trusted to be
+strong.
+
+```bash
+flo server secret
+# flo-secret-3f9a…(64 hex characters)
+```
 
 ```toml title="flo.toml (every member)"
 [cluster]
-secret = "the same value on every node"
+secret = "flo-secret-…"            # the same value on every node
+# or: secret_file = "/etc/flo/cluster.secret"
 ```
 
 ### The first member
@@ -97,8 +107,15 @@ started plainly it would lead alone and take writes the group never sees.
 The peer port is bound only by a node started with `--cluster`, `--join`, or
 `seeds`; a single node leaves it unbound, so there is no undeclared port to
 account for. It carries membership and log contents and must not be
-reachable from outside the cluster's private network; the secret authenticates
-peers, it does not encrypt the link.
+reachable from outside the cluster's private network. Members prove the secret
+before a link carries anything, and every message on it after that is
+encrypted and authenticated under keys that link alone holds: a message
+altered, replayed, reordered or dropped on the way closes the link, and the
+nodes reconnect.
+
+**Upgrading.** Members on different versions of the peer protocol cannot
+link; a node that meets one logs both versions. Upgrade a cluster by stopping
+every node, then starting them all on the new version.
 
 Node ids are derived from `hostname:port` unless `--node-id` is given, and
 are stored in the data directory on first boot; to change one, start from an
@@ -286,7 +303,8 @@ ring and the warm store only.
 ```toml
 [cluster]
 enabled = false              # true starts the first member (same as --cluster)
-# secret = "..."             # required whenever the peer port is bound
+# secret = "flo-secret-…"    # required whenever the peer port is bound; from `flo server secret`
+# secret_file = "/path"      # or the secret in a file only its owner can read
 # node_id = 1                # default: derived from hostname:port, then stored
 # raft_port = 0              # 0 = listen_port + 500
 # seeds = ["10.0.1.10:9500"] # peer ports of members to join
@@ -313,6 +331,6 @@ crash.
 durability = "sync"
 
 [cluster]
-secret = "the same value on every node"
+secret = "flo-secret-…"            # the same value on every node
 seeds = ["10.0.1.10:9500"]
 ```
