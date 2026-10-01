@@ -9,6 +9,6 @@
     "preview": "node scripts/preview-out.mjs"
   },
   "dependencies": {
-    "@markline/markline": "^0.1.4"
+    "@markline/markline": "^0.1.5"
   }
 }
