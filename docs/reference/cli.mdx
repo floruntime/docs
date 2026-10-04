@@ -16,7 +16,7 @@ lede: Complete reference for the flo command-line interface.
 ## Namespaces
 
 A namespace is created by `flo ns create <name>`, or by the first write that
-names it. Either way the name is 1–63 bytes of lowercase letters, digits,
+brings data into it (a delete, a dequeue or an ack never creates one). Either way the name is 1–63 bytes of lowercase letters, digits,
 `_` and `-`, starts with a letter or digit, and does not end in `-`; names
 starting with `_` are the system's. A request naming any other namespace is
 refused with the reason. Each shard holds at most 1024 namespaces, and
