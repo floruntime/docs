@@ -36,7 +36,7 @@ site that an operator happens to visit cannot make one. Any request other than
   or simple type gets `415`.
 
 Every endpoint answers only the methods listed below; any other gets `405`.
-A change is never made by `GET`.
+A change is never made by `GET`. `HEAD` is answered wherever `GET` is.
 
 ```bash
 curl -X POST http://localhost:9002/api/v1/queues/jobs/purge \
@@ -52,15 +52,26 @@ probes can address the pod or host directly.
 ### CORS
 
 Cross-origin access is off by default. `[dashboard] cors_origins` lists the
-exact origins allowed to call this API from their pages; a request from one
-of them gets its origin echoed back with `Vary: Origin`. `*` is refused at
-startup, and the origin `null` is never granted.
+exact origins allowed to call this API from their pages, each written as a
+browser sends it — lowercase `https://host[:port]`, no path or trailing `/`.
+A request from one of them gets its origin echoed back; while any are listed,
+every response carries `Vary: Origin`. `*`, `null`, and an entry that could
+never match are refused at startup.
 
-### Timeouts
+### Limits and timeouts
 
-A client has 5 seconds to send its whole request, and a response that cannot
-be written for 5 seconds is dropped. Idle connections never hold up others:
-`/health` answers while they wait.
+A request's line and headers may take up to 8 KiB (else `431`), and the whole
+request up to 1 MiB (else `413`); a request over a limit is refused whole,
+never handled in part. A client has 5 seconds to send its whole request, and
+a response is dropped if it is not written within 5 seconds. Idle
+connections never hold up others: `/health` answers while they wait.
+
+### Framing
+
+Every response carries `X-Frame-Options: DENY`,
+`Content-Security-Policy: frame-ancestors 'none'` and
+`X-Content-Type-Options: nosniff`: no other site may show the console in a
+frame.
 
 ## Conventions
 

@@ -130,7 +130,9 @@ enabled = true
 
 The dashboard serves only requests whose `Host` is `localhost`, `127.0.0.1`,
 `[::1]`, or listed in `hosts` — add the name or address you browse to when it
-is reached any other way (for example `hosts = "flo.internal, 10.0.0.5"`).
+is reached any other way (for example `hosts = "flo.internal, 10.0.0.5"`;
+names and addresses alone, no port; IPv6 in brackets). A dashboard reached by
+an unlisted name or address answers `421`.
 `/health` answers any `Host`. `cors_origins` is for a page served from
 another origin that calls this API directly (for example
 `https://ops.example.com`); `*` is refused. See
