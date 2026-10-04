@@ -15,20 +15,52 @@ http://localhost:9002/api/v1
 
 ## Authentication
 
-`GET /health` is always public. The `/api/v1/*` endpoints require auth **only when a key store exists** (i.e. after `flo server bootstrap`); a dev node started without bootstrap serves them openly.
+The dashboard has no authentication yet: anyone who can reach its port can
+read and change everything it exposes. It binds to `127.0.0.1` by default;
+bind it elsewhere only where the port is reachable from trusted machines.
+`GET /health` is always public.
 
-When auth is enabled:
+## Requests that change something
 
-```
-POST /api/v1/auth/session     # body: { "api_key": "flo_sk_..." } → { "token": "..." }
-GET  /api/v1/auth/status      # { "auth_enabled": true, ... }
+The dashboard takes changes only from its own pages, so that a page on another
+site that an operator happens to visit cannot make one. Any request other than
+`GET`, `HEAD` or `OPTIONS` must:
+
+- carry an `Origin` that is this dashboard itself (`http://` plus the `Host`
+  it was sent to), or one listed in `[dashboard] cors_origins` — or, from a
+  browser, `Sec-Fetch-Site: same-origin`. Otherwise it gets `403`.
+- carry a `Content-Type` other than `text/plain`,
+  `application/x-www-form-urlencoded` or `multipart/form-data` (the types any
+  page can send without the browser asking first). JSON bodies send
+  `application/json`; raw payloads send `application/octet-stream`. A missing
+  or simple type gets `415`.
+
+Every endpoint answers only the methods listed below; any other gets `405`.
+A change is never made by `GET`.
+
+```bash
+curl -X POST http://localhost:9002/api/v1/queues/jobs/purge \
+  -H 'Origin: http://localhost:9002' -H 'Content-Type: application/json'
 ```
 
-Send the session token as a Bearer header on every request:
+Every request, read or change, must name a `Host` the dashboard answers to:
+`localhost`, `127.0.0.1`, `[::1]`, or one listed in `[dashboard] hosts`.
+Anything else gets `421`, so a site cannot point its own name at this address
+and read from it. `GET /health` is the exception: it answers any `Host`, so
+probes can address the pod or host directly.
 
-```
-Authorization: Bearer <token>
-```
+### CORS
+
+Cross-origin access is off by default. `[dashboard] cors_origins` lists the
+exact origins allowed to call this API from their pages; a request from one
+of them gets its origin echoed back with `Vary: Origin`. `*` is refused at
+startup, and the origin `null` is never granted.
+
+### Timeouts
+
+A client has 5 seconds to send its whole request, and a response that cannot
+be written for 5 seconds is dropped. Idle connections never hold up others:
+`/health` answers while they wait.
 
 ## Conventions
 
