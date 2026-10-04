@@ -124,8 +124,19 @@ the container, set `bind = "0.0.0.0"` — the default is loopback-only.
 enabled = true
 # port = 0                # 0 = auto (listen_port + 2), so 9002 by default
 # bind = "127.0.0.1"      # Localhost only by default
-# cors_origins = "http://localhost:5173"
+# cors_origins = ""        # Exact origins allowed cross-origin, comma-separated; none by default
+# hosts = ""               # Extra Host names served, beyond localhost/127.0.0.1/[::1]
 ```
+
+The dashboard serves only requests whose `Host` is `localhost`, `127.0.0.1`,
+`[::1]`, or listed in `hosts` — add the name or address you browse to when it
+is reached any other way (for example `hosts = "flo.internal, 10.0.0.5"`;
+names and addresses alone, no port; IPv6 in brackets). A dashboard reached by
+an unlisted name or address answers `421`.
+`/health` answers any `Host`. `cors_origins` is for a page served from
+another origin that calls this API directly (for example
+`https://ops.example.com`); `*` is refused. See
+[REST API → Requests that change something](/reference/rest-api#requests-that-change-something).
 
 :::note
 `bind` defaults to `127.0.0.1`. In an orchestrated deployment a readiness probe
