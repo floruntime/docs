@@ -62,7 +62,8 @@ never match are refused at startup.
 
 A request's line and headers may take up to 8 KiB (else `431`), and the whole
 request up to 1 MiB (else `413`); a request over a limit is refused whole,
-never handled in part. A client has 5 seconds to send its whole request, and
+never handled in part. A body must be sent with one `Content-Length`;
+`Transfer-Encoding` is not accepted (`501`). A client has 5 seconds to send its whole request, and
 a response is dropped if it is not written within 5 seconds. Idle
 connections never hold up others: `/health` answers while they wait.
 
