@@ -16,20 +16,22 @@ lede: Complete reference for the flo command-line interface.
 ## Namespaces
 
 A namespace is created by `flo ns create <name>`, or by the first write that
-names it. Either way the name is 1–63 bytes of letters, digits, `.`, `_` and
-`-`, starts with a letter, and does not end in `-`; names starting with `_`
-are the system's. A request naming any other namespace is refused. A node
-holds at most 1024 namespaces per shard.
+names it. Either way the name is 1–63 bytes of lowercase letters, digits,
+`_` and `-`, starts with a letter or digit, and does not end in `-`; names
+starting with `_` are the system's. A request naming any other namespace is
+refused with the reason. Each shard holds at most 1024 namespaces, and
+`default` always has room.
 
 ```bash
 flo ns create <name>
 flo ns ls [--all]
-flo ns delete <name> [--force]
+flo ns info <name>
 ```
 
-`flo ns delete` refuses a namespace that holds data unless `--force` is
-given. `--force` removes the namespace's keys; it cannot yet remove streams
-or queues, and is refused while any exist — delete them first.
+Deleting a namespace isn't supported yet: `flo ns delete` is refused, with or
+without `--force`, and removes nothing. A namespace's data lives on every
+shard, and its name can't yet be retired so that a later create doesn't
+inherit it.
 
 ## Server
 
