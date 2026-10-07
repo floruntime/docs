@@ -26,7 +26,7 @@ A **job** is a long-running processing pipeline defined by a YAML file. Each job
 |-------|-------------|
 | `kind` | Always `Processing` |
 | `name` | Human-readable job name |
-| `namespace` | Namespace scope (default: `"default"`) |
+| `namespace` | The namespace the job lives in. Optional; if given, it must be the one the job is submitted to (`-n`) |
 | `parallelism` | Number of parallel task slots (default: `1`) |
 | `batch_size` | Records to process per tick (default: `100`) |
 | `sources` | Where to read data from |
@@ -207,7 +207,6 @@ sinks:
   - name: output
     stream:
       name: enriched-events
-      namespace: production
 ```
 
 ### Time-Series Sink
@@ -219,7 +218,6 @@ sinks:
   - name: cpu-ts
     ts:
       measurement: proc_cpu_metrics
-      namespace: metrics
       tags:
         host: hostname          # TS tag "host" ← JSON field "hostname"
       fields:
@@ -250,7 +248,6 @@ Writes records to Flo KV storage:
 sinks:
   - name: profiles
     kv:
-      namespace: profiles
       key_prefix: user          # prepended to record key
       separator: ":"            # between prefix and key (default: ":")
       write_mode: upsert        # upsert | if_absent | versioned
@@ -266,7 +263,6 @@ sinks:
   - name: tasks
     queue:
       name: task-queue
-      namespace: default
       priority: 5
       delay_ms: 1000            # visibility delay
 ```
@@ -452,6 +448,8 @@ Looks up keys in Flo KV storage to filter or enrich streaming records. The looku
 | `"${$.account_id}"` | `alice` |
 | `"user.${$.org}.${$.user_id}"` | `user.acme.u1` |
 
+`namespace` (optional) reads another namespace's keys, such as shared reference data; by default the lookup reads the job's own namespace.
+
 **Modes:**
 
 | Mode | Behavior |
@@ -464,7 +462,6 @@ operators:
   - type: kv_lookup
     name: check-account
     lookup_key: "account:${$.account_id}"
-    namespace: default
     mode: filter
 ```
 
@@ -475,7 +472,6 @@ operators:
   - type: kv_lookup
     name: enrich-user
     lookup_key: "user:${$.user_id}"
-    namespace: default
     mode: enrich
     enrich_field: tier
 ```
@@ -806,14 +802,16 @@ Change the parallelism of a running job:
 flo processing rescale job-1 8 -n analytics
 ```
 
-## Namespace Isolation
+## Namespaces
 
-Jobs are scoped to namespaces, providing complete isolation:
+A job lives in the namespace it is submitted to (`-n`), and is listed, inspected, stopped and changed only from there: from any other namespace its id is not found.
 
-- The same job name in different namespaces are **independent jobs**
-- `list` returns only jobs in the specified namespace
-- Pipeline data flows**only within** the namespace scope
-- Source streams and sink targets are resolved within the job's namespace
+- A job **writes only into its own namespace**. A sink that names another namespace is refused at submit; so is a top-level `namespace:` that differs from `-n`.
+- A job **may read other namespaces**: a source or a `kv_lookup` can name one, for shared reference data or to gather from several namespaces into one.
+- Sources, sinks and lookups that name no namespace use the job's.
+- The same job name in different namespaces are **independent jobs**.
+
+To move data from namespace A into B, submit the job in B and have it read from A.
 
 ```bash
 # These are two separate, independent jobs
