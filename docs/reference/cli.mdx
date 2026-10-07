@@ -15,6 +15,12 @@ lede: Complete reference for the flo command-line interface.
 
 ## Namespaces
 
+:::note
+**Namespaces aren't a security boundary.** A namespace separates names, not access. Clients aren't authenticated yet, so
+anything that can reach the client port can read and write every namespace.
+Keep the port on a private interface.
+:::
+
 A namespace is created by `flo ns create <name>`, or by the first write that
 brings data into it (a delete, a dequeue or an ack never creates one). Either way the name is 1–63 bytes of lowercase letters, digits,
 `_` and `-`, starts with a letter or digit, and does not end in `-`; names

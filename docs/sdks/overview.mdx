@@ -57,6 +57,9 @@ await client.kv.put("key", b"value")                           # uses default na
 await client.kv.put("key", b"value", PutOptions(namespace="other"))  # override
 ```
 
+A namespace separates names, not access: any client can name any namespace.
+See [CLI → Namespaces](/reference/cli#namespaces).
+
 ## Error Handling
 
 All SDKs provide typed errors:
