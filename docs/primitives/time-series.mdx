@@ -282,25 +282,24 @@ flo ts delete cpu --tags host=web-01 --confirm
 
 Without `--confirm`, the delete command fails with an error — this prevents accidental data loss.
 
-### Retention & Downsampling
+### Retention
 
-Set retention policies to automatically age out raw data and optionally create downsampled rollups:
+`flo ts retention` deletes a measurement's points older than a duration, in
+the namespace you name, once:
 
 ```bash
-# Keep raw data for 7 days
+# Delete cpu's points older than 7 days
 flo ts retention cpu --raw-ttl 7d
-
-# Keep raw for 7 days, downsample to 1-minute averages for 30 days
-flo ts retention cpu --raw-ttl 7d --downsample 1m:avg:30d
-
-# Show current retention policy
-flo ts retention cpu --show
 ```
 
-The `--downsample` rule format is `interval:aggregation:ttl`:
-- **interval** — Window size for rollup (e.g., `1m`, `5m`, `1h`)
-- **aggregation** — Function to apply (`avg`, `sum`, `min`, `max`, `count`)
-- **ttl** — How long to keep the downsampled data
+It is not a standing policy: points that age past the duration later stay
+until it is run again. Other measurements, and `cpu` in other namespaces, are
+untouched. Downsampling isn't supported.
+
+:::note
+The deletion isn't written to the log yet, so a restart brings the deleted
+points back, and other nodes in a cluster don't apply it.
+:::
 
 ## Namespace Isolation
 
