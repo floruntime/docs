@@ -22,12 +22,9 @@ http://localhost:9002
 
 ## Authentication
 
-The console follows the same auth model as the REST API:
-
-- **No bootstrap (dev):** if no key store exists, the dashboard is open — no login required.
-- **After `flo server bootstrap`:** the console prompts for an API key (`flo_sk_…`), exchanges it for a session token (`POST /api/v1/auth/session`), and sends it as a Bearer token on every request.
-
-`GET /health` is always public. See [Authentication](/reference/rest-api/#authentication) for details.
+The console doesn't authenticate anyone yet: whoever can reach the dashboard
+port can use it. It binds to `127.0.0.1` by default; keep it on a private
+interface. See [Configuration → `[dashboard]`](/getting-started/configuration#dashboard).
 
 ## Namespace switcher
 
