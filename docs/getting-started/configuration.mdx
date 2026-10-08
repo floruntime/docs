@@ -19,13 +19,23 @@ Generate a default config file with all options:
 flo config init
 ```
 
+The server refuses to start on a config it can't honour, and names the line to
+fix:
+
+- a section or key it doesn't read, including one listed under
+  [Removed settings](#removed-settings);
+- a value of the wrong type (`port = "9000"`) or out of range (`port = 70000`);
+- a `durability`, log `level` or log `format` it doesn't know;
+- a file named with `--config` that doesn't exist. Without `--config`, a
+  missing `flo.toml` means built-in defaults.
+
 ## Full Reference
 
 ### `[server]`
 
 ```toml
 [server]
-port = 9000               # Client API port (binary protocol + WebSocket)
+port = 9000               # Client API port (binary protocol)
 bind = "0.0.0.0"          # Bind address
 data_dir = "~/.flo/data"  # Data directory for UAL segments and storage files
 shards = 0                # Number of shards, at most 256 (0 = auto-detect CPU count)
@@ -33,6 +43,18 @@ shards = 0                # Number of shards, at most 256 (0 = auto-detect CPU c
 ```
 
 `shards` and `partition_count` define the on-disk data layout. **Cannot be changed after data exists without rebalancing.**
+
+`[server] bind` is the interface this node serves on — for clients and, in a
+cluster, for peers. `0.0.0.0` (the default) listens everywhere and lets peers
+reach the node at whatever address they see it from; a specific address is
+also what the node advertises to its peers. `--bind` overrides it on the
+command line.
+
+:::note
+**The client port authenticates no one yet:** anything that can reach it can read
+and write every namespace. Namespaces separate names, not access. Bind it to
+a private interface, or firewall it.
+:::
 
 ### `[storage]`
 
@@ -42,8 +64,6 @@ durability = "async_flush"       # sync | async_flush | ephemeral
 hot_buffer_capacity = 67108864   # Per-partition ring buffer size in bytes (64 MB)
 # hot_flush_seconds = 300        # Max seconds before hot → warm flush (0 = disabled)
 # max_hot_entries = 0            # Max entries in hot tier before eviction (0 = capacity only)
-# max_local_segments = 100       # Max warm segments before archival to cold tier
-# enable_wal_truncation = true   # Truncate WAL after safe segment flush
 ```
 
 Durability modes:
@@ -76,34 +96,8 @@ affect what survives a crash.
 ```toml
 [logging]
 level = "info"             # debug | info | warn | error
+# format = "text"          # text | json
 ```
-
-### `[auth]`
-
-```toml
-[auth]
-enabled = false
-# jwt_secret = "your-256-bit-secret-key-here"
-# jwks_url = "https://your-project.supabase.co/.well-known/jwks.json"
-```
-
-When `enabled = true`, all client connections require a valid JWT. Supports HS256 (shared secret) and RS256/ES256 (JWKS URL with key rotation).
-
-### `[websocket]`
-
-```toml
-[websocket]
-rate_limit_requests = 1000    # Max requests per window (0 = unlimited)
-rate_limit_window_ms = 1000   # Window size in milliseconds
-ping_interval_ms = 30000      # Heartbeat ping interval (0 = disabled)
-pong_timeout_ms = 10000       # Close connection if no pong within this time
-```
-
-`[server] bind` is the interface this node serves on — for clients and, in a
-cluster, for peers. `0.0.0.0` (the default) listens everywhere and lets peers
-reach the node at whatever address they see it from; a specific address is
-also what the node advertises to its peers. `--bind` overrides it on the
-command line.
 
 ### `[metrics]`
 
@@ -183,28 +177,20 @@ reports which applies.
 
 `failover_timeout_ms` is the one timing setting: a leader unheard for between
 half and all of it is replaced, heartbeats go out at a sixth of it. These are
-the only keys `[cluster]` reads; any other key is refused at start, not
-silently ignored. See [Clustering](/deployment/clustering).
+the only keys `[cluster]` reads. See [Clustering](/deployment/clustering).
 
-### `[cold_storage]`
+### Removed settings
 
-```toml
-[cold_storage]
-# provider = "none"       # none | file | s3
-# upload_workers = 2
-# restore_workers = 4
+These are refused at start, with the reason. Remove them from `flo.toml`.
 
-# [cold_storage.file]
-# base_path = "/var/lib/flo/archive"
-# sync_on_write = true
-
-# [cold_storage.s3]
-# bucket = "my-flo-cold-storage"
-# region = "us-east-1"
-# endpoint = ""           # For S3-compatible services (MinIO, R2)
-# use_path_style = false  # Set true for MinIO
-# use_tls = true
-```
+| Setting | Why |
+|---|---|
+| `[auth]` | Client authentication isn't implemented yet. |
+| `[websocket]` | The WebSocket endpoint was removed. |
+| `[cold_storage]` | Not wired up: nothing reads it, so no data moves to cold storage. |
+| `[background_tasks]` | Namespace delete is refused, so there's no deletion task to tune. |
+| `[kv] expose_internal_keys` | Never read; internal keys stay hidden. |
+| `[storage] max_local_segments`, `enable_wal_truncation` | Not wired up: nothing reads them. |
 
 ## CLI Overrides
 
