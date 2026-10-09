@@ -6,7 +6,7 @@ lede: Members hold one replicated log. The first member starts with --cluster; t
 ## Overview
 
 A Flo cluster is a group of nodes holding the same log. One member leads at a
-time. Every write goes through the leader, reaches a majority of members
+time. Every write goes through the leader, reaches a majority of the voters
 before it is acknowledged, and is then applied on every member. Clients
 connect to any node: a write sent to a node that does not lead is carried to
 the leader over the peer link and answered on the node the client wrote to,
@@ -14,16 +14,18 @@ once that node has applied it, so a client always reads its own writes.
 Reads are served locally by every node.
 
 Membership is recorded in the log itself. A configuration entry names the
-members, every member applies the same entry, and a restarted member learns
-its group from its own data directory.
+members and their roles, every member applies the same entry, and a restarted
+member learns its group from its own data directory.
+
+A member is a **voter** or a **replica**. Voters elect the leader and count
+toward the majority a write needs. A replica takes the log and serves reads,
+but counts toward nothing: a slow or lost replica never holds up a write.
 
 :::note
 **Two limits of the current release.** A cluster replicates one shard: leave
 `shards` at its default (it resolves to one on a member) or set it to 1; more
 is refused at start, and so is a data directory that was written with more
-than one shard — a member starts from an empty one. And there is no `remove`
-yet: a member that leaves for good keeps counting toward the majority until it
-is removed — see [issue #95](https://github.com/floruntime/flo/issues/95).
+than one shard — a member starts from an empty one.
 :::
 
 ## Starting a Cluster
@@ -68,12 +70,19 @@ the host may be an IPv4 address or a DNS name (a Compose service name works).
 Several seeds are comma-separated. In the config file the same thing is
 `seeds = ["10.0.1.10:9500"]` with `enabled` left off.
 
-The joiner starts with no vote and asks the members it can reach, once a
-second, to be added. The leader writes a configuration entry naming it, one
-change at a time, and from then on it is a member. `flo cluster status` shows
-`joining` until that happens; a node still asking after thirty seconds logs
-what to check (the seed addresses, the secret, and that the group has room —
-a group holds at most 8 members).
+The joiner asks the members it can reach, once a second, to be added. The
+leader writes a configuration entry naming it **as a replica**, one change at a
+time, and from then on it is a member. `flo cluster status` shows `joining`
+until that happens; a node still asking after thirty seconds logs what to
+check (the seed addresses, the secret, and that the group has room — a group
+holds at most 8 members).
+
+Once a replica has caught up, the leader makes it a voter on its own, up to
+three voters and only into an odd number: the second and third members of a
+new cluster become voters together, once both have caught up. A two-node
+cluster is a leader and a live copy, not failover; failover needs three. A
+fourth member and later stay replicas until promoted. A joiner that never
+catches up within ten minutes is dropped again (it may ask to join anew).
 
 ### Restarting a member
 
@@ -84,6 +93,36 @@ restarted with `--cluster` follows whatever configuration its log holds.
 
 A data directory that belonged to a group refuses to run without either flag:
 started plainly it would lead alone and take writes the group never sees.
+
+### Promoting and removing members
+
+```bash
+flo cluster members          # id, role, address, last contact and lag (the leader's view)
+flo cluster promote 4        # make a caught-up replica a voter; `promote 4 5` for two
+flo cluster remove 3         # remove a member; it cannot rejoin under that id
+```
+
+Both run against any member and are answered once the change has committed.
+Voters change one at a time, so a second change waits for the first; a change
+too soon after an election is refused until the new leader has committed in
+its own term — retry in a moment.
+
+`promote` refuses a replica that has not caught up yet. `remove` refuses to
+leave no voter, and asks for `--yes` when it would leave an even number of
+voters, or two, saying what that tolerates. After a removal that leaves an even
+number, the leader promotes a caught-up replica, if one may vote, to make it
+odd again.
+
+The leader can remove itself: it keeps leading, without counting itself, until
+the change commits, then steps down and the remaining voters elect a leader.
+A removed node stops taking part: it answers clients
+`unavailable: this node was removed from the cluster`, shows `removed` in
+`flo cluster status`, logs every 30 seconds how to bring the machine back (a new
+node id and an empty data directory, then `--join`), and stays removed across
+restarts.
+
+A write sent to a replica is not carried to the leader: the answer names the
+leader and its address, and the client retries there.
 
 ### What is refused at start
 
@@ -284,7 +323,9 @@ Members:    3
 | Role | Meaning |
 |------|---------|
 | `leader` | this node takes writes for the group |
-| `follower` | a member; writes are carried to the leader |
+| `follower` | a voter; writes are carried to the leader |
+| `replica` | a member that takes the log and serves reads, without a vote; writes are answered with the leader's address |
+| `removed` | removed from the cluster; takes no part |
 | `electing` | a member choosing a leader; `Leader: none` |
 | `joining` | asking to be added; not a member yet |
 | `guarded: catching up` | no log or no hard state of its own (new, or lost); following a leader, no vote |
@@ -294,9 +335,6 @@ Members:    3
 `--output json` gives the same as one object, with `"leader_id": null` while
 none is known. A single node reports itself as the leader of a one-member
 group.
-
-`flo cluster members` and `flo cluster transfer-leader` are accepted by the
-CLI but not yet implemented by the server ([issue #95](https://github.com/floruntime/flo/issues/95)).
 
 ### Prometheus metrics
 
@@ -379,7 +417,8 @@ size), and no gossip (members talk over the peer port).
 
 **Development.** One node; nothing to configure.
 
-**Production.** Three members (tolerates one failure) or five (tolerates two),
+**Production.** Three voters (tolerates one failure) or five (tolerates two;
+promote the fourth and fifth with `flo cluster promote`),
 the peer port reachable only inside the private network, and
 `durability = "sync"` where an acknowledged write must survive a majority
 crash.
