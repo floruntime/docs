@@ -1,9 +1,9 @@
 ---
 title: Queues
-lede: Priority queues with competing consumers, DLQ, deduplication and blocking dequeue. Delivery is currently at-most-once.
+lede: Priority queues with competing consumers, DLQ and blocking dequeue. Delivery is currently at-most-once.
 ---
 
-Flo queues distribute tasks to competing consumers with priority ordering, dead-letter handling and deduplication. Every enqueue is Raft-replicated before it is acknowledged.
+Flo queues distribute tasks to competing consumers with priority ordering and dead-letter handling. Every enqueue is Raft-replicated before it is acknowledged.
 
 :::note
 Queues are currently **at-most-once**. A dequeue consumes the message: the server acknowledges it as it hands it out, so in normal operation it is not redelivered, even if the consumer crashes before processing it. There is no visibility timeout, `ack` and `nack` have no effect on a dequeued message, and so the DLQ is not reached in normal use. Leases with redelivery are planned.
@@ -55,8 +55,6 @@ flo queue enqueue tasks '{"task":"send-email","to":"alice@example.com"}'
 # With priority (lower = higher priority, default: 0)
 flo queue enqueue tasks '{"urgent":true}' --priority 1
 
-# Delayed delivery — invisible for 60 seconds after enqueue
-flo queue enqueue tasks '{"scheduled":true}' --delay 60000
 ```
 
 The response returns the assigned sequence number. A message takes at most 64 KiB.
@@ -108,8 +106,6 @@ Meant to return a message for redelivery, or send it to the DLQ. A dequeued mess
 # Nack — message goes back to the ready queue
 flo queue nack tasks <seq>
 
-# Nack directly to DLQ
-flo queue nack tasks <seq> --dlq
 ```
 
 ### Peek
@@ -170,17 +166,13 @@ result, _ := client.Queue.Dequeue("tasks", 10, &flo.DequeueOptions{
     BlockMS: ptr(uint32(30000)),
 })
 
+// A dequeue consumes its messages (at-most-once)
 for _, msg := range result.Messages {
-    // Process message...
-    client.Queue.Ack("tasks", []uint64{msg.Seq}, nil)
+    process(msg.Payload)
 }
-
-// Nack to DLQ on failure
-client.Queue.Nack("tasks", []uint64{msg.Seq}, &flo.NackOptions{ToDLQ: true})
 
 // Peek without consuming
 peeked, _ := client.Queue.Peek("tasks", 5, nil)
-
 
 // DLQ operations
 dlq, _ := client.Queue.DLQList("tasks", nil)
@@ -198,17 +190,12 @@ async with FloClient("localhost:9000") as client:
     result = await client.queue.dequeue("tasks", 10,
         DequeueOptions(block_ms=30000))
 
+    # A dequeue consumes its messages (at-most-once)
     for msg in result.messages:
-        try:
-            process(msg.payload)
-            await client.queue.ack("tasks", [msg.seq])
-        except Exception:
-            await client.queue.nack("tasks", [msg.seq],
-                NackOptions(to_dlq=True))
+        process(msg.payload)
 
     # Peek without consuming
     peeked = await client.queue.peek("tasks", 5)
-
 
     # DLQ operations
     dlq = await client.queue.dlq_list("tasks")
@@ -229,18 +216,13 @@ const result = await client.queue.dequeue("tasks", 10, {
   blockMs: 30000,
 });
 
+// A dequeue consumes its messages (at-most-once)
 for (const msg of result.messages) {
-  try {
-    process(decode(msg.payload));
-    await client.queue.ack("tasks", [msg.seq]);
-  } catch {
-    await client.queue.nack("tasks", [msg.seq], { toDlq: true });
-  }
+  process(decode(msg.payload));
 }
 
 // Peek without consuming
 const peeked = await client.queue.peek("tasks", 5);
-
 
 // DLQ operations
 const dlq = await client.queue.dlqList("tasks");
@@ -264,15 +246,14 @@ const seq = try queue.enqueue("tasks", "{\"task\":\"process\"}", .{
 var result = try queue.dequeue("tasks", 10, .{ .block_ms = 30000 });
 defer result.deinit();
 
+// A dequeue consumes its messages (at-most-once)
 for (result.messages) |msg| {
-    // Process...
-    try queue.ack("tasks", &[_]u64{msg.seq}, .{});
+    process(msg.payload);
 }
 
 // Peek without consuming
 var peeked = try queue.peek("tasks", 5, .{});
 defer peeked.deinit();
-
 
 // DLQ operations
 var dlq = try queue.dlqList("tasks", .{});

@@ -286,8 +286,6 @@ Records delivered via `group read` are placed in the PEL. They must be acknowled
 flo stream group ack events --group processors --consumer worker-1 \
   --ids 1703350800000-0,1703350800000-1
 
-# Read with auto-ack — no PEL tracking (at-most-once delivery)
-flo stream group read events --group processors --consumer worker-1 --no-ack
 ```
 
 ### Redelivery and Nack
@@ -299,9 +297,6 @@ If processing fails, you can explicitly nack records to put them back in the del
 flo stream group nack events --group processors --consumer worker-1 \
   --ids 1703350800000-0
 
-# Nack with delay — records become visible again after 5 seconds
-flo stream group nack events --group processors --consumer worker-1 \
-  --ids 1703350800000-0 --delay 5000
 ```
 
 The group can also auto-redeliver if the consumer doesn't ack within a deadline:
@@ -316,12 +311,11 @@ flo stream group create events --group processors --max-deliver 5
 
 ### Extending Delivery Deadlines
 
-If a consumer needs more time to process a record, it can extend the ack deadline:
+If a consumer needs more time to process a record, it can restart the record's ack deadline (one ack timeout from now):
 
 ```bash
-# Extend the deadline by 60 seconds
 flo stream group touch events --group processors --consumer worker-1 \
-  --ids 1703350800000-0 --extend 60000
+  --ids 1703350800000-0
 ```
 
 ### Inspecting Pending State
@@ -337,29 +331,10 @@ flo stream group pending events --group processors --consumer worker-1
 flo stream group info events --group processors
 ```
 
-### Consumer Modes
+### Delivery
 
-Groups support three delivery modes, set at creation time:
-
-| Mode | Behavior |
-|------|----------|
-| `shared` (default) | Records distributed round-robin across all consumers |
-| `exclusive` | One active consumer holds the lease; others are standbys |
-| `key_shared` | Records with the same key always go to the same consumer |
-
-```bash
-# Shared mode (default)
-flo stream group create events --group processors --mode shared
-
-# Exclusive — one active consumer, others wait
-flo stream group create events --group processors --mode exclusive
-
-# Singleton — exclusive with zero standbys allowed
-flo stream group create events --group processors --mode exclusive --max-standbys 0
-
-# Key-shared — partition by key across consumers
-flo stream group create events --group processors --mode key_shared --slots 16
-```
+Every group delivers each record to one of its consumers: they compete for
+records. There are no other delivery modes.
 
 ## SDK Examples
 

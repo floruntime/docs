@@ -315,10 +315,10 @@ Manage consumer groups. A group is scoped to a single stream — every subcomman
 
 ```bash
 flo stream group create <stream> --group <name> [--ack-timeout <ms>] [--max-deliver <n>]
-flo stream group read   <stream> --group <name> --consumer <id> [--limit <n>] [--block <ms>] [--no-ack]
+flo stream group read   <stream> --group <name> --consumer <id> [--limit <n>] [--block <ms>]
 flo stream group ack    <stream> --group <name> --ids <id,...> [--consumer <id>]
-flo stream group nack   <stream> --group <name> --ids <id,...> [--delay <ms>]
-flo stream group touch  <stream> --group <name> --consumer <id> --ids <id,...> [--extend <ms>]
+flo stream group nack   <stream> --group <name> --ids <id,...>
+flo stream group touch  <stream> --group <name> --consumer <id> --ids <id,...>
 flo stream group pending <stream> --group <name> [--consumer <id>]
 flo stream group info   <stream> --group <name>
 flo stream group join   <stream> <group> <consumer>
@@ -339,8 +339,6 @@ flo queue enqueue <queue> <data> [options]
 | Flag | Description |
 |------|-------------|
 | `--priority <n>` | Message priority (higher = sooner) |
-| `--delay <ms>` | Delivery delay in milliseconds |
-| `--dedup-key <key>` | Deduplication key |
 
 ### `flo queue dequeue`
 
@@ -373,7 +371,6 @@ flo queue nack <queue> <sequence...> [options]
 
 | Flag | Description |
 |------|-------------|
-| `--dlq` | Send to dead-letter queue |
 
 ### `flo queue peek`
 

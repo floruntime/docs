@@ -119,23 +119,19 @@ async with await client.kv.begin("user:42") as txn:
 ## Queue Operations
 
 ```python
-from flo import EnqueueOptions, DequeueOptions, NackOptions
+from flo import EnqueueOptions, DequeueOptions
 
-# Enqueue with priority and delay
+# Enqueue with a priority (lower is taken first)
 seq = await client.queue.enqueue("tasks", payload,
-    EnqueueOptions(priority=10, delay_ms=60000))
+    EnqueueOptions(priority=10))
 
 # Dequeue with long polling
 result = await client.queue.dequeue("tasks", 10,
     DequeueOptions(block_ms=30000))
 
-# Process and ack/nack
+# A dequeue consumes its messages (queues are currently at-most-once)
 for msg in result.messages:
-    try:
-        process(msg.payload)
-        await client.queue.ack("tasks", [msg.seq])
-    except Exception:
-        await client.queue.nack("tasks", [msg.seq], NackOptions(to_dlq=True))
+    process(msg.payload)
 
 # DLQ operations
 result = await client.queue.dlq_list("tasks")

@@ -299,7 +299,7 @@ Dead-letter entries.
 ### Writes
 
 ```
-POST   /api/v1/queues/:name?namespace=<ns>                # body: payload  (&priority= &delay_ms=)
+POST   /api/v1/queues/:name?namespace=<ns>                # body: payload  (&priority=; delay_ms is refused)
 POST   /api/v1/queues/:name/purge?namespace=<ns>
 POST   /api/v1/queues/:name/dlq/:seq/requeue?namespace=<ns>
 DELETE /api/v1/queues/:name/dlq/:seq?namespace=<ns>

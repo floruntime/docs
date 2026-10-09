@@ -69,10 +69,8 @@ await client.connect();
 // Read-only KV (config, feature flags)
 const value = await client.kv.get("config:flags");
 
-// Streams (subscribe + publish)
-await client.streams.subscribe("chat:room-123", (record) => {
-  console.log(new TextDecoder().decode(record.payload));
-});
+// Streams: read from the start
+const records = await client.streams.read("chat:room-123", { start: "0-0", count: 10 });
 
 await client.close();
 ```

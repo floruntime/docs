@@ -161,7 +161,6 @@ defer result.deinit();
 
 // Ack, Nack, DLQ
 try queue.ack("tasks", &seqs, .{});
-try queue.nack("tasks", &seqs, .{ .to_dlq = false });
 var dlq = try queue.dlqList("tasks", .{ .limit = 100 });
 defer dlq.deinit();
 try queue.dlqRequeue("tasks", &seqs, .{});
