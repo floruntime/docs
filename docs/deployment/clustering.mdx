@@ -102,12 +102,14 @@ flo cluster promote 4        # make a caught-up replica a voter; `promote 4 5` f
 flo cluster remove 3         # remove a member; it cannot rejoin under that id
 ```
 
-Both run against any member and are answered once the change has committed.
+Both run against any voter (a replica answers with the leader's address) and
+are answered once the change has committed; promoting a node that is already a
+voter succeeds and changes nothing.
 Voters change one at a time, so a second change waits for the first; a change
 too soon after an election is refused until the new leader has committed in
 its own term — retry in a moment.
 
-`promote` refuses a replica that has not caught up yet. `remove` refuses to
+`promote` refuses a replica that is not caught up at that moment. `remove` refuses to
 leave no voter, and asks for `--yes` when it would leave an even number of
 voters, or two, saying what that tolerates. After a removal that leaves an even
 number, the leader promotes a caught-up replica, if one may vote, to make it
