@@ -248,11 +248,10 @@ result, _ := client.Queue.DLQList("tasks", nil)
 client.Queue.DLQRequeue("tasks", seqs, nil)
 ```
 
-### Peek / Touch
+### Peek
 
 ```go
-result, _ := client.Queue.Peek("tasks", 10, nil)       // No lease
-client.Queue.Touch("tasks", []uint64{msg.Seq}, nil)     // Extend lease
+result, _ := client.Queue.Peek("tasks", 10, nil) // without consuming
 ```
 
 ## Stream Operations

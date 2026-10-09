@@ -141,9 +141,8 @@ for msg in result.messages:
 result = await client.queue.dlq_list("tasks")
 await client.queue.dlq_requeue("tasks", [msg.seq for msg in result.messages])
 
-# Peek (no lease) and Touch (extend lease)
+# Peek without consuming
 result = await client.queue.peek("tasks", 5)
-await client.queue.touch("tasks", [msg.seq])
 ```
 
 ## Stream Operations

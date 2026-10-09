@@ -75,7 +75,7 @@ Projections are specialized data structures that consume UAL entries and maintai
 The old system stored each message as 8 separate KV entries (~1.5 KB overhead per message). The new design uses native structures:
 
 - **Ready heap** — min-heap ordered by priority, 16 bytes per node
-- **Lease tracker** — maps sequences to lease expiry timestamps
+- **Lease tracker** — maps sequences to lease expiry timestamps. Unused today: a dequeue acks each message as it hands it out, so queues are at-most-once
 - **DLQ state** — tracks retry counts, moves failures to dead-letter queue
 
 Per-message overhead: **~64 bytes** (23× reduction from the old design).

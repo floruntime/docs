@@ -154,19 +154,12 @@ try {
 // Enqueue
 const seq = await client.queue.enqueue("tasks", payload, {
   priority: 10,
-  delayMs: 60000n,
-  dedupKey: "task-123",
 });
 
-// Dequeue with long polling
+// Dequeue with long polling (consumes the messages)
 const result = await client.queue.dequeue("tasks", 10, {
   blockMs: 30000,
-  visibilityTimeoutMs: 60000,
 });
-
-// Ack / Nack
-await client.queue.ack("tasks", [msg.seq]);
-await client.queue.nack("tasks", [msg.seq], { toDlq: true });
 
 // DLQ
 const dlq = await client.queue.dlqList("tasks");

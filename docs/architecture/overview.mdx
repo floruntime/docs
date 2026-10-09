@@ -133,8 +133,9 @@ or told it has no answer yet.
 
 A request that takes something — a dequeue, a group read or claim, a
 worker's await — is the exception: its answer carries what it took, so the
-node waits for that answer, up to 320 s. An SDK client times out first, and
-anything the request took returns when its lease ends.
+node waits for that answer, up to 320 s. An SDK client times out first. A
+group read's records return when their ack timeout ends; a dequeued message
+is consumed (queues are currently at-most-once).
 
 A client that closes its connection, or shuts down its sending side, while
 its request waits is treated as gone, and the request is not run. When it
@@ -149,7 +150,7 @@ connection, so they never reach the 64 or 8 limits below.
 | `overloaded: 64 requests on this connection are still waiting on other shards (the oldest on shard N); this request was not run — back off and retry` | for 3 s, none of this connection's 64 unanswered requests was answered | back off and retry |
 | `overloaded: this connection has 8 blocking reads waiting already; this request was not run — retry once one returns` | for 3 s, none of this connection's 8 blocking reads returned | retry once one returns, or read on another connection |
 | `unavailable: shard N did not answer in T s — retry` | shard N did not answer a read within about 3 s (at most 4) of when it first waited — a blocking read, its block time later | retry |
-| `unavailable: shard N did not answer in T s — the request may still apply` | shard N did not answer a write in that time, or a request that takes something in 320 s; shard N has the request and may still run it | read back before resending a write that is not idempotent; anything a dequeue or read took returns when its lease ends |
+| `unavailable: shard N did not answer in T s — the request may still apply` | shard N did not answer a write in that time, or a request that takes something in 320 s; shard N has the request and may still run it | read back before resending a write that is not idempotent; a group read's records return when their ack timeout ends, and a dequeued message is consumed |
 
 Each shard keeps up to 4096 blocking reads and parked workers waiting
 (about 1.5 MB, allocated at start). On a node of several shards, 1024 of

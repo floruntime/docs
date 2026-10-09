@@ -151,13 +151,10 @@ var queue = flo.Queue.init(&client);
 // Enqueue with options
 const seq = try queue.enqueue("tasks", "payload", .{
     .priority = 5,
-    .delay_ms = 1000,
-    .dedup_key = "unique-id",
 });
 
-// Dequeue with long polling
+// Dequeue with long polling (consumes the messages)
 var result = try queue.dequeue("tasks", 10, .{
-    .visibility_timeout_ms = 60000,
     .block_ms = 5000,
 });
 defer result.deinit();
