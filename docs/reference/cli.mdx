@@ -398,17 +398,20 @@ flo queue dlq purge <queue>
 
 ### `flo ts write`
 
-Write a data point using InfluxDB line protocol.
+Write a point, several fields of one point, or a batch of InfluxDB line protocol.
 
 ```bash
-flo ts write <measurement> <tags> <fields>
+flo ts write <measurement> --value <n> [--tags k=v,...] [--timestamp <ms>]
+flo ts write <measurement> --fields k=v,... [--tags k=v,...] [--timestamp <ms>]
+flo ts write --batch [--file <path>] [--precision ns|us|ms|s]
 ```
 
 Examples:
 
 ```bash
-flo ts write cpu host=web-01 usage=82.5
-flo ts write temperature region=us-east,sensor=a1 value=23.4
+flo ts write cpu --tags host=web-01 --value 82.5
+flo ts write cpu --tags host=web-01 --fields user=72.5,system=7.4
+echo 'cpu,host=web-01 user=72.5 1708700400000' | flo ts write --batch
 ```
 
 ### `flo ts query`

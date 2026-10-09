@@ -43,7 +43,9 @@ Write multiple named fields in a single data point:
 flo ts write cpu --tags host=web-01 --fields "user=72.5,system=7.4,idle=20.1"
 ```
 
-Each field creates a separate series under the same measurement and tag set. Query individual fields with `--field`.
+Each field creates a separate series under the same measurement and tag set, and
+all of them get one timestamp. Query individual fields with `--field`. Each field
+is its own write, so if one is refused the fields before it are already stored.
 
 ### Batch Write (InfluxDB Line Protocol)
 
@@ -71,6 +73,11 @@ The `--precision` flag specifies the timestamp unit in the payload:
 | `s` | Seconds | × 1,000 |
 
 Field types: float values are stored natively, integers (suffix `i`) are converted to `f64`, booleans become `0.0`/`1.0`. String fields are not supported.
+
+A line that fails to parse or is refused is reported with its line number; the
+other lines are still written, and the command exits non-zero.
+
+Values must be finite numbers: `nan` and `inf` are refused.
 
 ## Reading Data
 
