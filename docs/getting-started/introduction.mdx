@@ -12,7 +12,7 @@ Everything in Flo is backed by the same **Raft-replicated Unified Append Log**. 
 The data layer is four primitives, each tuned to a different access pattern but sharing one log, one consistency model, and one set of clients.
 
 <CardGroup cols={2}>
-  <Card title="KV" href="/primitives/kv">Strongly consistent, versioned key-value storage with CAS, TTL, blocking gets, and namespace isolation.</Card>
+  <Card title="KV" href="/primitives/kv">Strongly consistent, versioned key-value storage with CAS, TTL, blocking gets, and namespaces.</Card>
   <Card title="Streams" href="/primitives/streams">Append-only commit logs with consumer groups, partitioning, tiered storage, and blocking reads.</Card>
   <Card title="Queues" href="/primitives/queues">Priority queues with competing consumers, lease-based delivery, DLQ, and visibility timeouts.</Card>
   <Card title="Time-Series" href="/primitives/time-series">Columnar time-series with InfluxDB line protocol, FloQL pipelines, retention, and downsampling.</Card>
