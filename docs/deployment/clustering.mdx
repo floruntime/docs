@@ -197,14 +197,70 @@ Either way, a member whose applied state no longer matches the group marks
 itself **diverged**: it stops taking part (writes are refused with
 `unavailable: this node's data diverged from the group and it takes no
 writes; use another node`, reads still serve what it has), and `flo cluster
-status` and its log both say what to do: stop it, delete its data directory,
-and start it again with `--join` naming a live member — not `--cluster`.
+status` and its log both say what to do: stop it, move its data directory
+aside, and start it again with `--join` naming a live member — not
+`--cluster`. It rejoins with no log, as below.
 
 ### A member that lost its data
 
-Start it with `--join`, never with `--cluster`: with `--cluster` an empty data
-directory leads a group of one and takes writes until the old group speaks,
-then ends up diverged with those writes lost.
+Start it with `--join`, never with `--cluster`. A member that starts with
+`--join` and no log — a new node, or one that lost its disk — may have voted,
+or held writes a majority counted, before it lost them. So it grants no vote
+and never stands for election until:
+
+1. a leader has caught it up: it holds everything the leader had committed,
+   and
+2. enough of the other members have confirmed the current term that every
+   majority includes one of them — for the latest committed member list and
+   any newer one — asked no sooner than one election timeout after it
+   started, so an election it voted in before has finished.
+
+Its acknowledgements reach the leader but count toward no commit until then.
+
+A member that kept its log but lost its hard state (the file holding its term
+and vote) is guarded the same way, without the catch-up: its log is real, but
+the vote it cast in the current term is gone.
+
+After that it votes only in later terms. While it is guarded the group
+tolerates one fewer failure. `flo cluster status` shows `guarded: catching up`,
+then `guarded: confirming the term`. A restart part way through keeps it
+guarded.
+
+A node whose data directory has hard state but no log refuses to start with
+`--cluster`: it was a member, and founding would start a second cluster. A
+node with an empty data directory started with `--cluster` founds a new
+cluster and logs a warning saying so.
+
+### When a majority lost its data
+
+No leader can be elected: the surviving member needs votes, and members that
+lost their logs give none. The members waiting say so in their logs every 30
+seconds. To recover:
+
+1. Stop every node.
+2. On each node that still has its data, run
+   `flo server inspect --data-dir <dir>`. Pick the most up-to-date log: the
+   highest last term, then the highest last index. Prefer one whose lost-log
+   guard is off. Writes that node never received are lost.
+3. On that node, `flo server force-members --data-dir <dir>` shows what it
+   would change; add `--yes` to make it the only voter. It also retires the
+   node's cluster secret, and the server refuses to start with that secret
+   again.
+4. Make a new secret with `flo server secret`, give it to the survivor, and
+   start the survivor.
+5. On every other node, move its data directory aside, give it the new secret,
+   and start it with `--join` naming the survivor.
+
+Reset the other nodes' data before they rejoin: with their old logs and the
+old secret, they could still form a group of their own.
+
+The guard also waits forever, by design, in a few smaller cases. Each is
+recovered the same way, with `inspect` and `force-members`:
+
+- a group of two whose other member is gone;
+- a group growing from one member to two, when the first restarts before the
+  joiner has caught up;
+- a group of three with one member down and another guarded.
 
 ## Monitoring
 
@@ -231,6 +287,8 @@ Members:    3
 | `follower` | a member; writes are carried to the leader |
 | `electing` | a member choosing a leader; `Leader: none` |
 | `joining` | asking to be added; not a member yet |
+| `guarded: catching up` | no log or no hard state of its own (new, or lost); following a leader, no vote |
+| `guarded: confirming the term` | caught up; asking the members for their term, no vote |
 | `diverged` | stopped taking part; see above |
 
 `--output json` gives the same as one object, with `"leader_id": null` while

@@ -60,6 +60,34 @@ flo server start [options]
 | `--node-id <id>` | Unique node identifier | derived from `hostname:port` |
 | `--raft-port <port>` | Peer port, with `--cluster` or `--join` | `listen_port + 500` |
 
+### `flo server inspect`
+
+Show a stopped node's cluster log: its hard state, last index and term, what
+is committed, the latest member list, and whether its lost-log guard is on.
+Writes nothing. Refuses while a
+server holds the data directory, and refuses a directory that does not exist.
+
+```bash
+flo server inspect --data-dir /var/lib/flo
+```
+
+### `flo server force-members`
+
+Make a stopped node the cluster's only voter, for when a majority has lost its
+data. Without `--yes` it prints what it would change and stops. With `--yes`
+it writes a member list naming only this node and retires its cluster secret;
+restart it with a new one. See [Clustering](/deployment/clustering#when-a-majority-lost-its-data).
+
+```bash
+flo server force-members --data-dir /var/lib/flo --yes
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `-c, --config <path>` | Config file naming the data directory and the secret | `flo.toml` |
+| `-d, --data-dir <path>` | Data directory | from the config |
+| `--yes` | Make the change | — |
+
 ### `flo server status`
 
 Show server status and health.
