@@ -44,7 +44,7 @@ const decoder = new TextDecoder();
 // KV
 await client.kv.put("greeting", encoder.encode("Hello, Flo!"));
 const value = await client.kv.get("greeting");
-console.log(decoder.decode(value!));
+console.log(decoder.decode(value!.value));
 
 // Queue
 await client.queue.enqueue("tasks", encoder.encode('{"task":"process"}'));
@@ -88,12 +88,13 @@ The web SDK is limited to **streams** and **KV read-only**. For full KV mutation
 const r = await client.kv.get("key");
 if (r) console.log(r.value, "@", r.version); // r.version is bigint
 
-// Put resolves once the write commits
-await client.kv.put("key", encode("value"), {
+// Put returns PutResult { version: bigint }
+const res = await client.kv.put("key", encode("value"), {
   ttlMs: 3_600_000n,
   casVersion: r?.version,  // optimistic locking against the latest read
   ifNotExists: true,
 });
+console.log("committed at v", res.version);
 
 // Delete
 await client.kv.delete("key");
@@ -417,8 +418,8 @@ See [examples/workflow.ts](https://github.com/floruntime/flo-js/blob/dev/example
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `get` | `get(key, opts?) → Promise<Uint8Array \| null>` | Get value |
-| `put` | `put(key, value, opts?) → Promise<void>` | Set value |
+| `get` | `get(key, opts?) → Promise<GetResult \| null>` | Get value and version |
+| `put` | `put(key, value, opts?) → Promise<PutResult>` | Set value; returns the new version |
 | `delete` | `delete(key, opts?) → Promise<void>` | Delete key |
 | `scan` | `scan(prefix, opts?) → Promise<ScanResult>` | Prefix scan |
 | `history` | `history(key, opts?) → Promise<VersionEntry[]>` | Version history |
