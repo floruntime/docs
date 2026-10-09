@@ -222,7 +222,7 @@ Scan keys. Returns `{ keys: [{ key, size, version }], count, has_more, cursor, n
 
 ### `PUT /api/v1/kv/namespaces/:namespace/keys/:key`
 
-Write a value. Body: `{ "value": "...", "ttl_seconds": 3600, "nx": false }`.
+Write a value. Body: `{ "value": "...", "ttl_ms": 3600000, "nx": false }`. `ttl_ms` is milliseconds; `null` or `0` means no expiry. `ttl_seconds` is refused.
 
 ### `DELETE /api/v1/kv/namespaces/:namespace/keys/:key`
 

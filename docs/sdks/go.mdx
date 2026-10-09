@@ -84,8 +84,8 @@ res, err := client.KV.Put("key", []byte("value"), nil)
 fmt.Println("committed at version", res.Version)
 
 // With TTL
-ttl := uint64(3600)
-res, _ = client.KV.Put("key", []byte("value"), &flo.PutOptions{TTLSeconds: &ttl})
+ttl := uint64(3_600_000) // one hour, in milliseconds
+res, _ = client.KV.Put("key", []byte("value"), &flo.PutOptions{TTLMs: &ttl})
 
 // With CAS — use the version returned by Get or a previous Put
 cur, _ := client.KV.Get("key", nil)
@@ -134,8 +134,8 @@ n, err = client.KV.Incr("visits:home", &flo.KVIncrOptions{Delta: flo.Int64Ptr(10
 ### TTL lifecycle and existence
 
 ```go
-client.KV.Touch("lock:resource", 60, nil)  // extend TTL
-client.KV.Persist("lock:resource", nil)    // clear TTL
+client.KV.Touch("lock:resource", 60_000, nil) // extend TTL to 60 s
+client.KV.Persist("lock:resource", nil)        // clear TTL
 ok, _ := client.KV.Exists("lock:resource", nil)
 ```
 

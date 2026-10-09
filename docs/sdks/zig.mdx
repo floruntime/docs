@@ -78,7 +78,7 @@ _ = try kv.get("key", .{ .block_ms = 5000 });
 
 // Put returns PutResult { version: u64 }
 const put_res = try kv.put("key", "value", .{
-    .ttl_seconds = 3600,
+    .ttl_ms = 3_600_000,
     .if_not_exists = true,
     .namespace = "other-ns",
 });
@@ -116,7 +116,7 @@ const n = try kv.incr("visits:home", .{});
 const m = try kv.incr("visits:home", .{ .delta = 10 });
 
 // TTL lifecycle and existence
-try kv.touch("lock:resource", 60, .{});
+try kv.touch("lock:resource", 60_000, .{}); // extend TTL to 60 s
 try kv.persist("lock:resource", .{});
 const exists = try kv.exists("lock:resource", .{});
 

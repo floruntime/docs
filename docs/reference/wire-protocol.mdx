@@ -92,7 +92,7 @@ The protocol defines 167 operation codes organized by subsystem:
 | `kv_json_get` | `0x10C` | Extract JSON sub-field via JSONPath |
 | `kv_json_set` | `0x10D` | Atomically set a JSON sub-field |
 | `kv_json_del` | `0x10E` | Atomically delete a JSON sub-field |
-| `kv_touch` | `0x113` | Update TTL on existing key (no value rewrite) |
+| `kv_touch` | `0x113` | Update TTL on existing key (no value rewrite). Value: 8-byte TTL in milliseconds; 0 clears it |
 | `kv_persist` | `0x114` | Clear TTL (make key permanent) |
 | `kv_exists` | `0x115` | Existence check (no value transferred) |
 | `kv_begin_txn` | `0x110` | Open a per-shard transaction (returns `txn_id` + pinned partition hash) |
@@ -179,7 +179,7 @@ Some operations include optional TLV (Type-Length-Value) fields after the key an
 
 | Type | Name | Used By |
 |------|------|---------|
-| `0x01` | TTL | KV put |
+| `0x01` | `ttl_ms` | KV put. u64 milliseconds; 0 = no expiry. Any length other than 8 bytes is refused |
 | `0x02` | CAS version | KV put/delete |
 | `0x03` | Priority | Queue enqueue |
 | `0x04` | Delay | Queue enqueue |
