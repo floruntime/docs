@@ -264,8 +264,8 @@ DELETE /api/v1/streams/:name/groups/:group?namespace=<ns>
 
 `trim` requires at least one bound and returns `{ ok, stream, dry_run, trimmed }`,
 where `trimmed` is the number of records removed, or with `dry_run=true` the
-number that would be, with nothing removed. When both bounds are supplied
-`max_len` wins.
+number that would be, with nothing removed. It takes exactly one of `max_len`
+or `max_age_s`, each greater than zero; any other parameter is refused by name.
 
 There is no stream **compact** endpoint: Flo streams are append-only and trim is
 their retention primitive.
