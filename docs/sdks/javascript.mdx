@@ -88,13 +88,12 @@ The web SDK is limited to **streams** and **KV read-only**. For full KV mutation
 const r = await client.kv.get("key");
 if (r) console.log(r.value, "@", r.version); // r.version is bigint
 
-// Put returns PutResult { version: bigint }
-const res = await client.kv.put("key", encode("value"), {
+// Put resolves once the write commits
+await client.kv.put("key", encode("value"), {
   ttlMs: 3_600_000n,
   casVersion: r?.version,  // optimistic locking against the latest read
   ifNotExists: true,
 });
-console.log("committed at v", res.version);
 
 // Delete
 await client.kv.delete("key");

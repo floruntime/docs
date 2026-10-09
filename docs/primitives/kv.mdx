@@ -478,7 +478,7 @@ if flo.IsConflict(err) {
 // Conditional write (only if key doesn't exist)
 client.KV.Put("lock:resource", []byte("owner-1"), &flo.PutOptions{
     IfNotExists: true,
-    TTLMs:       ptr(uint64(30_000)),
+    TTLMs:       flo.Uint64Ptr(30_000),
 })
 
 // Atomic counter
@@ -599,9 +599,8 @@ async with FloClient("localhost:9000") as client:
 const client = new FloClient("localhost:9000");
 await client.connect();
 
-// Put returns PutResult with the new version
-const res = await client.kv.put("mykey", encode("hello"));
-console.log("committed at version", res.version);
+// Put resolves once the write commits
+await client.kv.put("mykey", encode("hello"));
 
 // Put with TTL
 await client.kv.put("session:abc", encode('{"user":"alice"}'), {
