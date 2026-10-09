@@ -108,7 +108,7 @@ flo kv set <key> <value> [options]
 
 | Flag | Description |
 |------|-------------|
-| `--ttl <seconds>` | Time-to-live |
+| `--ttl <duration>` | Time-to-live with a unit: `500ms`, `30s`, `5m`, `1h`, `1d`. Omit for no expiry |
 | `--if-not-exists` | Only set if key doesn't exist |
 | `--cas <version>` | Compare-and-swap version |
 
@@ -196,8 +196,8 @@ flo kv incr <key> [--by <delta>]
 Adjust the TTL on an existing key without rewriting the value.
 
 ```bash
-flo kv touch <key> --ttl <seconds>   # update TTL (0 clears it)
-flo kv persist <key>                  # clear TTL
+flo kv touch <key> --ttl <duration>   # update TTL, e.g. 30s (0 clears it)
+flo kv persist <key>                   # clear TTL
 ```
 
 | Flag | Description |

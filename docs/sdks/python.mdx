@@ -43,7 +43,7 @@ asyncio.run(main())
 from flo import GetOptions, PutOptions, ScanOptions, HistoryOptions
 
 # Put returns PutResult with the new version
-res = await client.kv.put("session:abc", b"data", PutOptions(ttl_seconds=3600))
+res = await client.kv.put("session:abc", b"data", PutOptions(ttl_ms=3_600_000))
 print("committed at v", res.version)
 
 # Get returns GetResult | None \u2014 carries both value and version
@@ -85,8 +85,8 @@ n = await client.kv.incr("visits:home")        # +1
 n = await client.kv.incr("visits:home", KVIncrOptions(delta=10))
 
 # TTL lifecycle and existence
-await client.kv.touch("lock:resource", 60)     # extend TTL
-await client.kv.persist("lock:resource")       # clear TTL
+await client.kv.touch("lock:resource", 60_000)  # extend TTL to 60 s
+await client.kv.persist("lock:resource")         # clear TTL
 ok = await client.kv.exists("lock:resource")
 
 # JSON paths
