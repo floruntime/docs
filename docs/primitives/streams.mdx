@@ -111,7 +111,10 @@ flo stream append events 'hello' --json
 
 The response includes the assigned Stream ID (e.g., `1703350800000-0`).
 
-One append — all its records and headers together — takes at most 64 KiB.
+One append — all its records and headers together — takes at most 64 KiB and
+1000 records. More records are refused with `stream append: a batch of N records
+is over the limit of 1000`; a value that isn't a well-formed batch is refused as
+`stream append: malformed batch`.
 
 ### Read
 
@@ -129,7 +132,12 @@ flo stream read events --start 1703350800000-0 --end 1703350815000-0
 flo stream read events --limit 10 --json
 ```
 
-The default limit is 10. Maximum is 1000 per request.
+`--limit` counts records (default 10, at most 1000). A read never splits an
+append: it returns the whole appends that fit the limit, and always at least
+one, so a single append larger than the limit comes back entire. A range's
+`--end` likewise returns the whole append it falls in. `--start` is exclusive
+and may name any record, including one inside an append: the read resumes with
+the record after it.
 
 ### Blocking Reads
 
@@ -228,6 +236,12 @@ Deleting a stream that does not exist is a no-op (idempotent), and the name can 
 ## Consumer Groups
 
 Consumer groups allow multiple consumers to process a stream cooperatively. Each record is delivered to **exactly one** consumer in the group. The server tracks a **Pending Entry List (PEL)** — records that have been delivered but not yet acknowledged.
+
+A group read delivers whole appends, like a plain read. The PEL currently holds
+one entry per append, not per record: acknowledging an append's first record
+acknowledges the whole append, and acknowledging its other records has no
+effect. Acknowledge the first record of an append only once all of its records
+are processed.
 
 A consumer group is **scoped to a single stream**: its identity is the `(stream, group)` pair, and its cursor and PEL belong to that one stream. The same group name used on two different streams gives two fully independent groups (separate cursors, separate PELs). A group read targets exactly one stream — **wildcard / fan-in reads are not supported**:
 
