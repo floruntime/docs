@@ -296,11 +296,6 @@ It is not a standing policy: points that age past the duration later stay
 until it is run again. Other measurements, and `cpu` in other namespaces, are
 untouched. Downsampling isn't supported.
 
-:::note
-The deletion isn't written to the log yet, so a restart brings the deleted
-points back, and other nodes in a cluster don't apply it.
-:::
-
 ## Namespace Isolation
 
 Time-series data is isolated by namespace. The same measurement name in different namespaces contains independent data:
