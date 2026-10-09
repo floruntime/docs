@@ -74,8 +74,11 @@ The `--precision` flag specifies the timestamp unit in the payload:
 
 Field types: float values are stored natively, integers (suffix `i`) are converted to `f64`, booleans become `0.0`/`1.0`. String fields are not supported.
 
-A line that fails to parse or is refused is reported with its line number; the
-other lines are still written, and the command exits non-zero.
+The CLI parses the lines itself and sends one write per field. A line that fails
+to parse or is refused is reported with its line number and the token at fault,
+and none of its fields are written. The other lines are still written, and the
+command exits non-zero. Backslash escapes aren't supported; a line using them is
+refused.
 
 Values must be finite numbers: `nan` and `inf` are refused.
 

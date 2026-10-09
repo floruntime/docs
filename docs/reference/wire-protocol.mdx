@@ -140,6 +140,22 @@ Response opcodes occupy `0x106–0x10A` and `0x116–0x118`. CAS is expressed as
 | `ts_delete` | `0x1A5` | Delete series |
 | `ts_retention` | `0x1A6` | Set retention |
 
+Time-series option tags:
+
+| Tag | Value | Type | Meaning |
+|-----|-------|------|---------|
+| `ts_from_ms` | `0x60` | i64 | Start of the time range (inclusive, unix ms) |
+| `ts_to_ms` | `0x61` | i64 | End of the time range (inclusive; 0 = now) |
+| `ts_window_ms` | `0x62` | i64 | Aggregation window (ms) |
+| `ts_aggregation` | `0x63` | string | `avg`, `sum`, `count`, `min` or `max` |
+| `ts_field` | `0x64` | string | Field name (default `value`) |
+| `ts_tags` | `0x65` | string | `key=val,key2=val2` |
+| `ts_timestamp` | `0x67` | i64 | A write's timestamp in ms; absent = the server's clock |
+| `ts_raw_ttl` | `0x68` | string | Raw data TTL, e.g. `7d` |
+| `ts_downsample` | `0x69` | string | Refused: downsampling isn't supported |
+
+A `ts_write` value that isn't exactly 8 bytes, or is NaN or infinite, is refused with `bad_request`.
+
 ### Action Operations (0x50–0x5F)
 
 | OpCode | Value | Description |

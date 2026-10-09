@@ -414,6 +414,11 @@ flo ts write cpu --tags host=web-01 --fields user=72.5,system=7.4
 echo 'cpu,host=web-01 user=72.5 1708700400000' | flo ts write --batch
 ```
 
+- `--timestamp` is milliseconds since the epoch and must be > 0; without it the server stamps the point. `--fields` writes every field at one timestamp.
+- Values must be finite numbers; whole numbers past 2^53 are refused, because a float can't store them exactly.
+- `--fields` sends one write per field and is not atomic. If one is refused, the error says how many were written.
+- `--batch` reads line protocol from `--file` or stdin, with `--precision ns|us|ms|s` (default `ms`). Each line names its own measurement, tags and time, so `--batch` refuses a measurement, `--tags`, `--value`, `--fields` and `--timestamp`. A bad line is reported by line number, naming the token at fault, and none of its fields are written. The other lines are still written, and the command exits non-zero if any line failed. Backslash escapes, repeated tag keys or fields, and anything after the timestamp are refused.
+
 ### `flo ts query`
 
 Run a FloQL query.
