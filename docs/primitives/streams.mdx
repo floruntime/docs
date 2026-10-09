@@ -203,7 +203,7 @@ flo stream trim events --before 1703350800000-0
 # Remove records older than 1 hour
 flo stream trim events --maxage 3600
 
-# Give exactly one of --before, --maxlen or --maxage.
+# Give exactly one of --before, --maxlen or --maxage; a zero bound is refused.
 # Count what a trim would remove, removing nothing
 flo stream trim events --maxlen 10000 --dry-run
 ```
