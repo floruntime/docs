@@ -12,7 +12,7 @@ Each data point consists of four components:
 - **Measurement** — The metric name (e.g., `cpu`, `memory`, `http_requests`)
 - **Tags** — Indexed key-value pairs for filtering (e.g., `host=web-01,region=us-east`)
 - **Fields** — The actual metric values. A single value uses the default field name `value`; multi-field writes name each field explicitly (e.g., `user=72.5,system=7.4`)
-- **Timestamp** — Millisecond precision. Defaults to server time when omitted.
+- **Timestamp** — Millisecond precision. When omitted, a single `--value` write takes the server's time; `--fields` and batch lines without one take the CLI's time, once for all their fields.
 
 A **series** is the unique combination of measurement + tag set + field name. Each series maintains its own write buffer and block chain.
 
