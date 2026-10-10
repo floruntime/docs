@@ -539,14 +539,30 @@ flo processing stop <job-id>
 
 ### `flo cluster status`
 
-Show this node's id, role (`leader`, `follower`, `electing`, `joining`,
-`diverged`), the leader it knows (`none` while electing or joining), the term
-and the member count. `-o json` gives the same as one object.
+Show this node's id, role (`leader`, `follower`, `replica`, `electing`,
+`joining`, `diverged`, `removed`), the leader it knows (`none` while electing
+or joining), the term and the member count. `-o json` gives the same as one
+object.
 
 ```bash
 flo cluster status
 flo cluster status -o json
 ```
 
-`flo cluster members` and `flo cluster transfer-leader` are accepted by the
-CLI but not yet implemented by the server.
+### `flo cluster members`
+
+Every member with its role (`voter`, `replica`, or `joining` for one added
+that has not caught up yet), address, last
+contact and lag, and the ids removed. Contact and lag are the leader's to
+report; elsewhere they show `-`. `-o json` gives the same as one object.
+
+### `flo cluster promote <id>...`
+
+Make a caught-up replica a voter, one at a time, each answered once it
+commits. Refused for a member that has not caught up.
+
+### `flo cluster remove <id> [--yes]`
+
+Remove a member, answered once the change commits; the id cannot rejoin.
+Refused when it would leave no voter; `--yes` is required when it would leave
+an even number of voters, or two. The leader may remove itself.
