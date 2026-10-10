@@ -84,6 +84,12 @@ cluster is a leader and a live copy, not failover; failover needs three. A
 fourth member and later stay replicas until promoted. A joiner that never
 catches up within ten minutes is dropped again (it may ask to join anew).
 
+A new cluster has one voter until both joiners have caught up and been
+promoted, which takes a few seconds after they join. Before taking any node
+down, wait until `flo cluster members` shows three voters: stopping the first
+member while it is still the only voter leaves the others with no one to
+elect a leader.
+
 ### Restarting a member
 
 Start it the same way it was started before, with `--cluster` or `--join`.
@@ -156,7 +162,10 @@ nodes reconnect.
 
 **Upgrading.** Members on different versions of the peer protocol cannot
 link; a node that meets one logs both versions. Upgrade a cluster by stopping
-every node, then starting them all on the new version.
+every node, then starting them all on the new version. Members restarted
+with their data keep their roles; a cluster formed anew after an upgrade that
+wipes the data directories has one voter again until its joiners are
+promoted, as above.
 
 Node ids are derived from `hostname:port` unless `--node-id` is given, and
 are stored in the data directory on first boot; to change one, start from an
