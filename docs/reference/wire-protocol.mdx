@@ -223,6 +223,8 @@ A `ts_write` value is exactly one finite f64, 8 bytes little-endian; any other l
 | `action_fail` | `0x308` |
 | `action_touch` | `0x309` |
 
+An `action_invoke` value is `[has_labels:u8]([labels_len:u16][labels])?[input]`: `has_labels` is 0 and the input follows, or 1 and the required worker labels, a JSON object, come first. An empty value, `has_labels` other than 0 or 1, labels that run past the value, or labels that aren't a JSON object are refused with `bad_request`.
+
 ### Workers (0x320 – 0x33F)
 
 | OpCode | Value |
