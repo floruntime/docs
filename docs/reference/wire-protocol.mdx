@@ -187,23 +187,96 @@ A `ts_write` value that isn't exactly 8 bytes, or is NaN or infinite, is refused
 
 ## TLV Extended Fields
 
-Some operations include optional TLV (Type-Length-Value) fields after the key and value:
+Operation-specific parameters travel as TLV (Type-Length-Value) options at the end of the request payload:
 
 ```
 ┌──────┬────────┬───────────┐
-│ type │ length │ value     │
-│ (1B) │ (2B)   │ (var)     │
+│ tag  │ length │ value     │
+│ (1B) │ (1B)   │ (var)     │
 └──────┴────────┴───────────┘
 ```
 
-| Type | Name | Used By |
-|------|------|---------|
-| `0x01` | `ttl_ms` | KV put. u64 milliseconds; 0 = no expiry. Any length other than 8 bytes is refused |
-| `0x02` | CAS version | KV put/delete |
-| `0x03` | Priority | Queue enqueue |
-| `0x04` | Delay | Queue enqueue |
-| `0x05` | Dedup key | Queue enqueue |
-| `0x06` | Block timeout | Get, dequeue, stream read |
-| `0x07` | Consumer group | Stream group operations |
-| `0x08` | Idempotency key | Action invoke |
+A value is at most 255 bytes. Integers are little-endian; a flag option has length 0 and is set by being present.
 
+### KV options (0x01–0x0F)
+
+| Tag | Name | Type | Meaning |
+|-----|------|------|---------|
+| `0x01` | `ttl_ms` | u64 | Time-to-live in ms; 0 = no expiry. Any length other than 8 bytes is refused |
+| `0x02` | `cas_version` | u64 | Expected version for compare-and-swap |
+| `0x03` | `if_not_exists` | flag | Write only if the key doesn't exist |
+| `0x04` | `if_exists` | flag | Write only if the key exists |
+| `0x05` | `limit` | u32 | Maximum results for scan and list operations |
+| `0x06` | `keys_only` | u8 | 1 = return keys without values in a scan |
+| `0x07` | `cursor` | bytes | Pagination cursor from a previous scan |
+| `0x08` | `routing_key` | string | Routing key that overrides key-based shard routing |
+| `0x09` | `txn_id` | u64 | Per-shard transaction id returned by `kv_begin_txn` |
+
+### Queue options (0x10–0x1F)
+
+| Tag | Name | Type | Meaning |
+|-----|------|------|---------|
+| `0x10` | `priority` | u8 | Message priority, 0–255; higher is more urgent |
+| `0x11` | `delay_ms` | u64 | Delay before the message becomes visible |
+| `0x12` | `visibility_timeout_ms` | u32 | How long a dequeued message stays invisible |
+| `0x13` | `dedup_key` | string | Deduplication key |
+| `0x14` | `max_retries` | u8 | Retry attempts before the message goes to the DLQ |
+| `0x15` | `count` | u32 | Number of messages to dequeue |
+| `0x16` | `send_to_dlq` | u8 | 1 = send failed messages to the DLQ |
+| `0x17` | `block_ms` | u32 | Wait until a result exists; 0 = don't wait, at most 300000 |
+| `0x18` | `wait_ms` | u32 | Wait for the next version change; 0 = don't wait, at most 300000 |
+
+### Stream options (0x20–0x2F)
+
+| Tag | Name | Type | Meaning |
+|-----|------|------|---------|
+| `0x21` | `stream_start` | StreamID | Read records after this id (exclusive) |
+| `0x22` | `stream_end` | StreamID | End id for reads (inclusive) |
+| `0x23` | `stream_tail` | flag | Start from the end of the stream |
+| `0x24` | `partition` | u32 | Explicit partition index |
+| `0x25` | `partition_key` | string | Key for partition routing |
+| `0x26` | `max_age_seconds` | u64 | Maximum age for retention |
+| `0x27` | `max_bytes` | u64 | Maximum size for retention |
+| `0x28` | `dry_run` | flag | Preview what would be deleted without deleting |
+| `0x29` | `retention_count` | u64 | Retention policy: maximum event count |
+| `0x2A` | `retention_age` | u64 | Retention policy: maximum age in seconds |
+| `0x2B` | `retention_bytes` | u64 | Retention policy: maximum bytes |
+| `0x2C` | `force` | flag | Force a destructive operation, such as deleting a non-empty stream |
+
+`0x20` is reserved. A StreamID is 16 bytes: `timestamp_ms` then `sequence`, each a big-endian u64.
+
+### Consumer group options (0x30–0x3F)
+
+| Tag | Name | Type | Meaning |
+|-----|------|------|---------|
+| `0x30` | `ack_timeout_ms` | u32 | Time before an unacked message is redelivered |
+| `0x31` | `max_deliver` | u8 | Delivery attempts before the DLQ; 0 = unlimited |
+| `0x32` | `subscription_mode` | u8 | 0 = shared, 1 = exclusive, 2 = key_shared |
+| `0x33` | `redelivery_delay_ms` | u32 | Delay before a nacked message is visible again |
+| `0x34` | `consumer_timeout_ms` | u32 | Remove a consumer from the group after this long idle |
+| `0x35` | `no_ack` | flag | Ack on delivery (at-most-once) |
+| `0x36` | `idle_timeout_ms` | u64 | Minimum idle time before a stuck message can be claimed |
+| `0x37` | `max_ack_pending` | u32 | Maximum unacked messages per consumer |
+| `0x38` | `extend_ack_ms` | u32 | How far a touch extends the ack deadline |
+| `0x39` | `max_standbys` | u16 | Maximum standby consumers in exclusive mode |
+| `0x3A` | `num_slots` | u16 | Hash slots for key_shared mode |
+
+### Worker and action options (0x40–0x4F)
+
+| Tag | Name | Type | Meaning |
+|-----|------|------|---------|
+| `0x40` | `worker_id` | string | Worker identifier |
+| `0x41` | `extend_ms` | u32 | Lease extension in ms |
+| `0x42` | `max_tasks` | u32 | Maximum tasks to return in one batch |
+| `0x43` | `retry` | u8 | 1 = retry on failure |
+
+### Workflow options (0x50–0x5F)
+
+| Tag | Name | Type | Meaning |
+|-----|------|------|---------|
+| `0x50` | `timeout_ms` | u64 | Workflow or activity timeout |
+| `0x51` | `retry_policy` | bytes | Serialized retry policy |
+| `0x52` | `correlation_id` | string | Correlation id for tracing |
+| `0x53` | `subscription_id` | u64 | Subscription id for stream subscriptions |
+
+Time-series options (`0x60`–`0x69`) are listed under [Time-Series Operations](#time-series-operations-0x1a0-0x1a6).
