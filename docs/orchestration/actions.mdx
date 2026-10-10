@@ -227,7 +227,7 @@ Label matching rules:
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `labels` | — | Required worker labels (JSON object) |
+| `labels` | — | Required worker labels, a JSON object; anything else is refused. A run goes to a worker whose labels include every one |
 | `namespace` | `default` | Namespace isolation |
 
 Invoke priority, delay and idempotency keys aren't supported yet: runs are taken in the order they were invoked, at once, and every invoke starts a new run (tracked in [#181](https://github.com/floruntime/flo/issues/181)).

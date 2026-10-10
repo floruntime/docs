@@ -320,16 +320,19 @@ For low-level action operations (register, invoke, status), use `flo.Actions`:
 var actions = flo.Actions.init(&client);
 
 // Register an action type
-try actions.register("send-email", .user, .{
+try actions.registerAction("send-email", .user, .{
     .timeout_ms = 30000, .max_retries = 3,
 });
 
-// Invoke an action
-const run_id = try actions.invoke("send-email", "{\"to\":\"user@example.com\"}", .{});
-defer allocator.free(run_id);
+// Invoke an action; .labels routes it to workers registered with those labels
+var invoked = try actions.invoke("send-email", "{\"to\":\"user@example.com\"}", .{
+    .labels = "{\"region\":\"eu\"}",
+});
+defer invoked.deinit();
 
 // Check status
-const status = try actions.status(run_id, .{});
+var status = try actions.getStatus(invoked.run_id, .{});
+defer status.deinit();
 ```
 
 ## Error Handling

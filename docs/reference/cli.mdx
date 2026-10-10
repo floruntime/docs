@@ -513,7 +513,7 @@ flo action invoke <name> <input> [--labels <json>]
 
 | Flag | Description |
 |------|-------------|
-| `--labels`, `-l <json>` | Required worker labels, e.g. `'{"gpu":true}'` |
+| `--labels`, `-l <json>` | Required worker labels, a JSON object, e.g. `'{"gpu":true}'`; anything else is refused |
 
 Invoke priority, delay and idempotency keys aren't supported yet (tracked in [#181](https://github.com/floruntime/flo/issues/181)).
 
