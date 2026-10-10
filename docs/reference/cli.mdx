@@ -30,7 +30,7 @@ refused with the reason. Each shard holds at most 1024 namespaces, and
 
 ```bash
 flo ns create <name>
-flo ns ls [--all]
+flo ns ls
 flo ns info <name>
 ```
 
@@ -261,13 +261,13 @@ flo stream create <name> [options]
 
 | Flag | Description |
 |------|-------------|
-| `--partitions <n>` | Number of partitions (default 1) |
-| `--retention <hours>` | Keep records this many hours (0 = no age bound) |
+| `--partitions`, `-p <n>` | Number of partitions (default 1) |
+| `--retention`, `-r <hours>` | Keep records this many hours (0 = no age bound) |
 | `--retention-count <n>` | Keep at most this many records (0 = no count bound) |
 
 ### `flo stream alter`
 
-Change a stream's retention. A bound left out keeps its current value.
+Change a stream's retention. A bound left out, or given as 0, keeps its current value.
 
 ```bash
 flo stream alter <name> [--retention <hours>] [--retention-count <n>]
@@ -291,10 +291,13 @@ flo stream read <stream> [options]
 
 | Flag | Description |
 |------|-------------|
-| `--offset <n>` | Start offset |
-| `--count <n>` | Number of records |
-| `--block <ms>` | Wait for new records (at most 300000 ms, 5 minutes; 0 does not wait; a longer wait is refused) |
-| `--follow` | Follow mode (block for new records) |
+| `--start`, `-s <id>` | Read records after this StreamID (exclusive; `0-0` is the beginning, `$` the latest) |
+| `--end`, `-e <id>` | Last StreamID to read (inclusive) |
+| `--limit`, `-l <n>` | Maximum records (default 10); a larger append comes back whole |
+| `--block`, `-b <ms>` | Wait for new records (at most 300000 ms, 5 minutes; 0 does not wait; a longer wait is refused) |
+| `--follow`, `-f` | Keep reading new records, like `tail -f` |
+| `--partition`, `-P <n>` | Partition to read |
+| `--partition-key`, `-k <key>` | Read the partition this key routes to |
 
 ### `flo stream info`
 
@@ -326,7 +329,7 @@ Manage consumer groups. A group is scoped to a single stream — every subcomman
 flo stream group create <stream> --group <name> [--ack-timeout <ms>] [--max-deliver <n>]
 flo stream group read   <stream> --group <name> --consumer <id> [--limit <n>] [--block <ms>]
 flo stream group ack    <stream> --group <name> --ids <id,...> [--consumer <id>]
-flo stream group nack   <stream> --group <name> --ids <id,...>
+flo stream group nack   <stream> --group <name> --ids <id,...> [--consumer <id>]
 flo stream group touch  <stream> --group <name> --consumer <id> --ids <id,...>
 flo stream group pending <stream> --group <name> [--consumer <id>]
 flo stream group info   <stream> --group <name>
@@ -347,7 +350,7 @@ flo queue enqueue <queue> <data> [options]
 
 | Flag | Description |
 |------|-------------|
-| `--priority <n>` | Message priority (higher = sooner) |
+| `--priority <n>` | Message priority, 0–255; lower is taken first, and unset is 0 |
 
 ### `flo queue dequeue`
 
@@ -372,14 +375,11 @@ flo queue ack <queue> <sequence...>
 
 ### `flo queue nack`
 
-Negative acknowledge (requeue or send to DLQ).
+Negative acknowledge. Queues are at-most-once today, so a nack doesn't redeliver (tracked in [#179](https://github.com/floruntime/flo/issues/179)).
 
 ```bash
-flo queue nack <queue> <sequence...> [options]
+flo queue nack <queue> <sequence...>
 ```
-
-| Flag | Description |
-|------|-------------|
 
 ### `flo queue peek`
 
@@ -394,10 +394,11 @@ flo queue peek <queue> [--count <n>]
 Manage dead-letter queue.
 
 ```bash
-flo queue dlq list <queue> [--count <n>]
+flo queue dlq list <queue>
 flo queue dlq requeue <queue> <sequence...>
-flo queue dlq purge <queue>
 ```
+
+`dlq list` shows the queue's dead-letter count; listing the messages and `dlq requeue` aren't supported yet.
 
 ## Time-Series
 
@@ -424,19 +425,19 @@ echo 'cpu,host=web-01 user=72.5 1708700400000' | flo ts write --batch
 - `--fields` sends one write per field and is not atomic. If one is refused, the error says how many were written.
 - `--batch` reads line protocol from `--file` or stdin, with `--precision ns|us|ms|s` (default `ms`). Each line names its own measurement, tags and time, so `--batch` refuses a measurement, `--tags`, `--value`, `--fields` and `--timestamp`. A bad line is reported by line number, naming the token at fault, and none of its fields are written. The other lines are still written, and the command exits non-zero if any line failed. Backslash escapes, repeated tag keys or fields, and anything after the timestamp are refused.
 
-### `flo ts query`
+### `flo ts floql`
 
 Run a FloQL query.
 
 ```bash
-flo ts query "<query>"
+flo ts floql "<query>"
 ```
 
 Examples:
 
 ```bash
-flo ts query "cpu{host=web-01}[1h] | avg(5m)"
-flo ts query "temperature{region=us-east}[24h] | max(1h)"
+flo ts floql 'cpu_usage{host=web-01}[1h] | window(5m) | avg()'
+flo ts floql 'temperature[24h] | window(1h) | max() | topk(3)'
 ```
 
 ## Actions
@@ -451,21 +452,23 @@ flo action register <name> [options]
 
 | Flag | Description |
 |------|-------------|
-| `--timeout <ms>` | Execution timeout |
-| `--max-retries <n>` | Maximum retry count |
+| `--owner`, `-o <name>` | Owner or team name |
+| `--timeout <ms>` | Execution timeout (default 30000) |
+| `--retries`, `-r <n>` | Maximum retry attempts (default 0) |
 
 ### `flo action invoke`
 
 Invoke an action.
 
 ```bash
-flo action invoke <name> [data] [options]
+flo action invoke <name> <input> [--labels <json>]
 ```
 
 | Flag | Description |
 |------|-------------|
-| `--labels <json>` | Required worker labels, e.g. `'{"gpu":true}'` |
-| `--async` | Don't wait for the result |
+| `--labels`, `-l <json>` | Required worker labels, e.g. `'{"gpu":true}'` |
+
+Invoke priority, delay and idempotency keys aren't supported yet (tracked in [#181](https://github.com/floruntime/flo/issues/181)).
 
 ### `flo action status`
 

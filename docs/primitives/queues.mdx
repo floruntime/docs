@@ -6,7 +6,7 @@ lede: Priority queues with competing consumers, DLQ and blocking dequeue. Delive
 Flo queues distribute tasks to competing consumers with priority ordering and dead-letter handling. Every enqueue is Raft-replicated before it is acknowledged.
 
 :::note
-Queues are currently **at-most-once**. A dequeue consumes the message: the server acknowledges it as it hands it out, so in normal operation it is not redelivered, even if the consumer crashes before processing it. There is no visibility timeout, `ack` and `nack` have no effect on a dequeued message, and so the DLQ is not reached in normal use. Leases with redelivery are planned.
+Queues are currently **at-most-once**. A dequeue consumes the message: the server acknowledges it as it hands it out, so in normal operation it is not redelivered, even if the consumer crashes before processing it. There is no visibility timeout, `ack` and `nack` have no effect on a dequeued message, and so the DLQ is not reached in normal use. Leases with redelivery are planned (tracked in [#179](https://github.com/floruntime/flo/issues/179)).
 :::
 
 ## Core Concepts

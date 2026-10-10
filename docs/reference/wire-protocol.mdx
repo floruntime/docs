@@ -274,7 +274,7 @@ Tags the server reads. An option it doesn't recognise is ignored for now; that c
 | `0x02` | `cas_version` | u64: Expected version for compare-and-swap |
 | `0x03` | `if_not_exists` | void: Only set if key doesn't exist (NX) |
 | `0x04` | `if_exists` | void: Only set if key exists (XX) |
-| `0x05` | `limit` | u32: Maximum results for history and DLQ list (list operations take theirs in the value) |
+| `0x05` | `limit` | u32: Maximum results for `kv_history` (newest first) and `ts_read` (earliest first); absent or 0 is all. List operations take theirs in the value |
 | `0x08` | `routing_key` | string: Explicit routing key for shard co-location (overrides key-based routing) |
 | `0x09` | `txn_id` | u64: Per-shard transaction ID (returned by kv_begin_txn) |
 | `0x10` | `priority` | u8: Message priority (0-255; lower is taken first) |
@@ -287,11 +287,11 @@ Tags the server reads. An option it doesn't recognise is ignored for now; that c
 | `0x24` | `partition` | u32: Explicit partition index |
 | `0x25` | `partition_key` | string: Key for partition routing |
 | `0x26` | `max_age_seconds` | u64: Trim records older than this many seconds |
-| `0x27` | `max_bytes` | Refused: byte-based trim isn't supported |
+| `0x27` | `max_bytes` | Refused: byte-based trim isn't supported ([#183](https://github.com/floruntime/flo/issues/183)) |
 | `0x28` | `dry_run` | void: Trim answers what it would remove and removes nothing |
 | `0x29` | `retention_count` | u64: Retention policy - max event count |
 | `0x2A` | `retention_age` | u64: Retention policy - max age in seconds |
-| `0x2B` | `retention_bytes` | Refused: byte retention isn't supported |
+| `0x2B` | `retention_bytes` | Refused: byte retention isn't supported ([#183](https://github.com/floruntime/flo/issues/183)) |
 | `0x2C` | `force` | void: Force a destructive op (e.g. delete a non-empty stream) |
 | `0x30` | `ack_timeout_ms` | u32: Time before unacked message auto-redelivers (overrides default) |
 | `0x31` | `max_deliver` | u8: Max delivery attempts before DLQ (default: 10, 0=unlimited) |
@@ -303,4 +303,4 @@ Tags the server reads. An option it doesn't recognise is ignored for now; that c
 | `0x65` | `ts_tags` | string: Comma-separated tag filters "key=val,key2=val2" |
 | `0x67` | `ts_timestamp` | i64: A write's timestamp in ms; absent, 0 or less = the server's clock |
 | `0x68` | `ts_raw_ttl` | string: Raw data TTL (e.g., "7d") |
-| `0x69` | `ts_downsample` | string: refused — downsampling isn't supported |
+| `0x69` | `ts_downsample` | string: refused — downsampling isn't supported ([#158](https://github.com/floruntime/flo/issues/158)) |

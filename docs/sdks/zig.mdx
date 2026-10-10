@@ -105,7 +105,7 @@ for (mget_res.entries) |e| {
 }
 
 // Scan
-var result = try kv.scan("prefix:", .{ .limit = 100, .keys_only = true });
+var result = try kv.scan("prefix:", .{ .limit = 100 });
 defer result.deinit();
 
 // History
