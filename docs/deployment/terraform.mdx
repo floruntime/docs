@@ -381,7 +381,7 @@ Or scrape locally via the DigitalOcean monitoring agent (which runs on-loopback)
 
 ## Upgrading Flo
 
-Nodes built from different releases can't link, and a server refuses clients from another release (see [Versions](/reference/wire-protocol#versions)). So upgrade every node at once, not one droplet at a time: stop flo on every droplet, upgrade it, then start every node, and upgrade the CLI and SDKs your clients use with it.
+Nodes built from different op tables can't link, and a server refuses clients built from another table (see [Versions](/reference/wire-protocol#versions)). So upgrade every node at once, not one droplet at a time: stop flo on every droplet, upgrade it, then start every node, and upgrade the CLI and SDKs your clients use with it.
 
 ```bash
 # On every droplet first
