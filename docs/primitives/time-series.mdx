@@ -267,12 +267,6 @@ cpu{host=web-01}[1h] | window(5m) | avg() | where(value > 80) | round(2)
 flo ts list
 flo ts ls
 
-# List series under a specific measurement
-flo ts list cpu
-
-# Show field names for a measurement
-flo ts list cpu --fields
-
 # Limit results
 flo ts list --limit 50
 

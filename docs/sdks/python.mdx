@@ -245,14 +245,13 @@ async with client.new_stream_worker(
 ## Action & Worker Operations
 
 ```python
-from flo import ActionType, ActionRegisterOptions, ActionInvokeOptions
+from flo import ActionType, ActionRegisterOptions
 
 # Register and invoke actions
 await client.action.register("process-image", ActionType.USER,
     ActionRegisterOptions(timeout_ms=60000, max_retries=3))
 
-result = await client.action.invoke("process-image", payload,
-    ActionInvokeOptions(priority=10, idempotency_key="order-123"))
+result = await client.action.invoke("process-image", payload)
 
 status = await client.action.status(result.run_id)
 ```

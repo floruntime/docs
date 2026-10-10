@@ -455,9 +455,8 @@ flo action invoke <name> [data] [options]
 
 | Flag | Description |
 |------|-------------|
-| `--idempotency-key <key>` | Dedup key for at-most-once |
-| `--priority <n>` | Execution priority |
-| `--wait` | Wait for completion |
+| `--labels <json>` | Required worker labels, e.g. `'{"gpu":true}'` |
+| `--async` | Don't wait for the result |
 
 ### `flo action status`
 

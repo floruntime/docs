@@ -263,8 +263,7 @@ sinks:
   - name: tasks
     queue:
       name: task-queue
-      priority: 5
-      delay_ms: 1000            # visibility delay
+      priority: 5               # 0-255, lower is taken first
 ```
 
 ### Tag-Based Routing

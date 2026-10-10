@@ -271,9 +271,7 @@ import { ActionType } from "@floruntime/node";
 await client.action.register("process-image", ActionType.User, {
   timeoutMs: 60000, maxRetries: 3,
 });
-const result = await client.action.invoke("process-image", payload, {
-  priority: 10, idempotencyKey: "order-123",
-});
+const result = await client.action.invoke("process-image", payload);
 ```
 
 ### ActionWorker (high-level)
