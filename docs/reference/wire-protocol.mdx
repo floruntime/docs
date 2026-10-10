@@ -82,7 +82,7 @@ A response carries no opcode: the client knows which request it sent. On a refus
 
 ## OpCodes
 
-The protocol defines 103 operation codes, grouped by subsystem.
+The protocol defines 100 operation codes, grouped by subsystem.
 
 ### System (0x000 – 0x00F)
 
@@ -107,11 +107,8 @@ The protocol defines 103 operation codes, grouped by subsystem.
 |--------|-------|
 | `cluster_status` | `0x030` |
 | `cluster_members` | `0x031` |
-| `cluster_join` | `0x032` |
-| `cluster_leave` | `0x033` |
-| `cluster_transfer_leader` | `0x034` |
-| `cluster_add_node` | `0x035` |
-| `cluster_remove_node` | `0x036` |
+| `cluster_promote` | `0x032` |
+| `cluster_remove` | `0x033` |
 
 ### KV + Transactions + Snapshots (0x100 – 0x12F)
 
