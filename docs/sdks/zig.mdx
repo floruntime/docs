@@ -347,6 +347,7 @@ All operations return `flo.FloError`:
 | `BadRequest` | Invalid request |
 | `Conflict` | CAS conflict |
 | `ServerError` | Internal server error |
+| `TableMismatch` | The server is from another release; `client.foreign_server` names it. Upgrade the SDK and the server together |
 
 ## Memory Management
 

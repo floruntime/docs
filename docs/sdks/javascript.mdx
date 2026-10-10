@@ -1,33 +1,22 @@
 ---
 title: JavaScript / TypeScript SDK
-lede: TypeScript SDK for Node.js and Browser — TCP and WebSocket transports.
+lede: TypeScript SDK for Node.js over TCP.
 ---
 
-The JavaScript SDK is a monorepo with three packages:
+The JavaScript SDK is a monorepo with two packages:
 
 | Package | Environment | Transport |
 |---------|-------------|-----------|
 | `@floruntime/core` | Shared | Wire protocol, types |
 | `@floruntime/node` | Node.js | TCP |
-| `@floruntime/web` | Browser | WebSocket |
 
 ## Installation
-
-### Node.js
 
 ```bash
 npm install @floruntime/node
 ```
 
-### Browser
-
-```bash
-npm install @floruntime/web
-```
-
 ## Quick Start
-
-### Node.js
 
 ```typescript
 import { FloClient } from "@floruntime/node";
@@ -55,29 +44,6 @@ for (const msg of result.messages) {
 
 await client.close();
 ```
-
-### Browser
-
-```typescript
-import { FloClient } from "@floruntime/web";
-
-const client = new FloClient("wss://flo.example.com/ws", {
-  namespace: "myapp",
-});
-await client.connect();
-
-// Read-only KV (config, feature flags)
-const value = await client.kv.get("config:flags");
-
-// Streams: read from the start
-const records = await client.streams.read("chat:room-123", { start: "0-0", count: 10 });
-
-await client.close();
-```
-
-:::note
-The web SDK is limited to **streams** and **KV read-only**. For full KV mutations (put, delete), queues, and actions, use `@floruntime/node` on the backend.
-:::
 
 ## KV Operations
 

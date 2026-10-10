@@ -450,6 +450,7 @@ if flo.IsNotFound(err) { /* Key not found */ }
 if flo.IsConflict(err) { /* CAS conflict */ }
 if flo.IsBadRequest(err) { /* Invalid params */ }
 if flo.IsOverloaded(err) { /* Retry later */ }
+if errors.Is(err, flo.ErrTableMismatch) { /* Server from another release: upgrade together */ }
 ```
 
 ## Thread Safety

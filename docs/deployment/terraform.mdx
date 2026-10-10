@@ -381,14 +381,15 @@ Or scrape locally via the DigitalOcean monitoring agent (which runs on-loopback)
 
 ## Upgrading Flo
 
-To upgrade Flo on an existing droplet:
+Nodes built from different releases can't link, and a server refuses clients from another release (see [Versions](/reference/wire-protocol#versions)). So upgrade every node at once, not one droplet at a time: stop flo on every droplet, upgrade it, then start every node, and upgrade the CLI and SDKs your clients use with it.
 
 ```bash
-# SSH in and run the installer with the new version
-ssh root@<ip> 'curl -fsSL https://raw.githubusercontent.com/floruntime/flo/master/scripts/install.sh | sh -s -- --version v0.2.0'
+# On every droplet first
+ssh root@<ip> 'systemctl stop flo'
 
-# Restart
-ssh root@<ip> 'systemctl restart flo'
+# Then, on every droplet, install the new version and start it
+ssh root@<ip> 'curl -fsSL https://raw.githubusercontent.com/floruntime/flo/master/scripts/install.sh | sh -s -- --version v0.2.0'
+ssh root@<ip> 'systemctl start flo'
 ```
 
 For a clean rebuild, bump `flo_version` and replace the droplet:
