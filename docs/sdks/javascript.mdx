@@ -348,7 +348,7 @@ await client.workflow.cancel(runId, "User requested cancellation");
 Deliver external events to a waiting workflow:
 
 ```typescript
-// The workflow must have a waitForSignal step expecting "approval_decision"
+// The workflow must have a wait_for_signal step expecting "approval_decision"
 await client.workflow.signal(
   runId,
   "approval_decision",

@@ -23,7 +23,7 @@ Client ──start──▸ validate ──success──▸ charge ──success
 | **Retries** | Hand-written retry loops with ad-hoc backoff | Declarative `retry:` block with exponential, linear, constant, or jittered backoff |
 | **Failover** | If the orchestrating process dies, work stalls | Another node picks up from the last committed state |
 | **Routing** | Manual circuit breaking, health scoring, fallback chains | Inline **plans** with health-weighted selection, circuit breakers, and fallback values |
-| **Human-in-the-loop** | Polling, webhooks, custom queues | `waitForSignal` with typed signals, timeouts, and approval flows |
+| **Human-in-the-loop** | Polling, webhooks, custom queues | `wait_for_signal` with typed signals, timeouts, and approval flows |
 | **Scheduling** | External cron daemon | Embedded `schedule:` block with 5-field cron or interval |
 | **Event-driven** | Wiring consumer groups to trigger logic | `trigger:` block listens on a stream and starts runs per event |
 
@@ -112,7 +112,7 @@ Every workflow YAML file has this top-level structure:
 | `plans` | no | Inline plan definitions (map of plan name → plan config) |
 | `schedule` | no | Cron or interval schedule for automatic runs |
 | `trigger` | no | Stream trigger — starts a run per event |
-| `searchAttributes` | no | Custom queryable fields extracted from input |
+| `search_attributes` | no | Custom queryable fields extracted from input |
 
 ### Steps
 
@@ -125,12 +125,12 @@ Executes a target and transitions based on the outcome:
 ```yaml
 charge:
   run: "@actions/charge-payment"      # target
-  inputMapping: '{"amount": "$.input.amount"}'  # optional JSONPath transform
+  input_mapping: '{"amount": "$.input.amount"}'  # optional JSONPath transform
   retry:                               # optional retry policy
     max_attempts: 3
     backoff: exponential
   poll:                                # optional pending-outcome polling
-    maxAttempts: 10
+    max_attempts: 10
     backoff: exponential
   transitions:
     success: ship
@@ -153,15 +153,15 @@ Pauses the workflow until an external signal arrives or a timeout expires:
 
 ```yaml
 await_approval:
-  waitForSignal:
+  wait_for_signal:
     type: approval                     # signal type to match
-    timeoutMs: 3600000                 # 1 hour timeout (optional)
-    onTimeout: flo.Failed              # transition on timeout (optional)
+    timeout_ms: 3600000                 # 1 hour timeout (optional)
+    on_timeout: flo.Failed              # transition on timeout (optional)
   transitions:
     success: fulfill                   # after signal received
 ```
 
-When a signal of the matching type is delivered, the engine follows the `success` transition. If `timeoutMs` is configured and the timeout expires before a signal arrives, the engine either follows `onTimeout` (if set) or transitions the run to `timed_out`.
+When a signal of the matching type is delivered, the engine follows the `success` transition. If `timeout_ms` is configured and the timeout expires before a signal arrives, the engine either follows `on_timeout` (if set) or transitions the run to `timed_out`.
 
 ### Step Outcomes
 
@@ -490,10 +490,10 @@ Signals are typed external events delivered to a running workflow. They're used 
 ```yaml
 steps:
   await_approval:
-    waitForSignal:
+    wait_for_signal:
       type: manager_approval           # signal type to match
-      timeoutMs: 86400000              # 24 hour timeout
-      onTimeout: OrderRejected         # step or terminal on timeout
+      timeout_ms: 86400000              # 24 hour timeout
+      on_timeout: OrderRejected         # step or terminal on timeout
     transitions:
       success: fulfill_order           # after signal received
 ```
@@ -511,9 +511,9 @@ When the signal arrives:
 
 ### Signal Timeout Behavior
 
-If `timeoutMs` is set and the timeout expires:
-- If `onTimeout` is set → transition to that step or terminal
-- If `onTimeout` is not set → the run transitions to `timed_out` status
+If `timeout_ms` is set and the timeout expires:
+- If `on_timeout` is set → transition to that step or terminal
+- If `on_timeout` is not set → the run transitions to `timed_out` status
 
 The engine periodically checks waiting runs for timeouts and resumes them automatically.
 
@@ -528,11 +528,11 @@ steps:
   check_status:
     run: "@actions/check-payment-status"
     poll:
-      initialDelayMs: 2000            # wait before first poll
-      maxAttempts: 30                  # max poll attempts
+      initial_delay_ms: 2000            # wait before first poll
+      max_attempts: 30                  # max poll attempts
       backoff: exponential             # constant | linear | exponential | exponential_jitter
-      baseDelayMs: 2000               # base delay between polls
-      maxDelayMs: 30000               # cap on poll delay
+      base_delay_ms: 2000               # base delay between polls
+      max_delay_ms: 30000               # cap on poll delay
     transitions:
       success: notify
       failure: payment_failed
@@ -553,14 +553,14 @@ Steps can transform their input using JSONPath expressions. This lets you wire d
 steps:
   enrich:
     run: "@actions/enrich-customer"
-    inputMapping: '{"customer_id": "$.input.customer_id", "domain": "$.input.company_domain"}'
+    input_mapping: '{"customer_id": "$.input.customer_id", "domain": "$.input.company_domain"}'
     transitions:
       success: charge
       failure: flo.Failed
 
   charge:
     run: "@actions/charge-payment"
-    inputMapping: '{"email": "$.steps.enrich.output.email", "amount": "$.input.amount"}'
+    input_mapping: '{"email": "$.steps.enrich.output.email", "amount": "$.input.amount"}'
     transitions:
       success: flo.Completed
       failure: flo.Failed
@@ -735,7 +735,7 @@ wake-up (e.g. appended before the trigger was registered) and sets the partial-b
 Search attributes let you extract queryable fields from workflow input for filtering and discovery:
 
 ```yaml
-searchAttributes:
+search_attributes:
   - name: customer_id
     type: string
     from: $.input.customer_id
@@ -748,7 +748,7 @@ searchAttributes:
 ```
 
 The `from` field is a [JSONPath](#input-mapping) expression and **must** use the
-`$.` prefix (e.g. `$.input.customer_id`), the same path grammar as `inputMapping`. A path that
+`$.` prefix (e.g. `$.input.customer_id`), the same path grammar as `input_mapping`. A path that
 does not resolve yields a `null` attribute value.
 
 | Type | Description |
@@ -819,7 +819,7 @@ Workflow definitions are validated on create. The validator checks:
 | **Duplicates** | No duplicate step names, terminal names, or executor names within a plan |
 | **Plans** | Each plan has at least one executor; executor configs are valid |
 | **Health** | Decay in (0, 1], min\_samples > 0, window\_ms > 0 |
-| **Signals** | `waitForSignal` steps warn if no timeout is configured |
+| **Signals** | `wait_for_signal` steps warn if no timeout is configured |
 
 Validation errors are reported with error codes (E1xx–E5xx) and human-readable messages.
 
@@ -831,13 +831,13 @@ Validation errors are reported with error codes (E1xx–E5xx) and human-readable
 
 1. The engine starts at the `start` step
 2. For `run` steps:
-   - If `inputMapping` is set, resolve JSONPath references against `$.input` and `$.steps.*`
+   - If `input_mapping` is set, resolve JSONPath references against `$.input` and `$.steps.*`
    - Invoke the target (action, plan, or child workflow)
    - Actions complete asynchronously — the step parks until a worker reports the result
    - If the action returns `pending` and `poll:` is configured, schedule the next poll
    - On outcome, check retries (if `failure` and retries remain, re-execute)
    - Follow the matching transition to the next step or terminal
-3. For `waitForSignal` steps:
+3. For `wait_for_signal` steps:
    - Check if a matching signal was already received before parking
    - If yes, follow the `success` transition immediately
    - If no, set status to `waiting` and record the timeout deadline
@@ -941,7 +941,7 @@ plans:
 
 start:
   run: "@plan/charge-payment"
-  inputMapping: '{"customer_id": "$.input.customer_id", "amount": "$.input.amount"}'
+  input_mapping: '{"customer_id": "$.input.customer_id", "amount": "$.input.amount"}'
   transitions:
     success: notify_customer
     pending: check_payment_status
@@ -950,20 +950,20 @@ start:
 steps:
   check_payment_status:
     run: "@actions/check-payment-status"
-    inputMapping: '{"payment_id": "$.steps._start.output.payment_id"}'
+    input_mapping: '{"payment_id": "$.steps._start.output.payment_id"}'
     poll:
-      initialDelayMs: 2000
-      maxAttempts: 30
+      initial_delay_ms: 2000
+      max_attempts: 30
       backoff: exponential
-      baseDelayMs: 2000
-      maxDelayMs: 30000
+      base_delay_ms: 2000
+      max_delay_ms: 30000
     transitions:
       success: notify_customer
       failure: flo.Failed
 
   notify_customer:
     run: "@actions/send-notification"
-    inputMapping: '{"customer_id": "$.input.customer_id", "template": "payment_success"}'
+    input_mapping: '{"customer_id": "$.input.customer_id", "template": "payment_success"}'
     transitions:
       success: flo.Completed
       failure: flo.Completed       # notification failure doesn't fail the workflow
@@ -1011,10 +1011,10 @@ steps:
       failure: await_approval       # high-value order, needs approval
 
   await_approval:
-    waitForSignal:
+    wait_for_signal:
       type: approval
-      timeoutMs: 3600000            # 1 hour
-      onTimeout: OrderRejected
+      timeout_ms: 3600000            # 1 hour
+      on_timeout: OrderRejected
     transitions:
       success: fulfill
 
