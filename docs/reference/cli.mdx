@@ -261,8 +261,17 @@ flo stream create <name> [options]
 
 | Flag | Description |
 |------|-------------|
-| `--retention <duration>` | Retention period (e.g., `7d`, `24h`) |
-| `--max-size <bytes>` | Maximum stream size |
+| `--partitions <n>` | Number of partitions (default 1) |
+| `--retention <hours>` | Keep records this many hours (0 = no age bound) |
+| `--retention-count <n>` | Keep at most this many records (0 = no count bound) |
+
+### `flo stream alter`
+
+Change a stream's retention. A bound left out keeps its current value.
+
+```bash
+flo stream alter <name> [--retention <hours>] [--retention-count <n>]
+```
 
 ### `flo stream append`
 
