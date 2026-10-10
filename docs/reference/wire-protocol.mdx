@@ -60,7 +60,7 @@ Paging is not a snapshot. A cursor resumes each shard by name or by position, so
 | 23 | `_pad` | `u8` | `0` |
 | 24 | `table_hash` | `u64` | The hash of the op table the server was built for |
 
-A response carries no opcode: the client knows which request it sent. On a refusal the data is a human-readable message.
+A response carries no opcode: the client knows which request it sent. Any status but `ok` is a refusal, and its data is a [refusal body](#refusals).
 
 ### Versions
 
@@ -87,6 +87,39 @@ Nodes built from different tables can't link either: a peer's hello carries the 
 | `10` | `overloaded` |
 | `11` | `rate_limited` |
 | `12` | `unavailable` |
+
+### Refusals
+
+Every refusal's data is:
+
+```
+[reason:u16][ran:u8][message]
+```
+
+The status says whether to retry; the reason says what happened; `ran` says whether the request took effect, so retry logic reads a byte, not text; the message is for a person. A message too long for its frame is cut at a UTF-8 code point and ends `…[truncated]`.
+
+| `ran` | Meaning |
+|------|---------|
+| `0` `no` | It didn't take effect. |
+| `1` `yes` | It took effect: don't resend it. |
+| `2` `unknown` | It may still take effect: check before resending. |
+
+| Reason | Name | When |
+|--------|------|------|
+| `1` | `unknown_op` | The op code names no op this server serves. |
+| `2` | `malformed` | The frame or a field isn't what it declares. |
+| `3` | `field_too_long` | A field or the request is longer than its bound. |
+| `4` | `out_of_range` | A number is outside its range, such as a wait past 5 minutes. |
+| `5` | `leader_unknown` | The write found no leader. |
+| `6` | `shard_busy` | The shard that owns the request is too busy to take it. |
+| `7` | `table_mismatch` | The client was built from another op table or protocol version. |
+| `8` | `unknown_flag` | A header flag bit is set; none is defined. |
+| `9` | `internal` | A server bug. |
+| `10` | `committed_not_applied` | The write committed but this node didn't apply it (`ran` = yes). |
+| `11` | `answer_lost` | The request ran but its answer couldn't be built. |
+| `12` | `unclassified` | From an op family not yet classified; the status and message say what happened. |
+
+The reasons are part of the op table, so a client and server that agree on the table hash agree on this list.
 
 ## OpCodes
 

@@ -71,3 +71,5 @@ All SDKs provide typed errors:
 | `Overloaded` | Server at capacity, retry later |
 | `Internal` | Server error |
 | `NotConnected` | Client not connected |
+
+Every server error also carries the refusal's `reason` and `ran` ([Refusals](/reference/wire-protocol#refusals)): `ran` says whether the request took effect, so decide whether to resend from it, not from the message. Go: `ServerError.Reason`/`.Ran`; JavaScript: `ServerError.reason`/`.ran`; Python: `ServerError.reason`/`.ran`; Zig: `client.lastError().?.reason`/`.ran`.
