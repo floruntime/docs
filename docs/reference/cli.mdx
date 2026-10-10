@@ -56,7 +56,7 @@ flo server start [options]
 | `--bind <addr>` | Address to listen on | `0.0.0.0` |
 | `-d, --data-dir <path>` | Data directory | `~/.flo/data` |
 | `--durability <mode>` | `sync`, `async_flush` or `ephemeral` | — |
-| `-s, --shards <n>` | Number of shard threads, at most 256; a cluster member runs 1 (the default resolves to it) | CPU count |
+| `-s, --shards <n>` | Number of shard threads, at most 256; a cluster member runs 1 (the default resolves to it) | CPU count, less one on 4 or more cores |
 | `--partitions <n>` | Virtual partitions, at most 16384 | `max(4096, shards × 32)` |
 | `-t, --threads <n>` | Worker threads | auto |
 | `-l, --log-level <level>` | `debug`, `info`, `warn` or `error` | — |
@@ -414,10 +414,10 @@ flo queue dequeue <queue> [options]
 
 ### `flo queue ack`
 
-Acknowledge processed messages.
+Acknowledge one processed message.
 
 ```bash
-flo queue ack <queue> <sequence...>
+flo queue ack <queue> <seq>
 ```
 
 ### `flo queue nack`
@@ -425,7 +425,7 @@ flo queue ack <queue> <sequence...>
 Negative acknowledge. Queues are at-most-once today, so a nack doesn't redeliver (tracked in [#179](https://github.com/floruntime/flo/issues/179)).
 
 ```bash
-flo queue nack <queue> <sequence...>
+flo queue nack <queue> <seq>
 ```
 
 ### `flo queue peek`
@@ -594,7 +594,8 @@ flo processing stop <job-id>
 ### `flo cluster status`
 
 Show this node's id, role (`leader`, `follower`, `replica`, `electing`,
-`joining`, `diverged`, `removed`), the leader it knows (`none` while electing
+`joining`, `diverged`, `guarded: catching up`, `guarded: confirming the term`,
+`removed`), the leader it knows (`none` while electing
 or joining), the term and the member count. `-o json` gives the same as one
 object.
 

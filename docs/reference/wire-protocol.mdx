@@ -110,6 +110,8 @@ The protocol defines 100 operation codes, grouped by subsystem.
 | `cluster_promote` | `0x032` |
 | `cluster_remove` | `0x033` |
 
+A `cluster_promote` value is the node id, u32 little-endian (4 bytes). A `cluster_remove` value is the node id, u32 little-endian, then one byte that is non-zero to allow a removal that leaves an even number of voters (5 bytes). Any other length is refused with `bad_request`. Both are answered with an empty value once the change commits; promoting a node that is already a voter is answered at once.
+
 ### KV + Transactions + Snapshots (0x100 – 0x12F)
 
 | OpCode | Value |
