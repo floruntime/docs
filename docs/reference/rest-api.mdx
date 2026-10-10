@@ -257,15 +257,16 @@ Records with `id_ms`, `id_seq`, `ual_index`, `size`, and the decoded `payload`. 
 ### Writes
 
 ```
-POST   /api/v1/streams/:name/trim?namespace=<ns>          # &max_len= | &max_age_s= | &max_bytes= | &dry_run=
+POST   /api/v1/streams/:name/trim?namespace=<ns>          # &max_len= | &max_age_s= | &dry_run=
 DELETE /api/v1/streams/:name?namespace=<ns>&force=true    # force required for a non-empty stream
 DELETE /api/v1/streams/:name/groups/:group?namespace=<ns>
 ```
 
-`trim` requires at least one bound and returns `{ ok, stream, dry_run }`. When
-several are supplied the most specific wins. Byte-based trim (`max_bytes`) is
-not implemented yet and returns an explicit error rather than silently doing
-nothing.
+`trim` takes exactly one of `max_len` or `max_age_s`, greater than zero, and
+returns `{ ok, stream, dry_run, trimmed }`: `trimmed` is the number of records
+removed, or with `dry_run=true` the number that would be, with nothing removed.
+`dry_run` is `true`, `false`, `1` or `0`. An unknown, repeated or empty
+parameter is refused by name.
 
 There is no stream **compact** endpoint: Flo streams are append-only and trim is
 their retention primitive.

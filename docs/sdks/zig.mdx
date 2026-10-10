@@ -216,7 +216,7 @@ try stream.groupAck("events", "my-group", seqs, .{});
 
 // Info and trim
 const info = try stream.info("events", .{});
-try stream.trim("events", .{ .max_len = 1000 });
+const trimmed = try stream.trim("events", .{ .max_len = 1000 }); // trimmed.removed records
 ```
 
 ## StreamWorker (high-level)

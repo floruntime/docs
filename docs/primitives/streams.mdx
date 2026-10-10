@@ -211,13 +211,15 @@ flo stream trim events --before 1703350800000-0
 # Remove records older than 1 hour
 flo stream trim events --maxage 3600
 
-# Byte-based trim is NOT implemented yet — this returns an explicit error
-# rather than silently trimming nothing.
-flo stream trim events --maxbytes 1073741824
-
-# Preview what would be trimmed (no changes made)
+# Give exactly one of --before, --maxlen or --maxage; a zero bound is refused.
+# Count what a trim would remove, removing nothing
 flo stream trim events --maxlen 10000 --dry-run
 ```
+
+Trim removes whole append batches. With `--maxlen`, it cuts at the last batch
+boundary that removes no more than the excess, so a stream written in batches
+may keep a few more than `--maxlen` records. The count printed, and the dry
+run's count, is the number of records the trim removes.
 
 ### Delete
 
