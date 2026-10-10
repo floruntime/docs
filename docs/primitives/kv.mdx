@@ -348,9 +348,9 @@ TTLs are set at write time via `--ttl` / `PutOptions.TTLMs`, but you can also ad
 
 | Op | Effect |
 |----|--------|
-| [`kv touch <key> --ttl <duration>`](#touch--persist) | Update the TTL on an existing key without rewriting the value |
-| [`kv touch <key> --ttl 0`](#touch--persist) | Clear the TTL (equivalent to `kv persist`) |
-| [`kv persist <key>`](#touch--persist) | Make a key permanent |
+| [`kv touch <key> --ttl <duration>`](/reference/cli#kv) | Update the TTL on an existing key without rewriting the value |
+| [`kv touch <key> --ttl 0`](/reference/cli#kv) | Clear the TTL (equivalent to `kv persist`) |
+| [`kv persist <key>`](/reference/cli#kv) | Make a key permanent |
 
 These are single-shard, no-replication-skip operations. Use them to extend session leases, refresh distributed locks, or promote a temporary value to permanent without losing it.
 
@@ -599,6 +599,9 @@ async with FloClient("localhost:9000") as client:
 const client = new FloClient("localhost:9000");
 await client.connect();
 
+const encode = (s: string) => new TextEncoder().encode(s);
+const decode = (b: Uint8Array) => new TextDecoder().decode(b);
+
 // Put returns PutResult with the new version
 const res = await client.kv.put("mykey", encode("hello"));
 console.log("committed at version", res.version);
@@ -644,7 +647,7 @@ const pending = await client.kv.get("job:result", { blockMs: 5000 });
 // Prefix scan
 const result = await client.kv.scan("user:", { limit: 100 });
 for (const entry of result.entries) {
-  console.log(`${entry.key} = ${entry.value}`);
+  console.log(`${decode(entry.key)} = ${entry.value ? decode(entry.value) : ""}`);
 }
 
 // Version history
@@ -660,8 +663,8 @@ const txn = await client.kv.begin("user:42");
 try {
   await txn.put("user:42:name", encode("Jane"));
   await txn.incr("user:42:visits", 1n);
-  const result = await txn.commit();
-  console.log(`committed ${result.opCount} ops at index ${result.commitIndex}`);
+  const committed = await txn.commit();
+  console.log(`committed ${committed.opCount} ops at index ${committed.commitIndex}`);
 } catch (err) {
   await txn.rollback(); // idempotent
   throw err;

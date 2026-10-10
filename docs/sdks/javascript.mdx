@@ -78,12 +78,15 @@ await client.close();
 ```
 
 :::note
-The web SDK is limited to **streams** and **KV read-only**. For full KV mutations (put, delete), queues, and actions, use `@floruntime/node` on the backend.
+The web SDK is limited to **streams** and **KV read-only** (`get` and `scan`; `get` returns the raw bytes, not a version). For full KV mutations (put, delete), queues, and actions, use `@floruntime/node` on the backend.
 :::
 
 ## KV Operations
 
 ```typescript
+const encode = (s: string) => new TextEncoder().encode(s);
+const decode = (b: Uint8Array) => new TextDecoder().decode(b);
+
 // Get returns GetResult | null \u2014 carries both value and version
 const r = await client.kv.get("key");
 if (r) console.log(r.value, "@", r.version); // r.version is bigint
@@ -101,10 +104,9 @@ await client.kv.delete("key");
 
 // Multi-key get (single round trip, up to 256 keys, may span shards)
 const entries = await client.kv.mget(["user:1", "user:2", "user:3"]);
-const decoder = new TextDecoder();
 for (const e of entries) {
   if (e.found) {
-    console.log(`${e.key} = ${decoder.decode(e.value)} (v${e.version})`);
+    console.log(`${e.key} = ${decode(e.value)} (v${e.version})`);
   } else {
     console.log(`${e.key} missing`);
   }
@@ -138,8 +140,8 @@ const txn = await client.kv.begin("user:42");
 try {
   await txn.put("user:42:name", encode("Jane"));
   await txn.incr("user:42:visits", 1n);
-  const result = await txn.commit();
-  console.log(`committed ${result.opCount} ops at index ${result.commitIndex}`);
+  const committed = await txn.commit();
+  console.log(`committed ${committed.opCount} ops at index ${committed.commitIndex}`);
 } catch (err) {
   await txn.rollback(); // idempotent
   throw err;
@@ -176,24 +178,18 @@ await client.queue.dlqRequeue("tasks", seqs);
 ## Stream Operations
 
 ```typescript
-// Append accepts string, plain object, or Uint8Array
-const result = await client.stream.append("events", {
-  event: "signup",
-  userId: "user-123",
-}, {
-  partitionKey: "user-123",
-});
-
-await client.stream.append("events", "user signed in");
-
+// Append takes a Uint8Array payload
 const encoder = new TextEncoder();
-await client.stream.append("events", encoder.encode("raw-bytes-payload"));
+const result = await client.stream.append(
+  "events",
+  encoder.encode(JSON.stringify({ event: "signup", userId: "user-123" })),
+  { partitionKey: "user-123" },
+);
 
-// Read
-const records = await client.stream.read("events", {
-  offset: 0n,
-  limit: 10,
-});
+await client.stream.append("events", encoder.encode("user signed in"));
+
+// Read from the start of the stream
+const records = await client.stream.read("events", { limit: 10 });
 
 // Access record fields
 for (const rec of records.records) {
@@ -212,11 +208,11 @@ const groupRecords = await client.stream.groupRead("events", {
 });
 await client.stream.groupAck("events",
   groupRecords.records.map(r => r.id),
-  { group: "processors" }
+  { group: "processors", consumer: "consumer-1" }
 );
 ```
 
-`append()` auto-encodes strings as UTF-8 and auto-serializes plain objects to JSON. Use `Uint8Array` only when you need exact raw bytes on the wire.
+`append()` sends the payload bytes as given: encode strings with `TextEncoder`, and objects with `JSON.stringify` first.
 
 ## StreamWorker (high-level)
 
@@ -269,7 +265,7 @@ async (ctx) => {
 }
 ```
 
-Records are **auto-acked** on handler success and **auto-nacked** on exception. Connection errors trigger automatic reconnect and consumer group re-join.
+Records are **auto-acked** on handler success and **auto-nacked** on exception. A failed read is logged and retried after a second; the worker doesn't reconnect or re-join the group on its own.
 
 ## Action & Worker Operations
 
@@ -306,7 +302,6 @@ worker.action("process-image", async (ctx) => {
 
 await worker.start();
 ```
-```
 
 ## Workflow Operations
 
@@ -334,7 +329,7 @@ const result2 = await client.workflow.syncBytes(
 // Start a run
 const runId = await client.workflow.start(
   "process-order",
-  JSON.stringify(&#123; orderId: "ORD-123", amount: 99.99 &#125;)
+  JSON.stringify({ orderId: "ORD-123", amount: 99.99 })
 );
 
 // Poll status
@@ -363,7 +358,7 @@ Deliver external events to a waiting workflow:
 await client.workflow.signal(
   runId,
   "approval_decision",
-  JSON.stringify(&#123; approved: true, approver: "manager@corp.com" &#125;)
+  JSON.stringify({ approved: true, approver: "manager@corp.com" })
 );
 ```
 
@@ -371,29 +366,29 @@ await client.workflow.signal(
 
 ```typescript
 // Run event history
-const events = await client.workflow.history(runId, &#123; limit: 20 &#125;);
-for (const event of events) &#123;
+const events = await client.workflow.history(runId, { limit: 20 });
+for (const event of events) {
   console.log(`[${event.timestamp}] ${event.type}: ${event.detail}`);
-&#125;
+}
 
 // List runs for a workflow
-const runs = await client.workflow.listRuns(&#123;
+const runs = await client.workflow.listRuns({
   workflowName: "process-order",
   limit: 50,
-&#125;);
-for (const run of runs) &#123;
+});
+for (const run of runs) {
   console.log(`${run.run_id} — ${run.status} (${run.created_at})`);
-&#125;
+}
 
 // List all registered definitions
 const defs = await client.workflow.listDefinitions();
-for (const def of defs) &#123;
+for (const def of defs) {
   console.log(`${def.name} v${def.version}`);
-&#125;
+}
 
 // Download a definition's YAML
 const yaml = await client.workflow.getDefinition("process-order");
-// yaml → Uint8Array | null
+// yaml → string | null
 ```
 
 ### Disable / Enable
@@ -423,6 +418,15 @@ See [examples/workflow.ts](https://github.com/floruntime/flo-js/blob/dev/example
 | `delete` | `delete(key, opts?) → Promise<void>` | Delete key |
 | `scan` | `scan(prefix, opts?) → Promise<ScanResult>` | Prefix scan |
 | `history` | `history(key, opts?) → Promise<VersionEntry[]>` | Version history |
+| `mget` | `mget(keys, opts?) → Promise<MGetEntry[]>` | Get up to 256 keys in one round trip |
+| `incr` | `incr(key, opts?) → Promise<bigint>` | Atomic counter |
+| `touch` | `touch(key, ttl, opts?) → Promise<void>` | Set a new TTL without rewriting the value |
+| `persist` | `persist(key, opts?) → Promise<void>` | Clear the TTL |
+| `exists` | `exists(key, opts?) → Promise<boolean>` | Check a key without reading its value |
+| `jsonGet` | `jsonGet(key, path?, opts?) → Promise<GetResult \| null>` | Read a JSON path |
+| `jsonSet` | `jsonSet(key, path, value, opts?) → Promise<PutResult>` | Write a JSON path |
+| `jsonDel` | `jsonDel(key, path?, opts?) → Promise<PutResult>` | Delete a JSON path |
+| `begin` | `begin(routingKey, opts?) → Promise<Transaction>` | Open a per-shard transaction |
 
 ### Queue Methods
 
@@ -439,25 +443,25 @@ See [examples/workflow.ts](https://github.com/floruntime/flo-js/blob/dev/example
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `append` | `append(stream, payload, opts?) → Promise<AppendResult>` | Append record (with optional headers) |
-| `read` | `read(stream, opts?) → Promise<ReadResult>` | Read records |
-| `groupJoin` | `groupJoin(stream, group, consumer) → Promise<void>` | Join group |
-| `groupRead` | `groupRead(stream, opts) → Promise<ReadResult>` | Group read |
+| `append` | `append(stream, payload, opts?) → Promise<StreamAppendResult>` | Append record |
+| `read` | `read(stream, opts?) → Promise<StreamReadResult>` | Read records |
+| `groupJoin` | `groupJoin(stream, group, consumer, opts?) → Promise<void>` | Join group |
+| `groupRead` | `groupRead(stream, opts) → Promise<StreamReadResult>` | Group read |
 | `groupAck` | `groupAck(stream, ids, opts) → Promise<void>` | Group ack |
 
 ### Workflow Methods
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `sync` | `sync(yaml) → Promise<SyncResult>` | Deploy/update definition from YAML string |
-| `syncBytes` | `syncBytes(bytes) → Promise<SyncResult>` | Deploy/update from raw bytes |
-| `start` | `start(name, input?) → Promise<string>` | Start a run, returns run ID |
+| `sync` | `sync(yaml) → Promise<WorkflowSyncResult>` | Deploy/update definition from YAML string |
+| `syncBytes` | `syncBytes(bytes) → Promise<WorkflowSyncResult>` | Deploy/update from raw bytes |
+| `start` | `start(name, input?, opts?) → Promise<string>` | Start a run, returns run ID |
 | `status` | `status(runId) → Promise<WorkflowStatusResult>` | Get run status |
-| `signal` | `signal(runId, type, data?) → Promise<void>` | Deliver a signal to a waiting run |
+| `signal` | `signal(runId, signalName, data?, opts?) → Promise<void>` | Deliver a signal to a waiting run |
 | `cancel` | `cancel(runId, reason?) → Promise<void>` | Cancel a run |
-| `history` | `history(runId, opts?) → Promise<HistoryEvent[]>` | Run event history |
-| `listRuns` | `listRuns(opts?) → Promise<RunEntry[]>` | List runs for a workflow |
-| `listDefinitions` | `listDefinitions() → Promise<DefinitionEntry[]>` | List registered definitions |
-| `getDefinition` | `getDefinition(name) → Promise<Uint8Array \| null>` | Download definition YAML |
+| `history` | `history(runId, opts?) → Promise<WorkflowHistoryEvent[]>` | Run event history |
+| `listRuns` | `listRuns(opts?) → Promise<WorkflowListRunEntry[]>` | List runs for a workflow |
+| `listDefinitions` | `listDefinitions(opts?) → Promise<WorkflowDefinitionEntry[]>` | List registered definitions |
+| `getDefinition` | `getDefinition(name, opts?) → Promise<string \| null>` | Download definition YAML |
 | `disable` | `disable(name) → Promise<void>` | Pause new runs |
 | `enable` | `enable(name) → Promise<void>` | Resume new runs |
