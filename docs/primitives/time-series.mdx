@@ -12,7 +12,7 @@ Each data point consists of four components:
 - **Measurement** — The metric name (e.g., `cpu`, `memory`, `http_requests`)
 - **Tags** — Indexed key-value pairs for filtering (e.g., `host=web-01,region=us-east`)
 - **Fields** — The actual metric values. A single value uses the default field name `value`; multi-field writes name each field explicitly (e.g., `user=72.5,system=7.4`)
-- **Timestamp** — Millisecond precision. Defaults to server time when omitted.
+- **Timestamp** — Millisecond precision. When omitted, a single `--value` write takes the server's time; `--fields` and batch lines without one take the CLI's time, once for all their fields.
 
 A **series** is the unique combination of measurement + tag set + field name. Each series maintains its own write buffer and block chain.
 
@@ -43,7 +43,9 @@ Write multiple named fields in a single data point:
 flo ts write cpu --tags host=web-01 --fields "user=72.5,system=7.4,idle=20.1"
 ```
 
-Each field creates a separate series under the same measurement and tag set. Query individual fields with `--field`.
+Each field creates a separate series under the same measurement and tag set, and
+all of them get one timestamp. Query individual fields with `--field`. Each field
+is its own write, so if one is refused the fields before it are already stored.
 
 ### Batch Write (InfluxDB Line Protocol)
 
@@ -71,6 +73,14 @@ The `--precision` flag specifies the timestamp unit in the payload:
 | `s` | Seconds | × 1,000 |
 
 Field types: float values are stored natively, integers (suffix `i`) are converted to `f64`, booleans become `0.0`/`1.0`. String fields are not supported.
+
+The CLI parses the lines itself and sends one write per field. A line that fails
+to parse or is refused is reported with its line number and the token at fault,
+and none of its fields are written. The other lines are still written, and the
+command exits non-zero. Backslash escapes aren't supported; a line using them is
+refused.
+
+Values must be finite numbers: `nan` and `inf` are refused.
 
 ## Reading Data
 

@@ -128,14 +128,33 @@ Response opcodes occupy `0x106–0x10A` and `0x116–0x118`. CAS is expressed as
 | `stream_group_read` | `0x36` | Consumer group read |
 | `stream_group_ack` | `0x37` | Consumer group ack |
 
-### Time-Series Operations (0x40–0x4F)
+### Time-Series Operations (0x1A0–0x1A6)
 
 | OpCode | Value | Description |
 |--------|-------|-------------|
-| `ts_write` | `0x40` | Write data point |
-| `ts_write_batch` | `0x41` | Batch write points |
-| `ts_query` | `0x42` | Execute FloQL query |
-| `ts_create_measurement` | `0x43` | Create measurement |
+| `ts_write` | `0x1A0` | Write one value: key = measurement, value = one finite f64, 8 bytes little-endian. Options: `ts_field` (default `value`), `ts_tags`, `ts_timestamp` (ms) |
+| `ts_read` | `0x1A1` | Read raw points |
+| `ts_query` | `0x1A2` | Windowed aggregation |
+| `ts_floql` | `0x1A3` | Execute FloQL query |
+| `ts_list` | `0x1A4` | List measurements or series |
+| `ts_delete` | `0x1A5` | Delete series |
+| `ts_retention` | `0x1A6` | Set retention |
+
+Time-series option tags:
+
+| Tag | Value | Type | Meaning |
+|-----|-------|------|---------|
+| `ts_from_ms` | `0x60` | i64 | Start of the time range (inclusive, unix ms) |
+| `ts_to_ms` | `0x61` | i64 | End of the time range (inclusive; 0 = now) |
+| `ts_window_ms` | `0x62` | i64 | Aggregation window (ms) |
+| `ts_aggregation` | `0x63` | string | `avg`, `sum`, `count`, `min` or `max` |
+| `ts_field` | `0x64` | string | Field name (default `value`) |
+| `ts_tags` | `0x65` | string | `key=val,key2=val2` |
+| `ts_timestamp` | `0x67` | i64 | A write's timestamp in ms; absent = the server's clock |
+| `ts_raw_ttl` | `0x68` | string | Raw data TTL, e.g. `7d` |
+| `ts_downsample` | `0x69` | string | Refused: downsampling isn't supported |
+
+A `ts_write` value that isn't exactly 8 bytes, or is NaN or infinite, is refused with `bad_request`.
 
 ### Action Operations (0x50–0x5F)
 

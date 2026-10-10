@@ -398,18 +398,26 @@ flo queue dlq purge <queue>
 
 ### `flo ts write`
 
-Write a data point using InfluxDB line protocol.
+Write a point, several fields of one point, or a batch of InfluxDB line protocol.
 
 ```bash
-flo ts write <measurement> <tags> <fields>
+flo ts write <measurement> --value <n> [--tags k=v,...] [--timestamp <ms>]
+flo ts write <measurement> --fields k=v,... [--tags k=v,...] [--timestamp <ms>]
+flo ts write --batch [--file <path>] [--precision ns|us|ms|s]
 ```
 
 Examples:
 
 ```bash
-flo ts write cpu host=web-01 usage=82.5
-flo ts write temperature region=us-east,sensor=a1 value=23.4
+flo ts write cpu --tags host=web-01 --value 82.5
+flo ts write cpu --tags host=web-01 --fields user=72.5,system=7.4
+echo 'cpu,host=web-01 user=72.5 1708700400000' | flo ts write --batch
 ```
+
+- `--timestamp` is milliseconds since the epoch and must be > 0. Without it, a `--value` write is stamped by the server; `--fields` and a `--batch` line without a timestamp are stamped once by the CLI's clock, so all their fields share one timestamp.
+- Values must be finite numbers; whole numbers past 2^53 are refused, because a float can't store them exactly.
+- `--fields` sends one write per field and is not atomic. If one is refused, the error says how many were written.
+- `--batch` reads line protocol from `--file` or stdin, with `--precision ns|us|ms|s` (default `ms`). Each line names its own measurement, tags and time, so `--batch` refuses a measurement, `--tags`, `--value`, `--fields` and `--timestamp`. A bad line is reported by line number, naming the token at fault, and none of its fields are written. The other lines are still written, and the command exits non-zero if any line failed. Backslash escapes, repeated tag keys or fields, and anything after the timestamp are refused.
 
 ### `flo ts query`
 
