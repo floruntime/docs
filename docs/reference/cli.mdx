@@ -30,7 +30,7 @@ refused with the reason. Each shard holds at most 1024 namespaces, and
 
 ```bash
 flo ns create <name>
-flo ns ls [--all]
+flo ns ls
 flo ns info <name>
 ```
 
@@ -52,13 +52,34 @@ flo server start [options]
 | Flag | Description | Default |
 |------|-------------|---------|
 | `-c, --config <path>` | Config file path | `flo.toml` |
-| `--port <port>` | Client protocol port | `9000` |
-| `--data-dir <path>` | Data directory | `~/.flo/data` |
-| `--shards <n>` | Number of shard threads, at most 256; a cluster member runs 1 (the default resolves to it) | CPU count |
+| `-p, --port <port>` | Client protocol port | `9000` |
+| `--bind <addr>` | Address to listen on | `0.0.0.0` |
+| `-d, --data-dir <path>` | Data directory | `~/.flo/data` |
+| `--durability <mode>` | `sync`, `async_flush` or `ephemeral` | — |
+| `-s, --shards <n>` | Number of shard threads, at most 256; a cluster member runs 1 (the default resolves to it) | CPU count, less one on 4 or more cores |
+| `--partitions <n>` | Virtual partitions, at most 16384 | `max(4096, shards × 32)` |
+| `-t, --threads <n>` | Worker threads | auto |
+| `-l, --log-level <level>` | `debug`, `info`, `warn` or `error` | — |
+| `--log-format <format>` | `text` or `json` | — |
 | `--cluster` | Start as the first member of a cluster; leads alone until others join | — |
-| `--join <host:port,...>` | Join members that exist, by their peer port (`listen_port + 500`) | — |
-| `--node-id <id>` | Unique node identifier | derived from `hostname:port` |
+| `-j, --join <host:port,...>` | Join members that exist, by their peer port (`listen_port + 500`) | — |
+| `-n, --node-id <id>` | Unique node identifier | derived from `hostname:port` |
 | `--raft-port <port>` | Peer port, with `--cluster` or `--join` | `listen_port + 500` |
+| `--metrics-port <port>` | Metrics HTTP port | `listen_port + 1` |
+| `--dashboard-port <port>` | Dashboard HTTP port | `listen_port + 2` |
+| `--no-metrics` | Don't start the metrics server | — |
+| `--no-dashboard` | Don't start the dashboard | — |
+
+### `flo server secret`
+
+Print a new secret for the peer port, from 32 random bytes. Give every member
+the same one: in `[cluster] secret`, in a file named by `[cluster] secret_file`
+(mode 600), or in `FLO_CLUSTER_SECRET`. A cluster starts only with a secret in
+this form.
+
+```bash
+flo server secret > /etc/flo/cluster.secret && chmod 600 /etc/flo/cluster.secret
+```
 
 ### `flo server inspect`
 
@@ -70,6 +91,11 @@ server holds the data directory, and refuses a directory that does not exist.
 ```bash
 flo server inspect --data-dir /var/lib/flo
 ```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `-c, --config <path>` | Config file naming the data directory | `flo.toml` |
+| `-d, --data-dir <path>` | Data directory | from the config |
 
 ### `flo server force-members`
 
@@ -90,10 +116,31 @@ flo server force-members --data-dir /var/lib/flo --yes
 
 ### `flo server status`
 
-Show server status and health.
+Show whether the server process is running, from its PID file.
 
 ```bash
-flo server status
+flo server status [--data-dir <path>]
+```
+
+### `flo server stop`
+
+Stop the server whose PID file is in the data directory.
+
+```bash
+flo server stop [--data-dir <path>] [--force]
+```
+
+| Flag | Description |
+|------|-------------|
+| `-d, --data-dir <path>` | Data directory holding the PID file |
+| `-f, --force` | Stop at once (SIGKILL) |
+
+### `flo server metrics`
+
+Fetch the server's metrics.
+
+```bash
+flo server metrics [--format text|json|prometheus]
 ```
 
 ## KV
@@ -261,8 +308,17 @@ flo stream create <name> [options]
 
 | Flag | Description |
 |------|-------------|
-| `--retention <duration>` | Retention period (e.g., `7d`, `24h`) |
-| `--max-size <bytes>` | Maximum stream size |
+| `--partitions`, `-p <n>` | Number of partitions (default 1) |
+| `--retention`, `-r <hours>` | Keep records this many hours (0 = no age bound) |
+| `--retention-count <n>` | Keep at most this many records (0 = no count bound) |
+
+### `flo stream alter`
+
+Change a stream's retention. A bound left out, or given as 0, keeps its current value.
+
+```bash
+flo stream alter <name> [--retention <hours>] [--retention-count <n>]
+```
 
 ### `flo stream append`
 
@@ -282,10 +338,13 @@ flo stream read <stream> [options]
 
 | Flag | Description |
 |------|-------------|
-| `--offset <n>` | Start offset |
-| `--count <n>` | Number of records |
-| `--block <ms>` | Wait for new records (at most 300000 ms, 5 minutes; 0 does not wait; a longer wait is refused) |
-| `--follow` | Follow mode (block for new records) |
+| `--start`, `-s <id>` | Read records after this StreamID (exclusive; `0-0` is the beginning, `$` the latest) |
+| `--end`, `-e <id>` | Last StreamID to read (inclusive) |
+| `--limit`, `-l <n>` | Maximum records (default 10); a larger append comes back whole |
+| `--block`, `-b <ms>` | Wait for new records (at most 300000 ms, 5 minutes; 0 does not wait; a longer wait is refused) |
+| `--follow`, `-f` | Keep reading new records, like `tail -f` |
+| `--partition`, `-P <n>` | Partition to read |
+| `--partition-key`, `-k <key>` | Read the partition this key routes to |
 
 ### `flo stream info`
 
@@ -315,10 +374,10 @@ Manage consumer groups. A group is scoped to a single stream — every subcomman
 
 ```bash
 flo stream group create <stream> --group <name> [--ack-timeout <ms>] [--max-deliver <n>]
-flo stream group read   <stream> --group <name> --consumer <id> [--limit <n>] [--block <ms>] [--no-ack]
+flo stream group read   <stream> --group <name> --consumer <id> [--limit <n>] [--block <ms>]
 flo stream group ack    <stream> --group <name> --ids <id,...> [--consumer <id>]
-flo stream group nack   <stream> --group <name> --ids <id,...> [--delay <ms>]
-flo stream group touch  <stream> --group <name> --consumer <id> --ids <id,...> [--extend <ms>]
+flo stream group nack   <stream> --group <name> --ids <id,...> [--consumer <id>]
+flo stream group touch  <stream> --group <name> --consumer <id> --ids <id,...>
 flo stream group pending <stream> --group <name> [--consumer <id>]
 flo stream group info   <stream> --group <name>
 flo stream group join   <stream> <group> <consumer>
@@ -338,9 +397,7 @@ flo queue enqueue <queue> <data> [options]
 
 | Flag | Description |
 |------|-------------|
-| `--priority <n>` | Message priority (higher = sooner) |
-| `--delay <ms>` | Delivery delay in milliseconds |
-| `--dedup-key <key>` | Deduplication key |
+| `--priority <n>` | Message priority, 0–255; lower is taken first, and unset is 0 |
 
 ### `flo queue dequeue`
 
@@ -354,27 +411,22 @@ flo queue dequeue <queue> [options]
 |------|-------------|
 | `--count <n>` | Number of messages (default: 1) |
 | `--block <ms>` | Wait for messages (at most 300000 ms, 5 minutes; 0 does not wait; a longer wait is refused) |
-| `--visibility <ms>` | Visibility timeout for leased messages |
 
 ### `flo queue ack`
 
-Acknowledge processed messages.
+Acknowledge one processed message.
 
 ```bash
-flo queue ack <queue> <sequence...>
+flo queue ack <queue> <seq>
 ```
 
 ### `flo queue nack`
 
-Negative acknowledge (requeue or send to DLQ).
+Negative acknowledge. Queues are at-most-once today, so a nack doesn't redeliver (tracked in [#179](https://github.com/floruntime/flo/issues/179)).
 
 ```bash
-flo queue nack <queue> <sequence...> [options]
+flo queue nack <queue> <seq>
 ```
-
-| Flag | Description |
-|------|-------------|
-| `--dlq` | Send to dead-letter queue |
 
 ### `flo queue peek`
 
@@ -389,10 +441,11 @@ flo queue peek <queue> [--count <n>]
 Manage dead-letter queue.
 
 ```bash
-flo queue dlq list <queue> [--count <n>]
+flo queue dlq list <queue>
 flo queue dlq requeue <queue> <sequence...>
-flo queue dlq purge <queue>
 ```
+
+`dlq list` shows the queue's dead-letter count; listing the messages and `dlq requeue` aren't supported yet.
 
 ## Time-Series
 
@@ -419,19 +472,19 @@ echo 'cpu,host=web-01 user=72.5 1708700400000' | flo ts write --batch
 - `--fields` sends one write per field and is not atomic. If one is refused, the error says how many were written.
 - `--batch` reads line protocol from `--file` or stdin, with `--precision ns|us|ms|s` (default `ms`). Each line names its own measurement, tags and time, so `--batch` refuses a measurement, `--tags`, `--value`, `--fields` and `--timestamp`. A bad line is reported by line number, naming the token at fault, and none of its fields are written. The other lines are still written, and the command exits non-zero if any line failed. Backslash escapes, repeated tag keys or fields, and anything after the timestamp are refused.
 
-### `flo ts query`
+### `flo ts floql`
 
 Run a FloQL query.
 
 ```bash
-flo ts query "<query>"
+flo ts floql "<query>"
 ```
 
 Examples:
 
 ```bash
-flo ts query "cpu{host=web-01}[1h] | avg(5m)"
-flo ts query "temperature{region=us-east}[24h] | max(1h)"
+flo ts floql 'cpu_usage{host=web-01}[1h] | window(5m) | avg()'
+flo ts floql 'temperature[24h] | window(1h) | max() | topk(3)'
 ```
 
 ## Actions
@@ -446,22 +499,23 @@ flo action register <name> [options]
 
 | Flag | Description |
 |------|-------------|
-| `--timeout <ms>` | Execution timeout |
-| `--max-retries <n>` | Maximum retry count |
+| `--owner`, `-o <name>` | Owner or team name |
+| `--timeout <ms>` | Execution timeout (default 30000) |
+| `--retries`, `-r <n>` | Maximum retry attempts (default 0) |
 
 ### `flo action invoke`
 
 Invoke an action.
 
 ```bash
-flo action invoke <name> [data] [options]
+flo action invoke <name> <input> [--labels <json>]
 ```
 
 | Flag | Description |
 |------|-------------|
-| `--idempotency-key <key>` | Dedup key for at-most-once |
-| `--priority <n>` | Execution priority |
-| `--wait` | Wait for completion |
+| `--labels`, `-l <json>` | Required worker labels, e.g. `'{"gpu":true}'` |
+
+Invoke priority, delay and idempotency keys aren't supported yet (tracked in [#181](https://github.com/floruntime/flo/issues/181)).
 
 ### `flo action status`
 
@@ -540,7 +594,8 @@ flo processing stop <job-id>
 ### `flo cluster status`
 
 Show this node's id, role (`leader`, `follower`, `replica`, `electing`,
-`joining`, `diverged`, `removed`), the leader it knows (`none` while electing
+`joining`, `diverged`, `guarded: catching up`, `guarded: confirming the term`,
+`removed`), the leader it knows (`none` while electing
 or joining), the term and the member count. `-o json` gives the same as one
 object.
 

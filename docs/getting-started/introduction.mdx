@@ -14,7 +14,7 @@ The data layer is four primitives, each tuned to a different access pattern but 
 <CardGroup cols={2}>
   <Card title="KV" href="/primitives/kv">Strongly consistent, versioned key-value storage with CAS, TTL, blocking gets, and namespaces.</Card>
   <Card title="Streams" href="/primitives/streams">Append-only commit logs with consumer groups, partitioning, tiered storage, and blocking reads.</Card>
-  <Card title="Queues" href="/primitives/queues">Priority queues with competing consumers, lease-based delivery, DLQ, and visibility timeouts.</Card>
+  <Card title="Queues" href="/primitives/queues">Priority queues with competing consumers, DLQ and blocking dequeue; delivery is currently at-most-once.</Card>
   <Card title="Time-Series" href="/primitives/time-series">Columnar time-series with InfluxDB line protocol, FloQL pipelines, retention, and downsampling.</Card>
 </CardGroup>
 

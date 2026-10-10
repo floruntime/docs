@@ -59,7 +59,7 @@ Four data primitives — all backed by the same Raft-replicated log, shaped to f
 <CardGroup cols={2}>
   <Card title="KV" href="/primitives/kv">Hash-indexed key-value store with MVCC, TTL, CAS, and prefix scans.</Card>
   <Card title="Streams" href="/primitives/streams">Partitioned append-only logs with consumer groups and exactly-once delivery.</Card>
-  <Card title="Queues" href="/primitives/queues">Priority queues with lease-based delivery, dead-letter support, and visibility timeouts.</Card>
+  <Card title="Queues" href="/primitives/queues">Priority queues with competing consumers and dead-letter support; delivery is currently at-most-once.</Card>
   <Card title="Time-Series" href="/primitives/time-series">Columnar storage with InfluxDB line protocol ingest and the FloQL query language.</Card>
 </CardGroup>
 

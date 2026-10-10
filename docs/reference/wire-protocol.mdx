@@ -3,207 +3,303 @@ title: Wire Protocol
 lede: Binary wire protocol reference for the Flo client-server communication.
 ---
 
-Flo uses a custom binary protocol for client-server communication on port **9000**. The protocol supports TLV (Type-Length-Value) encoding for efficiency and zero-copy parsing.
+Clients talk to Flo over TCP on the client port (default **9000**) with a binary protocol: a fixed 32-byte header, then a payload. All integers are little-endian. The dashboard and metrics have their own HTTP ports.
 
-## Connection
+## Request
 
-Clients connect via TCP to the server's client port (default 9000). The first bytes sent identify the protocol:
+### Header (32 bytes)
 
-| Magic Bytes | Protocol |
-|-------------|----------|
-| `FLO\x01` | Binary wire protocol |
-| `GET`, `POST`, ... | HTTP (redirected to dashboard) |
-| WebSocket upgrade | WebSocket (binary protocol over WS frames) |
+| Offset | Field | Type | Description |
+|--------|-------|------|-------------|
+| 0 | `magic` | `u32` | `0x004F4C46` (the bytes `F` `L` `O` `\0`) |
+| 4 | `payload_length` | `u32` | Bytes of payload after the header |
+| 8 | `request_id` | `u64` | Chosen by the client; the response carries it back |
+| 16 | `crc32` | `u32` | CRC-32 of the header (this field excluded) and the payload |
+| 20 | `op_code` | `u16` | The operation (see [OpCodes](#opcodes)) |
+| 22 | `version` | `u8` | `0x01` |
+| 23 | `flags` | `u8` | `0` |
+| 24 | `reserved` | `[8]u8` | Zeros |
 
-The Acceptor thread peeks at the first bytes to detect the protocol and routes accordingly.
-
-## Request Format
-
-Every request has a fixed 32-byte header followed by a variable-length payload:
-
-```
-┌──────────────────────────────────────────────────────────────────┐
-│                    Request Header (32 bytes)                      │
-├──────────┬──────────┬───────┬──────────┬──────────┬──────────────┤
-│ magic    │ opcode   │ flags │ req_id   │ payload  │ namespace    │
-│ (4B)     │ (2B)     │ (2B)  │ (8B)     │ _len(4B) │ _hash (8B)  │
-├──────────┴──────────┴───────┴──────────┴──────────┴──────────────┤
-│ key_length │ padding                                              │
-│ (2B)       │ (2B)                                                │
-├────────────┴─────────────────────────────────────────────────────┤
-│                    Payload (variable)                             │
-│ [key bytes] [value bytes] [optional TLV fields]                  │
-└──────────────────────────────────────────────────────────────────┘
-```
-
-### Header Fields
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `magic` | `u32` | Protocol magic: `0x464C4F01` ("FLO\x01") |
-| `opcode` | `u16` | Operation code (see OpCode table) |
-| `flags` | `u16` | Request flags (compression, etc.) |
-| `req_id` | `u64` | Client-assigned request ID for response matching |
-| `payload_len` | `u32` | Length of payload following the header |
-| `namespace_hash` | `u64` | FNV-1a hash of the namespace string |
-| `key_length` | `u16` | Length of the key in the payload |
-
-## Response Format
+### Payload
 
 ```
-┌──────────────────────────────────────────────────────────────────┐
-│                   Response Header (24 bytes)                      │
-├──────────┬──────────┬───────┬──────────┬──────────────────────────┤
-│ magic    │ status   │ flags │ req_id   │ payload_len              │
-│ (4B)     │ (2B)     │ (2B)  │ (8B)     │ (4B)                    │
-├──────────┴──────────┴───────┴──────────┴──────────────────────────┤
-│                    Payload (variable)                             │
-└──────────────────────────────────────────────────────────────────┘
+[namespace_len:u16][namespace][key_len:u16][key][value_len:u32][value][options_len:u16][options]
 ```
 
-### Status Codes
+An empty namespace is the `default` namespace for most operations. Options are a sequence of `[tag:u8][len:u8][value]` entries (see [Options](#options)).
 
-| Code | Name | Description |
-|------|------|-------------|
-| `0x00` | `OK` | Operation succeeded |
-| `0x01` | `NOT_FOUND` | Key / queue / stream not found |
-| `0x02` | `BAD_REQUEST` | Invalid request parameters |
-| `0x03` | `CONFLICT` | CAS version mismatch |
-| `0x04` | `UNAUTHORIZED` | Authentication required |
-| `0x05` | `OVERLOADED` | Server at capacity (retry) |
-| `0x06` | `INTERNAL_ERROR` | Server error |
-| `0x07` | `NOT_LEADER` | Node is not the leader for this partition |
+### List operations
+
+`kv_scan`, `stream_list`, `queue_list`, `ts_list`, `namespace_list`, `action_list`, `worker_list`, `processing_list` and `workflow_list_definitions` page across every shard. Their request value is:
+
+```
+[limit:u32][cursor]
+```
+
+`limit` 0, or anything over 1024, is a page of 1024. `cursor` is empty on the first page and otherwise the cursor the previous page returned, unchanged. Every list answer ends with:
+
+```
+[has_more:u8][cursor_len:u16][cursor]
+```
+
+Paging is not a snapshot. A cursor resumes each shard by name or by position, so names created or deleted between pages can be listed twice or skipped.
+
+## Response
+
+### Header (32 bytes)
+
+| Offset | Field | Type | Description |
+|--------|-------|------|-------------|
+| 0 | `magic` | `u32` | `0x004F4C46` |
+| 4 | `data_len` | `u32` | Bytes of data after the header |
+| 8 | `request_id` | `u64` | The request's id |
+| 16 | `crc32` | `u32` | CRC-32 of the header (this field excluded) and the data |
+| 20 | `version` | `u8` | `0x01` |
+| 21 | `status` | `u8` | See [Status codes](#status-codes) |
+| 22 | `flags` | `u8` | `0` |
+| 23 | `_pad` | `u8` | `0` |
+| 24 | `reserved` | `[8]u8` | Zeros |
+
+A response carries no opcode: the client knows which request it sent. On a refusal the data is a human-readable message.
+
+### Status codes
+
+| Code | Name |
+|------|------|
+| `0` | `ok` |
+| `1` | `error_generic` |
+| `2` | `not_found` |
+| `3` | `bad_request` |
+| `4` | `cross_core_transaction` |
+| `5` | `no_active_transaction` |
+| `6` | `group_locked` |
+| `7` | `unauthorized` |
+| `8` | `conflict` |
+| `9` | `internal_error` |
+| `10` | `overloaded` |
+| `11` | `rate_limited` |
+| `12` | `unavailable` |
 
 ## OpCodes
 
-The protocol defines 167 operation codes organized by subsystem:
+The protocol defines 100 operation codes, grouped by subsystem.
 
-### KV Operations (0x100–0x118)
+### System (0x000 – 0x00F)
 
-| OpCode | Value | Description |
-|--------|-------|-------------|
-| `kv_put` | `0x100` | Set key-value pair (returns new version) |
-| `kv_get` | `0x101` | Get value + version by key |
-| `kv_mget` | `0x102` | Multi-key get |
-| `kv_delete` | `0x103` | Delete a key |
-| `kv_scan` | `0x104` | Prefix scan |
-| `kv_history` | `0x105` | Get version history |
-| `kv_incr` | `0x10B` | Atomic counter (signed i64 delta, default +1) |
-| `kv_json_get` | `0x10C` | Extract JSON sub-field via JSONPath |
-| `kv_json_set` | `0x10D` | Atomically set a JSON sub-field |
-| `kv_json_del` | `0x10E` | Atomically delete a JSON sub-field |
-| `kv_touch` | `0x113` | Update TTL on existing key (no value rewrite). Value: 8-byte TTL in milliseconds; 0 clears it |
-| `kv_persist` | `0x114` | Clear TTL (make key permanent) |
-| `kv_exists` | `0x115` | Existence check (no value transferred) |
-| `kv_begin_txn` | `0x110` | Open a per-shard transaction (returns `txn_id` + pinned partition hash) |
-| `kv_commit_txn` | `0x111` | Commit a transaction atomically (returns `commit_index` + `op_count`) |
-| `kv_rollback_txn` | `0x112` | Discard a transaction (idempotent) |
-| `kv_txn_response` | `0x119` | Reply envelope for ops executed inside a transaction |
+| OpCode | Value |
+|--------|-------|
+| `ping` | `0x000` |
 
-Response opcodes occupy `0x106–0x10A` and `0x116–0x118`. CAS is expressed as a TLV option on `kv_put`, not a separate opcode. Per-shard transactions (see [Transactions](/primitives/kv#transactions)) are scoped to a single partition and carry the open `txn_id` via the `txn_id` TLV option (tag `0x09`, u64 LE) on subsequent KV ops.
+### Namespace (0x010 – 0x02F)
 
-### Queue Operations (0x20–0x2F)
+| OpCode | Value |
+|--------|-------|
+| `namespace_create` | `0x010` |
+| `namespace_delete` | `0x011` |
+| `namespace_list` | `0x012` |
+| `namespace_info` | `0x013` |
+| `namespace_config_set` | `0x014` |
+| `namespace_config_get` | `0x015` |
 
-| OpCode | Value | Description |
-|--------|-------|-------------|
-| `queue_enqueue` | `0x20` | Add message to queue |
-| `queue_dequeue` | `0x21` | Fetch and lease messages |
-| `queue_ack` | `0x22` | Acknowledge messages |
-| `queue_nack` | `0x23` | Negative acknowledge |
-| `queue_peek` | `0x24` | Peek without leasing |
-| `queue_touch` | `0x25` | Extend lease |
-| `queue_dlq_list` | `0x26` | List DLQ messages |
-| `queue_dlq_requeue` | `0x27` | Requeue from DLQ |
+### Cluster (0x030 – 0x04F)
 
-### Stream Operations (0x30–0x3F)
+| OpCode | Value |
+|--------|-------|
+| `cluster_status` | `0x030` |
+| `cluster_members` | `0x031` |
+| `cluster_promote` | `0x032` |
+| `cluster_remove` | `0x033` |
 
-| OpCode | Value | Description |
-|--------|-------|-------------|
-| `stream_append` | `0x30` | Append record |
-| `stream_read` | `0x31` | Read records |
-| `stream_create` | `0x32` | Create stream |
-| `stream_info` | `0x33` | Stream metadata |
-| `stream_trim` | `0x34` | Trim old records |
-| `stream_group_create` | `0x35` | Create consumer group |
-| `stream_group_read` | `0x36` | Consumer group read |
-| `stream_group_ack` | `0x37` | Consumer group ack |
+A `cluster_promote` value is the node id, u32 little-endian (4 bytes). A `cluster_remove` value is the node id, u32 little-endian, then one byte that is non-zero to allow a removal that leaves an even number of voters (5 bytes). Any other length is refused with `bad_request`. Both are answered with an empty value once the change commits; promoting a node that is already a voter is answered at once.
 
-### Time-Series Operations (0x1A0–0x1A6)
+### KV + Transactions + Snapshots (0x100 – 0x12F)
 
-| OpCode | Value | Description |
-|--------|-------|-------------|
-| `ts_write` | `0x1A0` | Write one value: key = measurement, value = one finite f64, 8 bytes little-endian. Options: `ts_field` (default `value`), `ts_tags`, `ts_timestamp` (ms) |
-| `ts_read` | `0x1A1` | Read raw points |
-| `ts_query` | `0x1A2` | Windowed aggregation |
-| `ts_floql` | `0x1A3` | Execute FloQL query |
-| `ts_list` | `0x1A4` | List measurements or series |
-| `ts_delete` | `0x1A5` | Delete series |
-| `ts_retention` | `0x1A6` | Set retention |
+| OpCode | Value |
+|--------|-------|
+| `kv_put` | `0x100` |
+| `kv_get` | `0x101` |
+| `kv_mget` | `0x102` |
+| `kv_delete` | `0x103` |
+| `kv_scan` | `0x104` |
+| `kv_history` | `0x105` |
 
-Time-series option tags:
+### KV Extended (atomic counters, JSON ops)
 
-| Tag | Value | Type | Meaning |
-|-----|-------|------|---------|
-| `ts_from_ms` | `0x60` | i64 | Start of the time range (inclusive, unix ms) |
-| `ts_to_ms` | `0x61` | i64 | End of the time range (inclusive; 0 = now) |
-| `ts_window_ms` | `0x62` | i64 | Aggregation window (ms) |
-| `ts_aggregation` | `0x63` | string | `avg`, `sum`, `count`, `min` or `max` |
-| `ts_field` | `0x64` | string | Field name (default `value`) |
-| `ts_tags` | `0x65` | string | `key=val,key2=val2` |
-| `ts_timestamp` | `0x67` | i64 | A write's timestamp in ms; absent = the server's clock |
-| `ts_raw_ttl` | `0x68` | string | Raw data TTL, e.g. `7d` |
-| `ts_downsample` | `0x69` | string | Refused: downsampling isn't supported |
+| OpCode | Value |
+|--------|-------|
+| `kv_incr` | `0x10B` |
+| `kv_json_get` | `0x10C` |
+| `kv_json_set` | `0x10D` |
+| `kv_json_del` | `0x10E` |
 
-A `ts_write` value that isn't exactly 8 bytes, or is NaN or infinite, is refused with `bad_request`.
+### KV Per-Shard Transactions
 
-### Action Operations (0x50–0x5F)
+| OpCode | Value |
+|--------|-------|
+| `kv_begin_txn` | `0x110` |
+| `kv_commit_txn` | `0x111` |
+| `kv_rollback_txn` | `0x112` |
 
-| OpCode | Value | Description |
-|--------|-------|-------------|
-| `action_register` | `0x50` | Register action type |
-| `action_invoke` | `0x51` | Invoke action |
-| `action_status` | `0x52` | Get execution status |
-| `action_result` | `0x53` | Get execution result |
+### KV Extended (TTL lifecycle, exists)
 
-### Worker Operations (0x60–0x6F)
+| OpCode | Value |
+|--------|-------|
+| `kv_touch` | `0x113` |
+| `kv_persist` | `0x114` |
+| `kv_exists` | `0x115` |
 
-| OpCode | Value | Description |
-|--------|-------|-------------|
-| `worker_register` | `0x60` | Register worker |
-| `worker_await` | `0x61` | Await task assignment |
-| `worker_complete` | `0x62` | Complete task |
-| `worker_fail` | `0x63` | Fail task |
-| `worker_heartbeat` | `0x64` | Worker heartbeat |
-| `worker_touch` | `0x65` | Extend task lease |
+### Streams (0x130 – 0x14F)
 
-### Cluster Operations (0xC0–0xCF)
+| OpCode | Value |
+|--------|-------|
+| `stream_append` | `0x130` |
+| `stream_read` | `0x131` |
+| `stream_trim` | `0x132` |
+| `stream_info` | `0x133` |
+| `stream_list` | `0x13B` |
+| `stream_create` | `0x13D` |
+| `stream_alter` | `0x13F` |
+| `stream_delete` | `0x140` |
 
-| OpCode | Value | Description |
-|--------|-------|-------------|
-| `cluster_join` | `0xC0` | Join cluster |
-| `cluster_leave` | `0xC1` | Leave cluster |
-| `cluster_status` | `0xC2` | Cluster health |
-| `cluster_partition_table` | `0xC3` | Get partition table |
+### Stream Consumer Groups (0x150 – 0x16F)
 
-## TLV Extended Fields
+| OpCode | Value |
+|--------|-------|
+| `stream_group_create` | `0x150` |
+| `stream_group_join` | `0x151` |
+| `stream_group_leave` | `0x152` |
+| `stream_group_read` | `0x153` |
+| `stream_group_ack` | `0x154` |
+| `stream_group_claim` | `0x155` |
+| `stream_group_pending` | `0x156` |
+| `stream_group_configure_sweeper` | `0x157` |
+| `stream_group_nack` | `0x159` |
+| `stream_group_touch` | `0x15A` |
+| `stream_group_info` | `0x15B` |
+| `stream_group_delete` | `0x15C` |
 
-Some operations include optional TLV (Type-Length-Value) fields after the key and value:
+### Queues (0x170 – 0x19F)
 
-```
-┌──────┬────────┬───────────┐
-│ type │ length │ value     │
-│ (1B) │ (2B)   │ (var)     │
-└──────┴────────┴───────────┘
-```
+| OpCode | Value |
+|--------|-------|
+| `queue_enqueue` | `0x170` |
+| `queue_dequeue` | `0x171` |
+| `queue_complete` | `0x172` |
+| `queue_fail` | `0x174` |
+| `queue_dlq_list` | `0x176` |
+| `queue_dlq_delete` | `0x177` |
+| `queue_dlq_requeue` | `0x178` |
+| `queue_stats` | `0x17B` |
+| `queue_peek` | `0x17C` |
+| `queue_purge` | `0x17F` |
+| `queue_list` | `0x198` |
 
-| Type | Name | Used By |
-|------|------|---------|
-| `0x01` | `ttl_ms` | KV put. u64 milliseconds; 0 = no expiry. Any length other than 8 bytes is refused |
-| `0x02` | CAS version | KV put/delete |
-| `0x03` | Priority | Queue enqueue |
-| `0x04` | Delay | Queue enqueue |
-| `0x05` | Dedup key | Queue enqueue |
-| `0x06` | Block timeout | Get, dequeue, stream read |
-| `0x07` | Consumer group | Stream group operations |
-| `0x08` | Idempotency key | Action invoke |
+### Time-Series (0x1A0 – 0x1BF)
 
+| OpCode | Value |
+|--------|-------|
+| `ts_write` | `0x1A0` |
+| `ts_read` | `0x1A1` |
+| `ts_query` | `0x1A2` |
+| `ts_floql` | `0x1A3` |
+| `ts_list` | `0x1A4` |
+| `ts_delete` | `0x1A5` |
+| `ts_retention` | `0x1A6` |
+
+A `ts_write` value is exactly one finite f64, 8 bytes little-endian; any other length, NaN or infinity is refused with `bad_request`.
+
+### Actions (0x300 – 0x31F)
+
+| OpCode | Value |
+|--------|-------|
+| `action_register` | `0x300` |
+| `action_invoke` | `0x301` |
+| `action_status` | `0x302` |
+| `action_list` | `0x303` |
+| `action_list_runs` | `0x304` |
+| `action_delete` | `0x305` |
+| `action_await` | `0x306` |
+| `action_complete` | `0x307` |
+| `action_fail` | `0x308` |
+| `action_touch` | `0x309` |
+
+### Workers (0x320 – 0x33F)
+
+| OpCode | Value |
+|--------|-------|
+| `worker_register` | `0x320` |
+| `worker_heartbeat` | `0x321` |
+| `worker_deregister` | `0x322` |
+| `worker_list` | `0x323` |
+| `worker_info` | `0x324` |
+| `worker_drain` | `0x325` |
+
+### Workflows (0x340 – 0x35F)
+
+| OpCode | Value |
+|--------|-------|
+| `workflow_create` | `0x340` |
+| `workflow_start` | `0x341` |
+| `workflow_signal` | `0x342` |
+| `workflow_cancel` | `0x343` |
+| `workflow_status` | `0x344` |
+| `workflow_history` | `0x345` |
+| `workflow_list_runs` | `0x346` |
+| `workflow_get_definition` | `0x347` |
+| `workflow_disable` | `0x348` |
+| `workflow_enable` | `0x349` |
+| `workflow_list_definitions` | `0x34A` |
+
+### Processing (0x360 – 0x37F)
+
+| OpCode | Value |
+|--------|-------|
+| `processing_submit` | `0x360` |
+| `processing_stop` | `0x361` |
+| `processing_cancel` | `0x362` |
+| `processing_status` | `0x363` |
+| `processing_list` | `0x364` |
+| `processing_savepoint` | `0x365` |
+| `processing_restore` | `0x366` |
+| `processing_rescale` | `0x367` |
+
+## Options
+
+Tags the server reads. An option it doesn't recognise is ignored for now; that changes with the typed op table.
+
+| Tag | Name | Value |
+|-----|------|-------|
+| `0x01` | `ttl_ms` | u64: Time-to-live in milliseconds (0 = no expiration) |
+| `0x02` | `cas_version` | u64: Expected version for compare-and-swap |
+| `0x03` | `if_not_exists` | void: Only set if key doesn't exist (NX) |
+| `0x04` | `if_exists` | void: Only set if key exists (XX) |
+| `0x05` | `limit` | u32: Maximum results for `kv_history` (newest first) and `ts_read` (earliest first); absent or 0 is all. List operations take theirs in the value |
+| `0x08` | `routing_key` | string: Explicit routing key for shard co-location (overrides key-based routing) |
+| `0x09` | `txn_id` | u64: Per-shard transaction ID (returned by kv_begin_txn) |
+| `0x10` | `priority` | u8: Message priority (0-255; lower is taken first) |
+| `0x15` | `count` | u32: Number of messages to dequeue |
+| `0x17` | `block_ms` | u32: Block timeout - wait until exists (at most 5 min; 0 = don't wait) |
+| `0x18` | `wait_ms` | u32: Watch timeout - wait for NEXT version change (at most 5 min; 0 = don't wait) |
+| `0x21` | `stream_start` | [16]u8: Read records after this StreamID (exclusive) |
+| `0x22` | `stream_end` | [16]u8: End StreamID for reads (inclusive) |
+| `0x23` | `stream_tail` | void: Flag indicating tail read (start from end of stream) |
+| `0x24` | `partition` | u32: Explicit partition index |
+| `0x25` | `partition_key` | string: Key for partition routing |
+| `0x26` | `max_age_seconds` | u64: Trim records older than this many seconds |
+| `0x27` | `max_bytes` | Refused: byte-based trim isn't supported ([#183](https://github.com/floruntime/flo/issues/183)) |
+| `0x28` | `dry_run` | void: Trim answers what it would remove and removes nothing |
+| `0x29` | `retention_count` | u64: Retention policy - max event count |
+| `0x2A` | `retention_age` | u64: Retention policy - max age in seconds |
+| `0x2B` | `retention_bytes` | Refused: byte retention isn't supported ([#183](https://github.com/floruntime/flo/issues/183)) |
+| `0x2C` | `force` | void: Force a destructive op (e.g. delete a non-empty stream) |
+| `0x30` | `ack_timeout_ms` | u32: Time before unacked message auto-redelivers (overrides default) |
+| `0x31` | `max_deliver` | u8: Max delivery attempts before DLQ (default: 10, 0=unlimited) |
+| `0x60` | `ts_from_ms` | i64: Start of time range (inclusive, unix ms) |
+| `0x61` | `ts_to_ms` | i64: End of time range (inclusive, 0 = now) |
+| `0x62` | `ts_window_ms` | i64: Aggregation window size (ms) |
+| `0x63` | `ts_aggregation` | string: Aggregation function name (avg, sum, count, min, max) |
+| `0x64` | `ts_field` | string: Field name filter (empty = "value") |
+| `0x65` | `ts_tags` | string: Comma-separated tag filters "key=val,key2=val2" |
+| `0x67` | `ts_timestamp` | i64: A write's timestamp in ms; absent, 0 or less = the server's clock |
+| `0x68` | `ts_raw_ttl` | string: Raw data TTL (e.g., "7d") |
+| `0x69` | `ts_downsample` | string: refused — downsampling isn't supported ([#158](https://github.com/floruntime/flo/issues/158)) |

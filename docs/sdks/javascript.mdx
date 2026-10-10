@@ -69,10 +69,8 @@ await client.connect();
 // Read-only KV (config, feature flags)
 const value = await client.kv.get("config:flags");
 
-// Streams (subscribe + publish)
-await client.streams.subscribe("chat:room-123", (record) => {
-  console.log(new TextDecoder().decode(record.payload));
-});
+// Streams: read from the start
+const records = await client.streams.read("chat:room-123", { start: "0-0", count: 10 });
 
 await client.close();
 ```
@@ -154,19 +152,12 @@ try {
 // Enqueue
 const seq = await client.queue.enqueue("tasks", payload, {
   priority: 10,
-  delayMs: 60000n,
-  dedupKey: "task-123",
 });
 
-// Dequeue with long polling
+// Dequeue with long polling (consumes the messages)
 const result = await client.queue.dequeue("tasks", 10, {
   blockMs: 30000,
-  visibilityTimeoutMs: 60000,
 });
-
-// Ack / Nack
-await client.queue.ack("tasks", [msg.seq]);
-await client.queue.nack("tasks", [msg.seq], { toDlq: true });
 
 // DLQ
 const dlq = await client.queue.dlqList("tasks");
@@ -280,9 +271,7 @@ import { ActionType } from "@floruntime/node";
 await client.action.register("process-image", ActionType.User, {
   timeoutMs: 60000, maxRetries: 3,
 });
-const result = await client.action.invoke("process-image", payload, {
-  priority: 10, idempotencyKey: "order-123",
-});
+const result = await client.action.invoke("process-image", payload);
 ```
 
 ### ActionWorker (high-level)

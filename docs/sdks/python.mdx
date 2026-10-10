@@ -119,31 +119,26 @@ async with await client.kv.begin("user:42") as txn:
 ## Queue Operations
 
 ```python
-from flo import EnqueueOptions, DequeueOptions, NackOptions
+from flo import EnqueueOptions, DequeueOptions
 
-# Enqueue with priority and delay
+# Enqueue with a priority (lower is taken first)
 seq = await client.queue.enqueue("tasks", payload,
-    EnqueueOptions(priority=10, delay_ms=60000))
+    EnqueueOptions(priority=10))
 
 # Dequeue with long polling
 result = await client.queue.dequeue("tasks", 10,
     DequeueOptions(block_ms=30000))
 
-# Process and ack/nack
+# A dequeue consumes its messages (queues are currently at-most-once)
 for msg in result.messages:
-    try:
-        process(msg.payload)
-        await client.queue.ack("tasks", [msg.seq])
-    except Exception:
-        await client.queue.nack("tasks", [msg.seq], NackOptions(to_dlq=True))
+    process(msg.payload)
 
 # DLQ operations
 result = await client.queue.dlq_list("tasks")
 await client.queue.dlq_requeue("tasks", [msg.seq for msg in result.messages])
 
-# Peek (no lease) and Touch (extend lease)
+# Peek without consuming
 result = await client.queue.peek("tasks", 5)
-await client.queue.touch("tasks", [msg.seq])
 ```
 
 ## Stream Operations
@@ -250,14 +245,13 @@ async with client.new_stream_worker(
 ## Action & Worker Operations
 
 ```python
-from flo import ActionType, ActionRegisterOptions, ActionInvokeOptions
+from flo import ActionType, ActionRegisterOptions
 
 # Register and invoke actions
 await client.action.register("process-image", ActionType.USER,
     ActionRegisterOptions(timeout_ms=60000, max_retries=3))
 
-result = await client.action.invoke("process-image", payload,
-    ActionInvokeOptions(priority=10, idempotency_key="order-123"))
+result = await client.action.invoke("process-image", payload)
 
 status = await client.action.status(result.run_id)
 ```

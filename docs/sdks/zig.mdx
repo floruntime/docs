@@ -105,7 +105,7 @@ for (mget_res.entries) |e| {
 }
 
 // Scan
-var result = try kv.scan("prefix:", .{ .limit = 100, .keys_only = true });
+var result = try kv.scan("prefix:", .{ .limit = 100 });
 defer result.deinit();
 
 // History
@@ -151,20 +151,16 @@ var queue = flo.Queue.init(&client);
 // Enqueue with options
 const seq = try queue.enqueue("tasks", "payload", .{
     .priority = 5,
-    .delay_ms = 1000,
-    .dedup_key = "unique-id",
 });
 
-// Dequeue with long polling
+// Dequeue with long polling (consumes the messages)
 var result = try queue.dequeue("tasks", 10, .{
-    .visibility_timeout_ms = 60000,
     .block_ms = 5000,
 });
 defer result.deinit();
 
 // Ack, Nack, DLQ
 try queue.ack("tasks", &seqs, .{});
-try queue.nack("tasks", &seqs, .{ .to_dlq = false });
 var dlq = try queue.dlqList("tasks", .{ .limit = 100 });
 defer dlq.deinit();
 try queue.dlqRequeue("tasks", &seqs, .{});
