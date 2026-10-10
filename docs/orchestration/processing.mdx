@@ -342,11 +342,32 @@ Drops records that don't match a condition. Supported expressions:
 | `json:<path><<value>` | Field &lt; value (numeric) |
 | `json:<path><=<value>` | Field &lt;= value (numeric) |
 
+**Compound:** join up to 8 expressions with ` AND ` (all must match) or ` OR ` (any matches). AND and OR can't be mixed in one condition; use `classify` rules for anything richer.
+
+A JSON condition matches only a record whose value is JSON with the field present and comparable. A missing field, a value that isn't JSON, or a field of another type matches nothing, including `!=` and `!*=`. The numeric comparisons need a number on the right.
+
+**Writing a condition:**
+- Values are written without quotes: `json:status=done`, not `json:status="done"`.
+- No spaces around the operator: `json:amount>100`, not `json:amount > 100`. The operator is `=`, never `==`.
+- `AND` and `OR` are uppercase with a space on each side; a lowercase `and`/`or` is part of the text being matched.
+- Paths are `$.a.b` or `a.b`; arrays can't be indexed.
+- `=` against a string field compares text (`json:code=5` matches `"5"` and `5`); a boolean field matches only `true` or `false`.
+- `value_contains:`, `key_prefix:` and the rest need something after the colon.
+
+A condition that isn't one of these is refused when the job is submitted (and by `flo validate processing`), naming it and where it is:
+
+```
+bad condition "valeu_contains:x": unknown condition at operators[0]
+```
+
 ```yaml
 operators:
   - type: filter
     name: keep-important
     condition: "value_contains:important"
+  - type: filter
+    name: high-value-approved
+    condition: "json:amount>10000 AND json:status=approved"
 ```
 
 ### `keyby` — JSON Key Extraction
@@ -478,9 +499,9 @@ operators:
 
 ### `classify` — Tag-Based Record Labeling
 
-Evaluates rules against each record and sets tag bits for matching conditions. Records continue flowing — classify never drops or forks, it only labels. Downstream sinks filter by AND-matching their `tags` list against the record's tag bitfield.
+Evaluates rules against each record and sets tag bits for matching conditions. Records continue flowing — classify never drops or forks, it only labels. Downstream sinks filter by AND-matching their `match` list against the record's tag bitfield.
 
-Rules use the same condition expressions as `filter`.
+Rules use the same condition expressions as `filter`, and a rule whose condition isn't one is refused the same way.
 
 ```yaml
 operators:
