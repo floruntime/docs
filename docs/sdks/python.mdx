@@ -40,7 +40,7 @@ asyncio.run(main())
 ## KV Operations
 
 ```python
-from flo import GetOptions, PutOptions, ScanOptions, HistoryOptions
+from flo import Condition, GetOptions, PutOptions, ScanOptions, HistoryOptions
 
 # Put returns PutResult with the new version
 res = await client.kv.put("session:abc", b"data", PutOptions(ttl_ms=3_600_000))
@@ -51,15 +51,15 @@ r = await client.kv.get("key")
 if r is not None:
     print(r.value, "@", r.version)
 
-# Blocking get
-r = await client.kv.get("key", GetOptions(block_ms=5000))
+# Wait up to 5 s for the key to appear (wait_for=WaitFor.CHANGE waits for its next version)
+r = await client.kv.get("key", GetOptions(wait_ms=5000))
 
 # Put with CAS \u2014 use the version returned by Get/Put
 r = await client.kv.get("counter")
 await client.kv.put("counter", b"2", PutOptions(cas_version=r.version))
 
 # Conditional writes
-await client.kv.put("key", b"value", PutOptions(if_not_exists=True))
+await client.kv.put("key", b"value", PutOptions(condition=Condition.IF_ABSENT))
 
 # Delete
 await client.kv.delete("key")

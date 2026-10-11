@@ -9,14 +9,14 @@ Flo's KV store provides strongly consistent key-value storage backed by the Unif
 
 ### Versioned Writes
 
-Every mutation to a key creates a new **version**. The version number is the Raft log index at which the write was committed. This means versions are globally ordered and monotonically increasing across all keys.
+Every mutation to a key creates a new **version**: 1 on its first write, one more on each after.
 
 Put responses include the new version number, which you can use for subsequent CAS updates:
 
 ```bash
-flo kv set counter "1"           # → version=1
-flo kv set counter "2" --cas 1   # → version=2 (succeeds)
-flo kv set counter "3" --cas 1   # → error: Version mismatch
+flo kv set counter "1"                   # → OK version=1
+flo kv set counter "2" --cas-version 1   # → OK version=2
+flo kv set counter "3" --cas-version 1   # → Error: conflict: cas_version isn't the key's version [conflict/cas_mismatch]
 ```
 
 ### Namespace Isolation
@@ -37,7 +37,7 @@ flo kv get db_url -n staging      # → postgres://staging
 flo kv get db_url -n production   # → postgres://prod
 ```
 
-Deleting or overwriting a key in one namespace has no effect on the same key in other namespaces. Conditional flags like `--nx` are also per-namespace — a key can be "new" in one namespace while already existing in another.
+Deleting or overwriting a key in one namespace has no effect on the same key in other namespaces. Conditions like `--condition if_absent` are also per-namespace — a key can be "new" in one namespace while already existing in another.
 
 ## Operations
 
@@ -49,16 +49,16 @@ flo kv set mykey "hello world"
 
 | Flag | Description |
 |------|-------------|
-| `--ttl <duration>` | Expire after a duration with a unit: `500ms`, `30s`, `5m`, `1h`, `1d` (`0` = no expiry) |
-| `--nx` | Only set if the key does **not** already exist |
-| `--xx` | Only set if the key **does** already exist |
-| `--cas <version>` | Only set if the current version matches exactly |
+| `--ttl-ms <ms>` | Expire after this long: milliseconds, or a number and a unit (`500ms`, `30s`, `5m`, `1h`, `1d`); `0` = no expiry |
+| `--condition <when>` | `always` (the default), `if_absent` (only if the key does **not** exist) or `if_present` (only if it **does**) |
+| `--cas-version <version>` | Only set if the key's version is exactly this |
 | `-n <namespace>` | Target namespace |
 | `-r <routing-key>` | Explicit shard routing key for co-location |
+| `-t <txn-id>` | Buffer the write in a transaction |
 
-`--nx` and `--xx` are mutually exclusive. `--cas` cannot be combined with `--nx`.
+A condition and a version may be given together; the write happens only if both hold.
 
-**CAS version 0** has a special meaning: it asserts the key must not exist yet. This is equivalent to `--nx` but expressed as a version constraint.
+**CAS version 0** has a special meaning: it asserts the key must not exist yet. This is equivalent to `--condition if_absent` but expressed as a version constraint.
 
 ### Get
 
@@ -69,23 +69,24 @@ flo kv get mykey -o json   # includes version number
 
 | Flag | Description |
 |------|-------------|
-| `--wait <ms>` | Wait until the key exists, then return; `block_ms` on the wire (at most 300000 ms, 5 minutes; 0 does not wait; a longer wait is refused) |
-| `--block <ms>` | Wait for the **next version change**, even if the key already exists; `wait_ms` on the wire (at most 300000 ms, 5 minutes; 0 does not wait; a longer wait is refused) |
-| `--format <fmt>` | Output format: `json`, `table`, `raw` |
+| `--wait-ms <ms>` | How long to wait: milliseconds, or a number and a unit (`500ms`, `30s`, `5m`); at most `5m`; `0` does not wait; a longer wait is refused |
+| `--wait-for <what>` | What to wait for: `exists` (the default) or `change` |
+| `-o <fmt>` | Output format: `json`, `table`, `raw` |
 | `-n <namespace>` | Target namespace |
 | `-r <routing-key>` | Explicit shard routing key |
+| `-t <txn-id>` | Read inside a transaction, seeing its buffered writes |
 
-`--wait` and `--block` serve different purposes:
+The two kinds of wait serve different purposes:
 
-- **`--wait`** is for coordination — one process creates a key, another waits for it to appear. If the key already exists, it returns immediately.
-- **`--block`** is for watching — subscribe to the next change on an existing key. Even if the key exists now, it waits for a newer version. If nothing changes in time, it returns the current value with its unchanged version, so a watcher can compare and ask again; a key that is gone returns not found.
+- **`--wait-for exists`** is for coordination — one process creates a key, another waits for it to appear. If the key already exists, it returns immediately.
+- **`--wait-for change`** is for watching — subscribe to the next change on an existing key. Even if the key exists now, it waits for a newer version. If nothing changes in time, it returns the current value with its unchanged version, so a watcher can compare and ask again; a key that is gone returns not found.
 
 ```bash
 # Process A: wait for a result to appear
-flo kv get job:result --wait 30000
+flo kv get job:result --wait-ms 30s
 
 # Process B: watch for config changes
-flo kv get config:feature-flags --block 300000
+flo kv get config:feature-flags --wait-ms 5m --wait-for change
 ```
 
 ### Multi-key get
@@ -207,24 +208,24 @@ Flo maintains a bounded version chain per key (default depth: 64). Oldest versio
 Set an expiration on keys:
 
 ```bash
-flo kv set session:abc '{"user":"alice"}' --ttl 1h
+flo kv set session:abc '{"user":"alice"}' --ttl-ms 1h
 ```
 
-The key expires one hour after the write. Expired keys return `(nil)` on get, as if they were never written. Setting `--ttl 0` explicitly means "no expiration."
+The key expires one hour after the write. Expired keys return `(nil)` on get, as if they were never written. Setting `--ttl-ms 0` explicitly means "no expiration."
 
-TTLs are milliseconds, with millisecond resolution. `--ttl` needs a unit — `ms`, `s`, `m`, `h` or `d`, as in `500ms` or `1d`; a bare number other than `0` is refused.
+TTLs are milliseconds, with millisecond resolution. `--ttl-ms` takes a bare number of milliseconds, or a number and a unit — `ms`, `s`, `m`, `h` or `d`, as in `500ms` or `1d`. (`kv touch` takes `--ttl`, which needs a unit.)
 
-Overwriting a key **resets its TTL**. If you set a key with `--ttl 60s` and then overwrite it without a TTL flag, the new value has no expiration:
+Overwriting a key **resets its TTL**. If you set a key with `--ttl-ms 60s` and then overwrite it without a TTL, the new value has no expiration:
 
 ```bash
-flo kv set temp "short-lived" --ttl 5s   # expires in 5s
-flo kv set temp "permanent"              # TTL cleared
+flo kv set temp "short-lived" --ttl-ms 5s   # expires in 5s
+flo kv set temp "permanent"                 # TTL cleared
 ```
 
-TTL combines with conditional flags. A common pattern is `--ttl` + `--nx` for "set once with expiry":
+TTL combines with conditions. A common pattern is a TTL with `--condition if_absent` for "set once with expiry":
 
 ```bash
-flo kv set lock:resource "owner-1" --ttl 30s --nx
+flo kv set lock:resource "owner-1" --ttl-ms 30s --condition if_absent
 ```
 
 Expiry is **lazy** — keys are checked at read time rather than proactively swept. This means expired keys don't consume I/O until accessed.
@@ -239,12 +240,12 @@ flo kv get counter -o json
 # {"key":"counter","value":"41","version":7}
 
 # Step 2: update only if version is still 7
-flo kv set counter "42" --cas 7
+flo kv set counter "42" --cas-version 7
 ```
 
-If another writer updated the key between your read and write, the CAS fails with "Version mismatch" and the original value is preserved.
+If another writer updated the key between your read and write, the CAS fails with `[conflict/cas_mismatch]` (exit 3) and the original value is preserved.
 
-**CAS guarantees hold across the cluster.** You can read the version from one node and CAS-update from another — the version is the Raft log index, which is globally consistent.
+**CAS guarantees hold across the cluster.** You can read the version from one node and CAS-update from another: every write goes through the leader, which checks the version.
 
 ## Atomicity model
 
@@ -256,10 +257,10 @@ Use the conditional flags on `kv set`/`KV.Put` to express "do this only if X". E
 
 | Pattern | How |
 |---------|-----|
-| Insert if absent | `--nx` (or `--cas 0`) |
-| Update only if present | `--xx` |
-| Compare-and-swap by version | `--cas <version>` |
-| Atomic create with lease | `--nx --ttl <duration>` |
+| Insert if absent | `--condition if_absent` (or `--cas-version 0`) |
+| Update only if present | `--condition if_present` |
+| Compare-and-swap by version | `--cas-version <version>` |
+| Atomic create with lease | `--condition if_absent --ttl-ms <duration>` |
 | Atomic counter | [`kv incr`](#counters) |
 | Atomic JSON sub-field update | [`kv jset`](#json-paths) |
 
@@ -271,7 +272,7 @@ flo kv get account:42 -o json     # → value + version=11
 
 # 2. Compute new state client-side
 # 3. Conditional write — fails if anyone else changed the key
-flo kv set account:42 '{"balance":150}' --cas 11
+flo kv set account:42 '{"balance":150}' --cas-version 11
 ```
 
 If the CAS fails, re-read and retry. For a counter, prefer `kv incr` — it is unconditional and never conflicts.
@@ -281,10 +282,10 @@ If the CAS fails, re-read and retry. For a counter, prefer `kv incr` — it is u
 The same `if_match` guard is also accepted by `delete`, `touch`, and `persist`. This closes the classic distributed-lock race: the holder can release the lock (or extend its lease) only if it still owns the version it acquired.
 
 ```go
-// Acquire: NX put with a 30 s TTL returns version
+// Acquire: a put-if-absent with a 30 s TTL returns version
 ttl := uint64(30_000)
 v, _ := client.KV.Put("lock:job-42", []byte(ownerID),
-    &flo.PutOptions{IfNotExists: true, TTLMs: &ttl})
+    &flo.PutOptions{Condition: flo.ConditionIfAbsent, TTLMs: &ttl})
 
 // ... do work ...
 
@@ -294,7 +295,7 @@ _ = client.KV.Delete("lock:job-42", &flo.DeleteOptions{IfMatch: &v.Version})
 
 ```python
 v = await client.kv.put("lock:job-42", owner_id.encode(),
-    PutOptions(if_not_exists=True, ttl_ms=30_000))
+    PutOptions(condition=Condition.IF_ABSENT, ttl_ms=30_000))
 # ... work ...
 # Renew the lease atomically
 await client.kv.touch("lock:job-42", 30_000, KVTouchOptions(if_match=v.version))
@@ -302,7 +303,7 @@ await client.kv.touch("lock:job-42", 30_000, KVTouchOptions(if_match=v.version))
 await client.kv.delete("lock:job-42", DeleteOptions(if_match=v.version))
 ```
 
-A version mismatch (or a missing key when `if_match` is set) returns the same CAS-failed error as `put` with `--cas`, carrying the current version so callers can decide whether to retry or give up.
+A version mismatch (or a missing key when `if_match` is set) returns the same CAS-failed error as `set` with `--cas-version`, carrying the current version so callers can decide whether to retry or give up.
 
 ### Multi-key atomicity
 
@@ -315,7 +316,7 @@ For multi-key writes that must commit or fail as a unit, Flo offers [**per-shard
 | "Update several fields of one document" | Model the state as a **single key with a JSON value** and use [`kv jset`](#json-paths) or CAS on the whole document. One Raft entry, no coordination. |
 | "Atomic counter" | Use [`kv incr`](#counters) — unconditional and conflict-free. |
 | "Long-running multi-step state machine" | Use a [workflow](/orchestration/workflows). Workflows give you durable execution, retries, and compensation steps. |
-| "Idempotent producer / exactly-once write" | Use `--nx` on a dedupe key (e.g. `dedupe:<request-id>`) before doing the work. |
+| "Idempotent producer / exactly-once write" | Use `--condition if_absent` on a dedupe key (e.g. `dedupe:<request-id>`) before doing the work. |
 | "Cross-partition transaction" | Not supported. Either restructure keys to share a routing key, or use a workflow with compensating actions. |
 
 ## Counters
@@ -344,7 +345,7 @@ if count > LIMIT:
 
 ## TTL lifecycle
 
-TTLs are set at write time via `--ttl` / `PutOptions.TTLMs`, but you can also adjust them later:
+TTLs are set at write time via `--ttl-ms` / `PutOptions.TTLMs`, but you can also adjust them later:
 
 | Op | Effect |
 |----|--------|
@@ -388,11 +389,11 @@ The `jset` is a single Raft entry; concurrent writers updating different fields 
 
 ## Transactions
 
-Per-shard transactions buffer multiple writes on a single pinned partition and commit them atomically as **one Raft entry**. Open with a routing key — every key touched inside the transaction must hash to the same partition, otherwise the server returns `kv_txn_cross_shard`.
+Per-shard transactions buffer multiple writes on a single pinned partition and commit them atomically as **one Raft entry**. Open with a routing key, and give that routing key with every op inside the transaction (`-r`); a `set` or `get` with another is refused with `txn_routing_key`. The transaction id names its shard, so `commit` and `rollback` take nothing else.
 
 | Op | Wire | Purpose |
 |----|------|---------|
-| `kv begin <routing-key>` | `0x110` | Open a new transaction. Returns a `txn_id` and the partition's `pinned_hash`. |
+| `kv begin -r <routing-key>` | `0x110` | Open a new transaction. Returns a `txn_id` and the partition's `pinned_hash`. |
 | `kv commit <txn-id>` | `0x111` | Apply all buffered ops atomically. Returns the `commit_index` and `op_count`. |
 | `kv rollback <txn-id>` | `0x112` | Discard buffered ops. Idempotent. |
 
@@ -401,12 +402,12 @@ Inside a transaction, normal `kv` ops (`put`, `get`, `delete`, `incr`, `touch`, 
 **Server caps**: 256 ops per transaction, 1 MiB total payload, 1024 open transactions per server.
 
 ```bash
-# Open, write, commit
-TXN=$(flo kv begin user:42 -o json | jq -r .txn_id)
-flo kv set user:42:name "Jane"   --txn $TXN
-flo kv incr user:42:visits       --txn $TXN
-flo kv set user:42:last_seen "$(date -u +%s)" --txn $TXN
-flo kv commit $TXN               # → commit_index=N op_count=3
+# Open (prints txn_id=<id> pinned_hash=<hash>), write, commit
+TXN=$(flo kv begin -r user:42 | sed 's/txn_id=\([0-9]*\).*/\1/')
+flo kv set user:42:name "Jane"   -r user:42 --txn $TXN
+flo kv incr user:42:visits       -r user:42 --txn $TXN
+flo kv set user:42:last_seen "$(date -u +%s)" -r user:42 --txn $TXN
+flo kv commit $TXN               # → OK ops=3 commit_index=N
 ```
 
 If the client crashes before commit, the buffered ops are discarded automatically when the transaction expires server-side. Transactions survive across stateless connections — they are owned by `txn_id`, not by the TCP connection.
@@ -477,7 +478,7 @@ if flo.IsConflict(err) {
 
 // Conditional write (only if key doesn't exist)
 client.KV.Put("lock:resource", []byte("owner-1"), &flo.PutOptions{
-    IfNotExists: true,
+    Condition: flo.ConditionIfAbsent,
     TTLMs:       flo.Uint64Ptr(30_000),
 })
 
@@ -493,9 +494,8 @@ ok, _ := client.KV.Exists("lock:resource", nil)
 client.KV.JsonSet("order:42", "$.status", []byte(`"shipped"`), nil)
 status, _ := client.KV.JsonGet("order:42", "$.status", nil)
 
-// Blocking get — wait for key to appear
-blockMS := uint32(5000)
-r, _ = client.KV.Get("job:result", &flo.GetOptions{BlockMS: &blockMS})
+// Wait up to 5 s for the key to appear
+r, _ = client.KV.Get("job:result", &flo.GetOptions{WaitMs: 5000})
 
 // Prefix scan with pagination
 result, _ := client.KV.Scan("user:", &flo.ScanOptions{Limit: ptr(uint32(100))})
@@ -551,7 +551,7 @@ async with FloClient("localhost:9000") as client:
 
     # Conditional write
     await client.kv.put("lock:resource", b"owner-1",
-        PutOptions(if_not_exists=True, ttl_ms=30_000))
+        PutOptions(condition=Condition.IF_ABSENT, ttl_ms=30_000))
 
     # Atomic counter
     n = await client.kv.incr("visits:home")
@@ -565,8 +565,8 @@ async with FloClient("localhost:9000") as client:
     await client.kv.json_set("order:42", "$.status", b'"shipped"')
     status = await client.kv.json_get("order:42", "$.status")
 
-    # Blocking get
-    r = await client.kv.get("job:result", GetOptions(block_ms=5000))
+    # Wait up to 5 s for the key to appear
+    r = await client.kv.get("job:result", GetOptions(wait_ms=5000))
 
     # Prefix scan
     result = await client.kv.scan("user:", ScanOptions(limit=100))
@@ -622,7 +622,7 @@ try {
 
 // Conditional write
 await client.kv.put("lock:resource", encode("owner-1"), {
-  ifNotExists: true,
+  condition: Condition.IfAbsent,
   ttlMs: 30_000n,
 });
 
@@ -638,8 +638,8 @@ const exists = await client.kv.exists("lock:resource");
 await client.kv.jsonSet("order:42", "$.status", encode('"shipped"'));
 const status = await client.kv.jsonGet("order:42", "$.status");
 
-// Blocking get
-const pending = await client.kv.get("job:result", { blockMs: 5000 });
+// Wait up to 5 s for the key to appear
+const pending = await client.kv.get("job:result", { waitMs: 5000 });
 
 // Prefix scan
 const result = await client.kv.scan("user:", { limit: 100 });
@@ -702,7 +702,7 @@ if (try kv.get("counter", .{})) |r_const| {
 
 // Conditional write
 _ = try kv.put("lock:resource", "owner-1", .{
-    .if_not_exists = true,
+    .condition = .if_absent,
     .ttl_ms = 30_000,
 });
 
@@ -722,8 +722,8 @@ if (try kv.jsonGet("order:42", "$.status", .{})) |status_const| {
     std.debug.print("{s} @ v{d}\n", .{ status.value, status.version });
 }
 
-// Blocking get
-if (try kv.get("job:result", .{ .block_ms = 5000 })) |r_const| {
+// Wait up to 5 s for the key to appear
+if (try kv.get("job:result", .{ .wait_ms = 5000 })) |r_const| {
     var r = r_const;
     defer r.deinit(allocator);
 }
@@ -754,11 +754,11 @@ std.debug.print("committed {d} ops at index {d}\n", .{ result.op_count, result.c
 
 ### Distributed Locks
 
-Use `--nx` with `--ttl` as a simple distributed lock with automatic expiry:
+Use `--condition if_absent` with `--ttl-ms` as a simple distributed lock with automatic expiry:
 
 ```bash
 # Acquire lock (fails if already held)
-flo kv set lock:payment "worker-7" --ttl 30s --nx
+flo kv set lock:payment "worker-7" --ttl-ms 30s --condition if_absent
 
 # Release lock
 flo kv delete lock:payment
@@ -768,26 +768,26 @@ The TTL acts as a safety net — if the lock holder crashes, the lock auto-expir
 
 ### Configuration Store
 
-Store configuration per environment using namespaces, and watch for changes with `--block`:
+Store configuration per environment using namespaces, and watch for changes with `--wait-for change`:
 
 ```bash
 # Set config
 flo kv set feature:dark-mode "true" -n production
 
 # Watch for config changes (long-poll)
-flo kv get feature:dark-mode --block 300000 -n production
+flo kv get feature:dark-mode --wait-ms 5m --wait-for change -n production
 ```
 
 ### Job Coordination
 
-Use `--wait` for producer/consumer coordination where one process publishes a result and another waits for it:
+Use `--wait-ms` for producer/consumer coordination where one process publishes a result and another waits for it:
 
 ```bash
 # Worker: process job and publish result
-flo kv set job:abc:result '{"status":"done","output":"..."}' --ttl 1h
+flo kv set job:abc:result '{"status":"done","output":"..."}' --ttl-ms 1h
 
 # Requester: wait for result (up to 60 seconds)
-flo kv get job:abc:result --wait 60000
+flo kv get job:abc:result --wait-ms 60s
 ```
 
 ## Internals

@@ -73,13 +73,13 @@ if (try kv.get("key", .{})) |r_const| {
     std.debug.print("{s} @ v{d}\n", .{ r.value, r.version });
 }
 
-// Blocking get
-_ = try kv.get("key", .{ .block_ms = 5000 });
+// Wait up to 5 s for the key to appear (.wait_for = .change waits for its next version)
+_ = try kv.get("key", .{ .wait_ms = 5000 });
 
 // Put returns PutResult { version: u64 }
 const put_res = try kv.put("key", "value", .{
     .ttl_ms = 3_600_000,
-    .if_not_exists = true,
+    .condition = .if_absent,
     .namespace = "other-ns",
 });
 
