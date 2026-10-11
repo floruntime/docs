@@ -18,6 +18,8 @@ release, or `--dir <path>` to install elsewhere.
 Download `flo-<arch>-<os>.tar.gz` for your platform from
 [Releases](https://github.com/floruntime/flo/releases). Each has a `.sha256` beside it.
 
+The macOS binaries need macOS 15 or later.
+
 ## Docker
 
 ```bash
@@ -31,7 +33,7 @@ See the [Docker deployment guide](/deployment/docker/) for production usage with
 
 ## Building from Source
 
-Requires [Zig 0.15.2+](https://ziglang.org/download/).
+Requires [Zig 0.17.x](https://ziglang.org/download/); the build refuses any other version.
 
 ```bash
 git clone https://github.com/floruntime/flo.git
