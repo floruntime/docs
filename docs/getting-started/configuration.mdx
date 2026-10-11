@@ -38,7 +38,7 @@ fix:
 port = 9000               # Client API port (binary protocol)
 bind = "0.0.0.0"          # Bind address
 data_dir = "~/.flo/data"  # Data directory for UAL segments and storage files
-shards = 0                # Number of shards, at most 256 (0 = auto-detect CPU count)
+shards = 0                # Number of shards, at most 256 (0 = CPU count, less one on 4 or more cores; a cluster member runs 1)
 # partition_count = 0     # Virtual partitions, at most 16384 (0 = auto: max(4096, shards × 32))
 ```
 
@@ -61,8 +61,8 @@ a private interface, or firewall it.
 ```toml
 [storage]
 durability = "async_flush"       # sync | async_flush | ephemeral
-hot_buffer_capacity = 67108864   # Per-partition ring buffer size in bytes (64 MB)
-# hot_flush_seconds = 300        # Max seconds before hot → warm flush (0 = disabled)
+hot_buffer_capacity = 67108864   # Per-partition ring buffer size in bytes (64 MiB, the default; at least 2 MiB)
+# hot_flush_seconds = 0          # Max seconds before hot → warm flush (default 0 = disabled; 300 suits production)
 # max_hot_entries = 0            # Max entries in hot tier before eviction (0 = capacity only)
 ```
 
@@ -165,8 +165,10 @@ variable, for containers without a config file; set only one of the three.
 Starting the Raft listener without it, with a malformed one, or with more than
 one source is a startup error that says what to change.
 
-`node_id` is read on first boot and then stored in the data dir, which wins on
-every later boot; to change a node's id, start it from an empty data dir.
+`node_id` is read on first boot and stored in the data dir. On later boots a
+`node_id` that differs from the stored one refuses to start, naming both: remove
+it from the config to keep the data, or start the node from an empty data dir to
+give it a new id.
 
 The peer port is bound only when this node can have peers: `enabled = true`
 starts the first member of a cluster, `seeds` joins members that exist, and
