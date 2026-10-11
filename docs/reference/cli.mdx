@@ -7,9 +7,9 @@ lede: Complete reference for the flo command-line interface.
 
 | Flag | Description |
 |------|-------------|
-| `-e, --endpoint <host:port>` | Server endpoint (default: `localhost:9000`) |
-| `-p, --port <port>` | Server port, when the host is the default |
-| `-n, --namespace <name>` | Namespace for operations (default: `default`) |
+| `-e, --endpoint <host:port>` | Server endpoint; else `FLO_ENDPOINT`, else `127.0.0.1:9000` |
+| `-p, --port <port>` | Server port on `127.0.0.1`, when `--endpoint` isn't given; else `FLO_PORT` |
+| `-n, --namespace <name>` | Namespace for operations; else `FLO_NAMESPACE`, else `default`. Given, it always wins, `-n default` included |
 | `-o, --output <fmt>` | Output format: `table`, `json`, `raw` |
 | `-v, --verbose` | Verbose output |
 | `-V, --version` | The release, protocol version and op table hash, such as `v0.2.0 (protocol 2, table 0x…)`, or `dev (…)` for a development build. A server serves only clients built from its table; a mismatch exits 5 naming both tables. |
