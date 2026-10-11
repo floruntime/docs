@@ -451,6 +451,9 @@ if flo.IsConflict(err) { /* CAS conflict */ }
 if flo.IsBadRequest(err) { /* Invalid params */ }
 if flo.IsOverloaded(err) { /* Retry later */ }
 if errors.Is(err, flo.ErrTableMismatch) { /* Server from another release: upgrade together */ }
+
+var se *flo.ServerError
+if errors.As(err, &se) && se.Ran == flo.RanYes { /* It took effect: don't resend */ }
 ```
 
 ## Thread Safety

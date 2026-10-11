@@ -14,6 +14,19 @@ lede: Complete reference for the flo command-line interface.
 | `-v, --verbose` | Verbose output |
 | `-V, --version` | The release, protocol version and op table hash, such as `v0.2.0 (protocol 2, table 0x…)`, or `dev (…)` for a development build. A server serves only clients built from its table; a mismatch exits 5 naming both tables. |
 
+## Errors and exit codes
+
+A refused command prints `Error: <message> [<status>]`, or `[<status>/<reason>]` when the server names a [reason](/reference/wire-protocol#refusals), e.g. `[bad_request/out_of_range]`, and exits:
+
+| Code | Meaning |
+|------|---------|
+| `0` | ok |
+| `1` | not found or absent |
+| `2` | usage error |
+| `3` | refused (`bad_request`, `conflict`, `unauthorized`, `internal_error`) |
+| `4` | retryable (`overloaded`, `rate_limited`, `unavailable`) |
+| `5` | transport failure, timeout, version mismatch, a cut-off answer, or the CLI out of memory |
+
 ## Namespaces
 
 :::note

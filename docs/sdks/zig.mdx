@@ -349,6 +349,8 @@ All operations return `flo.FloError`:
 | `ServerError` | Internal server error |
 | `TableMismatch` | The server is from another release; `client.foreign_server` names it. Upgrade the SDK and the server together |
 
+After a refusal, `client.lastError()` gives its status `code`, `reason`, `ran` (whether the request took effect) and `message`.
+
 ## Memory Management
 
 - All results that allocate memory have a `.deinit()` method — always `defer result.deinit()`
