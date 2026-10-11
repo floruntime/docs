@@ -260,7 +260,7 @@ Node 1 leads a group of one until nodes 2 and 3 have joined it; a restarted memb
 | `bind_address` | `string` | `"0.0.0.0"` | Bind address for the wire listener |
 | `data_dir` | `string` | `"/var/lib/flo"` | Data directory. Created and chowned by cloud-init |
 | `shards` | `number` | `0` | Number of shards. `0` = auto-detect from CPU count |
-| `durability` | `string` | `"async_flush"` | Storage durability: `sync`, `async_flush`, or `ephemeral` |
+| `durability` | `string` | `"async_flush"` | Storage durability: `sync` or `async_flush` |
 | `hot_buffer_capacity` | `number` | `0` | In-memory hot buffer size in bytes. `0` = default |
 | `log_level` | `string` | `"info"` | Log level |
 | `enable_metrics` | `bool` | `true` | Enable Prometheus metrics endpoint |

@@ -69,7 +69,7 @@ flo server start [options]
 | `-p, --port <port>` | Client protocol port; `0` binds a free one, printed in the ready line and by `server status` | `9000` |
 | `--bind <addr>` | Address to listen on | `0.0.0.0` |
 | `-d, --data-dir <path>` | Data directory | `~/.flo/data` |
-| `--durability <mode>` | `sync`, `async_flush` or `ephemeral` | — |
+| `--durability <mode>` | `sync` or `async_flush` | — |
 | `-s, --shards <n>` | Number of shard threads, at most 256; a cluster member runs 1 (the default resolves to it) | CPU count, less one on 4 or more cores |
 | `--partitions <n>` | Virtual partitions, at most 16384 | `max(4096, shards × 32)` |
 | `-l, --log-level <level>` | `debug`, `info`, `warn` or `error` | — |
