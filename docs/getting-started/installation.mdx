@@ -6,23 +6,26 @@ lede: How to install the Flo binary on macOS, Linux, and Docker.
 ## One-Line Install (macOS / Linux)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/floruntime/flo/master/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/floruntime/flo/dev/scripts/install.sh | sh
 ```
 
-This installs the `flo` binary to `/usr/local/bin`.
+This installs the newest release's `flo` binary to `/usr/local/bin` on Linux and
+`/opt/homebrew/bin` on macOS, after checking its SHA-256. Pass `--version <tag>` to pin a
+release, or `--dir <path>` to install elsewhere.
 
-## Homebrew (macOS)
+## Release Tarballs
 
-```bash
-brew tap floruntime/tap
-brew install flo
-```
+Download `flo-<arch>-<os>.tar.gz` for your platform from
+[Releases](https://github.com/floruntime/flo/releases). Each has a `.sha256` beside it.
 
 ## Docker
 
 ```bash
-docker run -p 9000:9000 -p 9001:9001 -p 9002:9002 ghcr.io/floruntime/flo:latest
+docker run -p 9000:9000 -p 9001:9001 -p 9002:9002 ghcr.io/floruntime/flo:0.1.0-dev.11
 ```
+
+Images are tagged by release without the leading `v`; see
+[the registry](https://github.com/floruntime/flo/pkgs/container/flo) for the newest.
 
 See the [Docker deployment guide](/deployment/docker/) for production usage with volumes and compose.
 
@@ -32,7 +35,7 @@ Requires [Zig 0.15.2+](https://ziglang.org/download/).
 
 ```bash
 git clone https://github.com/floruntime/flo.git
-cd flo/flo
+cd flo
 zig build -Drelease=true
 ```
 
