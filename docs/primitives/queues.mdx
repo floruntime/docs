@@ -33,11 +33,10 @@ Priority is a `u8` value (0–255).
 
 Queues live inside **namespaces**. The same queue name in different namespaces is fully independent — separate messages, separate DLQ, separate statistics.
 
-Namespaces are set via `FLO_NAMESPACE` environment variable or client configuration:
+A command names its namespace with `-n`/`--namespace`, or with the `FLO_NAMESPACE` environment variable when `-n` isn't given (default `default`); an SDK client sets it in its options:
 
 ```bash
-export FLO_NAMESPACE=staging
-flo queue enqueue tasks '{"env":"staging"}'
+flo queue enqueue tasks '{"env":"staging"}' -n staging
 
 export FLO_NAMESPACE=production
 flo queue enqueue tasks '{"env":"prod"}'

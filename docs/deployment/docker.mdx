@@ -170,7 +170,7 @@ at `/etc/flo/flo.toml`) or from flags on the command line:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `FLO_DATA_DIR` | `/data/flo` | Data directory the entrypoint prepares for the `flo` user |
+| `FLO_DATA_DIR` | `/data/flo` | The directory the entrypoint hands to the `flo` user before starting it. `flo` itself doesn't read it: keep the server's `data_dir` (in `flo.toml` or `--data-dir`) the same path |
 | `FLO_CLUSTER_SECRET` | — | The shared secret every member proves at the peer port; only one made by `flo server secret` is accepted |
 
 ## Health Check

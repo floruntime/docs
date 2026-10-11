@@ -53,13 +53,12 @@ flo server start [options]
 | Flag | Description | Default |
 |------|-------------|---------|
 | `-c, --config <path>` | Config file path | `flo.toml` |
-| `-p, --port <port>` | Client protocol port | `9000` |
+| `-p, --port <port>` | Client protocol port; `0` binds a free one, printed in the ready line and by `server status` | `9000` |
 | `--bind <addr>` | Address to listen on | `0.0.0.0` |
 | `-d, --data-dir <path>` | Data directory | `~/.flo/data` |
 | `--durability <mode>` | `sync`, `async_flush` or `ephemeral` | — |
 | `-s, --shards <n>` | Number of shard threads, at most 256; a cluster member runs 1 (the default resolves to it) | CPU count, less one on 4 or more cores |
 | `--partitions <n>` | Virtual partitions, at most 16384 | `max(4096, shards × 32)` |
-| `-t, --threads <n>` | Worker threads | auto |
 | `-l, --log-level <level>` | `debug`, `info`, `warn` or `error` | — |
 | `--log-format <format>` | `text` or `json` | — |
 | `--cluster` | Start as the first member of a cluster; leads alone until others join | — |
@@ -117,23 +116,26 @@ flo server force-members --data-dir /var/lib/flo --yes
 
 ### `flo server status`
 
-Show whether the server process is running, from its PID file.
+Show whether the server process is running and the port it bound, from its PID file.
 
 ```bash
-flo server status [--data-dir <path>]
+flo server status [--config <path>] [--data-dir <path>]
 ```
+
+It finds the data directory as `server start` does: `--data-dir`, else the config file's `data_dir`, else `~/.flo/data`.
 
 ### `flo server stop`
 
 Stop the server whose PID file is in the data directory.
 
 ```bash
-flo server stop [--data-dir <path>] [--force]
+flo server stop [--config <path>] [--data-dir <path>] [--force]
 ```
 
 | Flag | Description |
 |------|-------------|
-| `-d, --data-dir <path>` | Data directory holding the PID file |
+| `-c, --config <path>` | Config file naming the data directory |
+| `-d, --data-dir <path>` | Data directory holding the PID file (overrides the config) |
 | `-f, --force` | Stop at once (SIGKILL) |
 
 ### `flo server metrics`
@@ -141,8 +143,10 @@ flo server stop [--data-dir <path>] [--force]
 Fetch the server's metrics.
 
 ```bash
-flo server metrics [--format text|json|prometheus]
+flo server metrics [--endpoint <host:port>] [--format text|json]
 ```
+
+`text` prints the Prometheus exposition as served; `json` prints `{"metrics": "<exposition>"}`. `--endpoint` defaults to `localhost:9001`.
 
 ## KV
 
