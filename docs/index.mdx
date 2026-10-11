@@ -11,8 +11,8 @@ Get up and running in under a minute. Every primitive ships in one binary — no
   <Tab title="macOS">
 
 ```bash
-# Install via Homebrew
-brew install floruntime/tap/flo
+# Install
+curl -fsSL https://raw.githubusercontent.com/floruntime/flo/dev/scripts/install.sh | sh
 
 # Start the runtime
 flo server start
@@ -26,8 +26,8 @@ flo kv get hello
   <Tab title="Linux">
 
 ```bash
-# Download and install
-curl -fsSL https://get.floruntime.io | sh
+# Install
+curl -fsSL https://raw.githubusercontent.com/floruntime/flo/dev/scripts/install.sh | sh
 
 # Start the runtime
 flo server start
@@ -42,7 +42,7 @@ flo stream append events '{"type":"login","user":"alice"}'
 
 ```bash
 # Pull and run
-docker run -p 4222:4222 -p 9090:9090 floruntime/flo:latest
+docker run -p 9000:9000 -p 9001:9001 -p 9002:9002 ghcr.io/floruntime/flo:latest
 
 # Use the CLI from another terminal
 flo kv set greeting "hello from docker"

@@ -419,7 +419,7 @@ Nodes built from different op tables can't link, and a server refuses clients bu
 ssh root@<ip> 'systemctl stop flo'
 
 # Then, on every droplet, install the new version and start it
-ssh root@<ip> 'curl -fsSL https://raw.githubusercontent.com/floruntime/flo/master/scripts/install.sh | sh -s -- --version v0.2.0'
+ssh root@<ip> 'curl -fsSL https://raw.githubusercontent.com/floruntime/flo/dev/scripts/install.sh | sh -s -- --version v0.2.0'
 ssh root@<ip> 'systemctl start flo'
 ```
 

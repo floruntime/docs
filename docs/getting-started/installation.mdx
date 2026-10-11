@@ -6,17 +6,17 @@ lede: How to install the Flo binary on macOS, Linux, and Docker.
 ## One-Line Install (macOS / Linux)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/floruntime/flo/master/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/floruntime/flo/dev/scripts/install.sh | sh
 ```
 
-This installs the `flo` binary to `/usr/local/bin`.
+This installs the newest release's `flo` binary to `/usr/local/bin` on Linux and
+`/opt/homebrew/bin` on macOS, after checking its SHA-256. Pass `--version <tag>` to pin a
+release, or `--dir <path>` to install elsewhere.
 
-## Homebrew (macOS)
+## Release Tarballs
 
-```bash
-brew tap floruntime/tap
-brew install flo
-```
+Download `flo-<arch>-<os>.tar.gz` for your platform from
+[Releases](https://github.com/floruntime/flo/releases). Each has a `.sha256` beside it.
 
 ## Docker
 
