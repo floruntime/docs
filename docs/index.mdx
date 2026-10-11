@@ -42,7 +42,7 @@ flo stream append events '{"type":"login","user":"alice"}'
 
 ```bash
 # Pull and run
-docker run -p 9000:9000 -p 9001:9001 -p 9002:9002 ghcr.io/floruntime/flo:latest
+docker run -p 9000:9000 -p 9001:9001 -p 9002:9002 ghcr.io/floruntime/flo:0.1.0-dev.11
 
 # Use the CLI from another terminal
 flo kv set greeting "hello from docker"

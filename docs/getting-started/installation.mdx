@@ -21,8 +21,11 @@ Download `flo-<arch>-<os>.tar.gz` for your platform from
 ## Docker
 
 ```bash
-docker run -p 9000:9000 -p 9001:9001 -p 9002:9002 ghcr.io/floruntime/flo:latest
+docker run -p 9000:9000 -p 9001:9001 -p 9002:9002 ghcr.io/floruntime/flo:0.1.0-dev.11
 ```
+
+Images are tagged by release without the leading `v`; see
+[the registry](https://github.com/floruntime/flo/pkgs/container/flo) for the newest.
 
 See the [Docker deployment guide](/deployment/docker/) for production usage with volumes and compose.
 
@@ -32,7 +35,7 @@ Requires [Zig 0.15.2+](https://ziglang.org/download/).
 
 ```bash
 git clone https://github.com/floruntime/flo.git
-cd flo/flo
+cd flo
 zig build -Drelease=true
 ```
 
