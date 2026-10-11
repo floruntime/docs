@@ -245,7 +245,7 @@ flo kv set counter "42" --cas-version 7
 
 If another writer updated the key between your read and write, the CAS fails with `[conflict/cas_mismatch]` (exit 3) and the original value is preserved.
 
-**CAS guarantees hold across the cluster.** You can read the version from one node and CAS-update from another: every write goes through the leader, which checks the version.
+**CAS works across the cluster.** You can read the version on one node and CAS-update through another: every write goes to the leader, which checks the version against what it has applied when the write arrives. In a cluster, two writes carrying the same version that arrive before either has committed can both pass, so CAS guards against a stale read; it is not yet a lock between concurrent writers.
 
 ## Atomicity model
 
@@ -389,7 +389,7 @@ The `jset` is a single Raft entry; concurrent writers updating different fields 
 
 ## Transactions
 
-Per-shard transactions buffer multiple writes on a single pinned partition and commit them atomically as **one Raft entry**. Open with a routing key, and give that routing key with every op inside the transaction (`-r`); a `set` or `get` with another is refused with `txn_routing_key`. The transaction id names its shard, so `commit` and `rollback` take nothing else.
+Per-shard transactions buffer multiple writes on a single pinned partition and commit them atomically as **one Raft entry**. Open with a routing key, and give that routing key with every op inside the transaction (`-r`); a `set` or `get` with another is refused with `wrong_routing_key`. The transaction id names its shard, so `commit` and `rollback` take nothing else.
 
 | Op | Wire | Purpose |
 |----|------|---------|

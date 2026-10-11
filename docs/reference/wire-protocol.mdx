@@ -142,7 +142,7 @@ The status says whether to retry; the reason says what happened; `ran` says whet
 | `15` | `cas_mismatch` | The write's `cas_version` isn't the key's version. |
 | `16` | `condition_failed` | The write's `condition` didn't hold. |
 | `17` | `no_such_transaction` | No open transaction has this id here: it committed, rolled back, was begun in another namespace, or never existed. |
-| `18` | `txn_routing_key` | The routing key (the key, when none is given) isn't the one the transaction was begun with. |
+| `18` | `wrong_routing_key` | The routing key (the key, when none is given) isn't the one the transaction was begun with. |
 | `19` | `txn_too_large` | The transaction holds as many ops or bytes as it may. |
 | `20` | `too_many_waiters` | The shard holds as many waiting reads as it may. |
 | `21` | `conflicting_fields` | Two fields given together that don't go together, such as a wait inside a transaction. |

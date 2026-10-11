@@ -316,7 +316,7 @@ flo kv incr user:42:visits      -r user:42 --txn "$TXN"
 flo kv commit "$TXN"
 ```
 
-The transaction id names its shard, so `commit` and `rollback` need nothing else. `set` and `get` inside a transaction need the routing key it was begun with (or a key equal to it), otherwise they are refused with `txn_routing_key`. `scan`, `mget`, `jget`, `jset`, `jdel`, and `history` are not supported inside transactions.
+The transaction id names its shard, so `commit` and `rollback` need nothing else. `set` and `get` inside a transaction need the routing key it was begun with (or a key equal to it), otherwise they are refused with `wrong_routing_key`. `scan`, `mget`, `jget`, `jset`, `jdel`, and `history` are not supported inside transactions.
 
 **Server caps**: 256 ops per transaction, 1 MiB total payload, 1024 open transactions per server. Transactions survive across stateless connections — they are owned by `txn_id`, not by the TCP connection.
 
