@@ -23,8 +23,8 @@ A refused command prints `Error: <message> [<status>]`, or `[<status>/<reason>]`
 | `0` | ok |
 | `1` | not found or absent |
 | `2` | usage error |
-| `3` | refused (`bad_request`, `conflict`, `unauthorized`) |
-| `4` | retryable (`overloaded`, `unavailable`) |
+| `3` | refused (`bad_request`, `conflict`, `unauthorized`, `internal_error`) |
+| `4` | retryable (`overloaded`, `rate_limited`, `unavailable`) |
 | `5` | transport failure, timeout, version mismatch, a cut-off answer, or the CLI out of memory |
 
 ## Namespaces

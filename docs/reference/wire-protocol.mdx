@@ -116,7 +116,7 @@ The status says whether to retry; the reason says what happened; `ran` says whet
 | `8` | `unknown_flag` | A header flag bit is set; none is defined. |
 | `9` | `internal` | A server bug. |
 | `10` | `committed_not_applied` | The write committed but this node didn't apply it (`ran` = yes). |
-| `11` | `answer_lost` | The request ran but its answer couldn't be built. |
+| `11` | `answer_lost` | Its answer couldn't be built or sent. A committed write's lost answer has `ran` = yes; an answer too large to frame has `ran` = unknown. |
 | `12` | `unclassified` | From an op family not yet classified; the status and message say what happened. |
 
 The reasons are part of the op table, so a client and server that agree on the table hash agree on this list.
