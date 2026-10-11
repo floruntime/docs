@@ -16,10 +16,13 @@ module "flo" {
 
   ssh_key_ids = [data.digitalocean_ssh_key.main.id]
   flo_version = "v0.1.0" # pin in production
+
+  # The firewall opens only SSH unless you name who may connect.
+  api_allowed_cidrs = ["203.0.113.0/24"]
 }
 
-output "endpoint"  { value = module.flo.listen_endpoint }
-output "dashboard" { value = module.flo.dashboard_url }
+output "endpoint"         { value = module.flo.listen_endpoint }
+output "dashboard_tunnel" { value = module.flo.dashboard_ssh_tunnel }
 ```
 
 ```bash
@@ -60,8 +63,9 @@ Flo derives all secondary ports from `listen_port`:
 
 The firewall automatically opens the correct ports based on your settings:
 
-- **Wire protocol** — always open, gated by `api_allowed_cidrs`
-- **Dashboard** — open when `enable_dashboard = true`, gated by `dashboard_allowed_cidrs`
+- **SSH** — gated by `ssh_allowed_cidrs`; the only port open by default
+- **Wire protocol** — open when `api_allowed_cidrs` names any ranges (default `[]`)
+- **Dashboard** — open when `enable_dashboard = true` and `dashboard_allowed_cidrs` names any ranges (default `[]`)
 - **Metrics** — open only when `expose_metrics = true`
 - **Peer port** — open when `cluster_enabled = true`, gated by `cluster_allowed_cidrs`
 
@@ -100,11 +104,14 @@ module "flo" {
   environment = "prod"
   region      = "lon1"
   flo_version = "v0.1.0"
+
+  api_allowed_cidrs = ["203.0.113.0/24"] # where your clients connect from
 }
 
-output "ipv4_address"  { value = module.flo.ipv4_address }
-output "listen_endpoint" { value = module.flo.listen_endpoint }
-output "dashboard_url"   { value = module.flo.dashboard_url }
+output "ipv4_address"         { value = module.flo.ipv4_address }
+output "listen_endpoint"      { value = module.flo.listen_endpoint }
+output "dashboard_ssh_tunnel" { value = module.flo.dashboard_ssh_tunnel }
+output "dashboard_url"        { value = module.flo.dashboard_url }
 ```
 
   </Tab>
@@ -122,6 +129,9 @@ ssh_key_name  = "my-key"
 terraform apply -var-file=variables.tfvars
 
 flo -e "$(terraform output -raw listen_endpoint)" kv set hello world
+
+# The dashboard listens on loopback: forward it, then open it
+$(terraform output -raw dashboard_ssh_tunnel) &
 open "$(terraform output -raw dashboard_url)"
 ```
 
@@ -168,6 +178,8 @@ module "flo" {
   cluster_first_member = each.key == "1"
   cluster_seeds        = each.key == "1" ? [] : ["${digitalocean_reserved_ip.node["1"].ip_address}:${local.peer_port}"]
   cluster_secret       = var.cluster_secret
+
+  api_allowed_cidrs = ["203.0.113.0/24"] # where your clients connect from
 }
 
 # Attach each reserved IP to its droplet
@@ -227,8 +239,8 @@ Node 1 leads a group of one until nodes 2 and 3 have joined it; a restarted memb
 |----------|------|---------|-------------|
 | `create_firewall` | `bool` | `true` | Create a DO firewall. Disable if you manage firewalls externally |
 | `ssh_allowed_cidrs` | `list(string)` | `["0.0.0.0/0", "::/0"]` | CIDRs allowed to reach SSH |
-| `api_allowed_cidrs` | `list(string)` | `["0.0.0.0/0", "::/0"]` | CIDRs allowed to reach the wire-protocol port |
-| `dashboard_allowed_cidrs` | `list(string)` | `["0.0.0.0/0", "::/0"]` | CIDRs allowed to reach the dashboard. **Restrict in production** |
+| `api_allowed_cidrs` | `list(string)` | `[]` | CIDRs allowed to reach the wire-protocol port and `extra_inbound_tcp_ports`. Empty opens nothing |
+| `dashboard_allowed_cidrs` | `list(string)` | `[]` | CIDRs allowed to reach the dashboard. Empty opens nothing; also needs `dashboard_bind_address = "0.0.0.0"` |
 | `metrics_allowed_cidrs` | `list(string)` | `["0.0.0.0/0", "::/0"]` | CIDRs for Prometheus (only when `expose_metrics = true`) |
 | `expose_metrics` | `bool` | `false` | Open the metrics port on the firewall |
 | `cluster_allowed_cidrs` | `list(string)` | `["0.0.0.0/0", "::/0"]` | CIDRs allowed to reach the peer port. **Restrict to the cluster's network** |
@@ -253,7 +265,7 @@ Node 1 leads a group of one until nodes 2 and 3 have joined it; a restarted memb
 | `log_level` | `string` | `"info"` | Log level |
 | `enable_metrics` | `bool` | `true` | Enable Prometheus metrics endpoint |
 | `enable_dashboard` | `bool` | `true` | Enable dashboard HTTP API + web UI |
-| `dashboard_bind_address` | `string` | `"0.0.0.0"` | Bind address for the dashboard |
+| `dashboard_bind_address` | `string` | `"127.0.0.1"` | Bind address for the dashboard. On loopback, reach it through `dashboard_ssh_tunnel` |
 
 ### Cluster
 
@@ -298,7 +310,8 @@ module "flo" {
 | `ipv6_address` | Public IPv6 address (empty if disabled) |
 | `urn` | Droplet URN |
 | `listen_endpoint` | `host:port` for the CLI and SDKs |
-| `dashboard_url` | Dashboard URL (empty when disabled) |
+| `dashboard_url` | Dashboard URL: the tunnel's local end while bound to loopback (empty when disabled) |
+| `dashboard_ssh_tunnel` | `ssh -N -L` command that forwards the loopback dashboard (empty when disabled or not on loopback) |
 | `metrics_endpoint` | Prometheus metrics URL (empty when disabled) |
 | `peer_endpoint` | `host:peer_port` — what joining nodes list in `cluster_seeds` |
 | `raft_port` | Peer port (`listen_port + 500`) |
@@ -370,16 +383,20 @@ This triggers a DO resize (which power-cycles the droplet). No data loss — Flo
 
 ### Dashboard security
 
-The dashboard exposes administrative APIs. **Never leave `dashboard_allowed_cidrs` open to `0.0.0.0/0` in production.** Use one of:
+The dashboard exposes administrative APIs and has no authentication yet. By
+default it binds to `127.0.0.1` and the firewall opens nothing for it. Reach it
+through an SSH tunnel:
+
+```bash
+ssh -N -L 9002:127.0.0.1:9002 root@<droplet>   # or: $(terraform output -raw dashboard_ssh_tunnel)
+open http://127.0.0.1:9002
+```
+
+To serve it on the network instead, open it deliberately and keep the range narrow:
 
 ```hcl
-# Option 1: Restrict to your office/home IP
+dashboard_bind_address  = "0.0.0.0"
 dashboard_allowed_cidrs = ["203.0.113.5/32"]
-
-# Option 2: Bind to private interface, access via SSH tunnel
-dashboard_bind_address = "10.0.0.2"  # private VPC IP
-
-# Then: ssh -L 9002:localhost:9002 root@<ip>
 ```
 
 ### Metrics scraping
