@@ -326,6 +326,20 @@ systemctl restart flo
 systemctl status flo
 ```
 
+### Crash loop
+
+If the server fails 10 times within an hour, systemd stops restarting it and leaves `flo` failed (`systemctl status flo`). Between attempts it backs off from 5 s to 2 minutes. Read why it failed:
+
+```bash
+journalctl -u flo -n 200
+```
+
+A panic during log replay happens again on every start until its cause is fixed, so restarting without a fix just loops again. Once fixed:
+
+```bash
+systemctl reset-failed flo && systemctl start flo
+```
+
 ### Data directory
 
 Data lives in `/var/lib/flo` (owned by `flo:flo`, mode `0750`). The systemd unit has `ProtectSystem=strict` with only `ReadWritePaths=<data_dir>` — Flo cannot write elsewhere on the filesystem. When `volume_size > 0`, that path is the mount point for the attached block-storage volume; cloud-init formats blank volumes and adds an `/etc/fstab` entry with `nofail,discard` so the mount survives reboots.
