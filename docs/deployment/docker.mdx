@@ -191,9 +191,10 @@ healthcheck:
 
 Use **`/ready`** where traffic or start order depends on the node serving: a load
 balancer's target check, a Kubernetes readiness probe, or a Compose service that
-others wait on with `depends_on: { flo: { condition: service_healthy } }`. Give
-that check a long `start_period` (120 s, say) so replay can finish. See
-[REST API](/reference/rest-api#get-ready) for its answers.
+others wait on with `depends_on: { flo: { condition: service_healthy } }`, as
+the [Compose example](https://github.com/floruntime/flo/blob/dev/examples/docker-compose/docker-compose.yml)
+does: `curl -sf http://localhost:9002/ready` with `start_period: 120s`, so a long
+replay can finish. See [REST API](/reference/rest-api#get-ready) for its answers.
 
 A probe from outside the container must reach the port it checks, and the
 dashboard and metrics ports bind `127.0.0.1` by default:

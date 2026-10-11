@@ -357,8 +357,8 @@ curl localhost:9001/metrics
 ```
 
 On the same port, `GET /health` answers `ok` while the process is up,
-`GET /ready` answers `200 ready` only when this member can serve (a diverged,
-removed, joining or catching-up member is a `503` naming its state), and
+`GET /ready` answers `200 ready` only when this member can serve; any state that
+can't serve is a `503` naming it ([the states, in order](/reference/rest-api#get-ready)), and
 `GET /status` gives each shard's state, role, applied and commit index as JSON.
 A load balancer should route on `/ready`. See [REST API](/reference/rest-api#get-ready).
 
