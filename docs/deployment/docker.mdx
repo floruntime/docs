@@ -175,8 +175,11 @@ at `/etc/flo/flo.toml`) or from flags on the command line:
 
 ## Health Check
 
-For a **liveness** probe inside the container, use the dashboard's `/health`
-(the image's own `HEALTHCHECK` does the same):
+The image's own `HEALTHCHECK` is **liveness**: the dashboard's or the metrics
+port's `/health`, else the client port open. A container health check should
+stay that way. Don't point one at `/ready`: Swarm and auto-healers restart an
+unhealthy container, and a node replaying its log, or one that can't be ready
+until an operator acts, would be restarted mid-replay or forever.
 
 ```yaml
 healthcheck:
@@ -186,10 +189,15 @@ healthcheck:
   retries: 3
 ```
 
-For an orchestrator **readiness** probe that comes from outside the container,
-use `GET /health` on the dashboard port (see
-[REST API](/reference/rest-api#cluster-metrics)) — and set the dashboard's bind
-address, because it defaults to localhost only:
+Use **`/ready`** where traffic or start order depends on the node serving: a load
+balancer's target check, a Kubernetes readiness probe, or a Compose service that
+others wait on with `depends_on: { flo: { condition: service_healthy } }`, as
+the [Compose example](https://github.com/floruntime/flo/blob/dev/examples/docker-compose/docker-compose.yml)
+does: `curl -sf http://localhost:9002/ready` with `start_period: 120s`, so a long
+replay can finish. See [REST API](/reference/rest-api#get-ready) for its answers.
+
+A probe from outside the container must reach the port it checks, and the
+dashboard and metrics ports bind `127.0.0.1` by default:
 
 ```toml
 [dashboard]
@@ -198,11 +206,10 @@ bind = "0.0.0.0"
 ```
 
 :::note
-`[dashboard] bind` defaults to `127.0.0.1`. A probe originating outside the
-container cannot reach a listener bound to loopback, so leaving the default in
-an orchestrated deployment presents as a service that never becomes ready —
-which reads like a broken health check rather than a bind address. Bind to
-`0.0.0.0` only where the dashboard port is not publicly routable.
+A probe that can't reach a loopback listener looks like a service that never
+becomes ready, which reads like a broken health check rather than a bind
+address. Bind to `0.0.0.0` only where the port is not publicly routable: the
+dashboard authenticates no one yet.
 :::
 
 ## Volumes and Data Persistence

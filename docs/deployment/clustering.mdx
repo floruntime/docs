@@ -356,14 +356,15 @@ The node serves the Prometheus exposition format on the metrics port
 curl localhost:9001/metrics
 ```
 
-`GET /health` on the same port returns a small JSON liveness document with the
-shard count and uptime. It does not yet carry the node's role, so a load
-balancer cannot use it to route around a diverged member
-([issue #96](https://github.com/floruntime/flo/issues/96)).
+On the same port, `GET /health` answers `ok` while the process is up,
+`GET /ready` answers `200 ready` only when this member can serve; any state that
+can't serve is a `503` naming it ([the states, in order](/reference/rest-api#get-ready)), and
+`GET /status` gives each shard's state, role, applied and commit index as JSON.
+A load balancer should route on `/ready`. See [REST API](/reference/rest-api#get-ready).
 
 :::note
 **The metrics port binds to `127.0.0.1` by default.** `/metrics` and `/health`
-are unauthenticated — unlike the dashboard, which is API-key gated — so the
+are unauthenticated, as the dashboard is, so the
 endpoint is loopback-only unless you opt in. To scrape from another host set:
 
 ```toml
