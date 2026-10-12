@@ -250,6 +250,7 @@ flo kv history <key> [options]
 | Flag | Description |
 |------|-------------|
 | `-l, --limit <n>` | Most versions to show: 1 to 65, default 10 |
+| `-r, --routing-key <key>` | Explicit shard routing key: give the one the key was written with |
 
 Each row is the version, the time it was written (`at_ms`, Unix milliseconds) and the value.
 
@@ -289,7 +290,7 @@ A missing key exits 1.
 
 ### `flo kv exists`
 
-Existence check, with no value transferred. Prints `1` and exits `0` when present; prints `0` and exits `1` when absent.
+Existence check, with no value transferred. Prints `1 version=<n>` and exits `0` when present; prints `0` and exits `1` when absent. Inside a transaction a key with only a buffered write prints `1`: it has no version until commit.
 
 ```bash
 flo kv exists <key> [-r <routing-key>] [-t <txn-id>]

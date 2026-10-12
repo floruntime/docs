@@ -188,7 +188,7 @@ fmt.Printf("committed %d ops at index %d\n", result.OpCount, result.CommitIndex)
 ### Scan
 
 ```go
-// Names only; read values with Get or MGet. Pages of 100 by default, at most 1024.
+// Names only; read values with Get or MGet. Pages of up to 1024 (the default).
 result, _ := client.KV.Scan("user:", nil)
 for {
     for _, key := range result.Keys {

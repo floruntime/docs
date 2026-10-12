@@ -44,7 +44,7 @@ The body is the op's fields, in order. A field that may be left out is a presenc
 | `kv_put` | `value: bytes` (at most 253817), `ttl_ms?: u64`, `condition: u8` (`0` always, the default; `1` if_absent; `2` if_present), `cas_version?: u64`, `routing_key?: bytes`, `txn?: u64` | `version?: u64`, absent inside a transaction |
 | `kv_delete` | `cas_version?: u64`, `routing_key?: bytes`, `txn?: u64` | `existed?: bool`, absent inside a transaction |
 | `kv_scan` | `limit: u32` (1 to 1024), `cursor: bytes` (empty on the first page) | `names: [string]`, `cursor?: bytes`, absent on the last page |
-| `kv_history` | `limit: u32` (1 to 65, default 10) | `versions: [{version: u64, at_ms: i64, value: bytes}]`, newest first |
+| `kv_history` | `limit: u32` (1 to 65, default 10), `routing_key?: bytes` | `versions: [{version: u64, at_ms: i64, value: bytes}]`, newest first |
 | `kv_mget` | `keys: [bytes]` (1 to 256) | `entries: [{found: bool, version: u64, value: bytes}]`, `next?: u16` |
 | `kv_incr` | `delta: i64` (default 1), `routing_key?: bytes`, `txn?: u64` | `version?: u64`, `value?: i64`, both absent inside a transaction |
 | `kv_expire` | `ttl_ms: u64` (`0` clears the TTL), `cas_version?: u64`, `routing_key?: bytes`, `txn?: u64` | nothing |

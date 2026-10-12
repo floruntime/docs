@@ -199,6 +199,7 @@ Aliases: `hist`. Returns previous values, newest first, each with its version an
 | Flag | Description |
 |------|-------------|
 | `--limit <n>` / `-l` | Max entries, 1 to 65 (default: 10) |
+| `-r <routing-key>` | Explicit shard routing key: give the one the key was written with |
 | `-n <namespace>` | Target namespace |
 
 Flo maintains a bounded version chain per key (default depth: 64). Oldest versions are evicted when the chain is full. Deletes create tombstone entries — prior versions remain queryable through history even after deletion.
@@ -361,7 +362,7 @@ Each is a single Raft entry. Use it to extend session leases, refresh distribute
 `kv exists` (opcode `0x115`) answers whether the key exists, and its version, without transferring the value, so it is much cheaper than `get` for large values.
 
 ```bash
-flo kv exists user:123    # prints 1 and exits 0 if present; prints 0 and exits 1 if absent
+flo kv exists user:123    # prints 1 version=<n> and exits 0 if present; prints 0 and exits 1 if absent
 ```
 
 ## JSON paths
