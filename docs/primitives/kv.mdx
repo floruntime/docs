@@ -162,7 +162,7 @@ Limited to **256 keys per call**. The total response is capped at 1 MB; entries 
 flo kv delete mykey
 ```
 
-Aliases: `del`. Deleting a non-existent key returns a not-found error.
+Aliases: `del`. Deleting a key that doesn't exist succeeds: it prints `OK existed=false`, and `OK existed=true` when there was one to delete.
 
 | Flag | Description |
 |------|-------------|
@@ -182,10 +182,10 @@ Aliases: `ls`, `scan`.
 | Flag | Description |
 |------|-------------|
 | `--prefix <p>` / `-p` | Filter by key prefix |
-| `--limit <n>` / `-l` | Max keys to return (default: 100, max: 1,000) |
+| `--limit <n>` / `-l` | Max keys to return (default: 100) |
 | `-n <namespace>` | Target namespace |
 
-List walks **all shards** — keys are returned regardless of which shard they hash to. The prefix filter is applied on each shard locally before results are merged.
+List returns names only; read values with `get` or `mget`. It walks **all shards** — keys are returned regardless of which shard they hash to — a page of up to 1024 names at a time, resuming from the previous page's cursor. The prefix filter is applied on each shard locally before results are merged.
 
 ### Version History
 
@@ -194,11 +194,11 @@ flo kv history mykey
 flo kv history mykey --limit 5
 ```
 
-Aliases: `hist`. Returns previous values with version numbers and timestamps. History for a non-existent key returns an error.
+Aliases: `hist`. Returns previous values, newest first, each with its version and the time it was written in Unix milliseconds. History for a key with none returns not found (exit 1).
 
 | Flag | Description |
 |------|-------------|
-| `--limit <n>` / `-l` | Max entries (default: 10) |
+| `--limit <n>` / `-l` | Max entries, 1 to 65 (default: 10) |
 | `-n <namespace>` | Target namespace |
 
 Flo maintains a bounded version chain per key (default depth: 64). Oldest versions are evicted when the chain is full. Deletes create tombstone entries — prior versions remain queryable through history even after deletion.
@@ -213,7 +213,7 @@ flo kv set session:abc '{"user":"alice"}' --ttl-ms 1h
 
 The key expires one hour after the write. Expired keys return `(nil)` on get, as if they were never written. Setting `--ttl-ms 0` explicitly means "no expiration."
 
-TTLs are milliseconds, with millisecond resolution. `--ttl-ms` takes a bare number of milliseconds, or a number and a unit — `ms`, `s`, `m`, `h` or `d`, as in `500ms` or `1d`. (`kv touch` takes `--ttl`, which needs a unit.)
+TTLs are milliseconds, with millisecond resolution. `--ttl-ms` takes a bare number of milliseconds, or a number and a unit — `ms`, `s`, `m`, `h` or `d`, as in `500ms` or `1d`. `kv expire` takes the same.
 
 Overwriting a key **resets its TTL**. If you set a key with `--ttl-ms 60s` and then overwrite it without a TTL, the new value has no expiration:
 
@@ -277,9 +277,9 @@ flo kv set account:42 '{"balance":150}' --cas-version 11
 
 If the CAS fails, re-read and retry. For a counter, prefer `kv incr` — it is unconditional and never conflicts.
 
-#### CAS-guarded delete, touch, and persist
+#### CAS-guarded delete and expire
 
-The same `if_match` guard is also accepted by `delete`, `touch`, and `persist`. This closes the classic distributed-lock race: the holder can release the lock (or extend its lease) only if it still owns the version it acquired.
+The same version guard is also accepted by `delete` and `expire`. This closes the classic distributed-lock race: the holder can release the lock (or extend its lease) only if it still owns the version it acquired.
 
 ```go
 // Acquire: a put-if-absent with a 30 s TTL returns version
@@ -290,7 +290,7 @@ v, _ := client.KV.Put("lock:job-42", []byte(ownerID),
 // ... do work ...
 
 // Release: only the owner deletes — no risk of unlocking after expiry
-_ = client.KV.Delete("lock:job-42", &flo.DeleteOptions{IfMatch: &v.Version})
+_, _ = client.KV.Delete("lock:job-42", &flo.DeleteOptions{CASVersion: &v.Version})
 ```
 
 ```python
@@ -298,12 +298,12 @@ v = await client.kv.put("lock:job-42", owner_id.encode(),
     PutOptions(condition=Condition.IF_ABSENT, ttl_ms=30_000))
 # ... work ...
 # Renew the lease atomically
-await client.kv.touch("lock:job-42", 30_000, KVTouchOptions(if_match=v.version))
+await client.kv.expire("lock:job-42", 30_000, KVExpireOptions(cas_version=v.version))
 # Release: only the owner deletes
-await client.kv.delete("lock:job-42", DeleteOptions(if_match=v.version))
+await client.kv.delete("lock:job-42", DeleteOptions(cas_version=v.version))
 ```
 
-A version mismatch (or a missing key when `if_match` is set) returns the same CAS-failed error as `set` with `--cas-version`, carrying the current version so callers can decide whether to retry or give up.
+A version mismatch is refused with `[conflict/cas_mismatch]`, as `set` with `--cas-version` is; re-read to decide whether to retry or give up.
 
 ### Multi-key atomicity
 
@@ -329,16 +329,16 @@ flo kv incr visits:home -d 10    # +10
 flo kv incr visits:home -d -1    # decrement
 ```
 
-A counter and a string value cannot share a key. `incr` against a non-counter key returns `Conflict`.
+A counter and a string value cannot share a key. `incr` against a key whose value isn't an 8-byte counter is refused with `[bad_request/wrong_type]` (exit 3). Inside a transaction `incr` prints `OK`: the new value isn't known until commit.
 
 ### Recipe: per-minute rate limiter
 
 ```python
 minute = int(time.time() // 60)
 key = f"rl:{user_id}:{minute}"
-count = await client.kv.incr(key)
+count = (await client.kv.incr(key)).value
 if count == 1:
-    await client.kv.touch(key, 120_000)  # auto-expire old buckets
+    await client.kv.expire(key, 120_000)  # auto-expire old buckets
 if count > LIMIT:
     raise RateLimited()
 ```
@@ -349,18 +349,19 @@ TTLs are set at write time via `--ttl-ms` / `PutOptions.TTLMs`, but you can also
 
 | Op | Effect |
 |----|--------|
-| [`kv touch <key> --ttl <duration>`](#touch--persist) | Update the TTL on an existing key without rewriting the value |
-| [`kv touch <key> --ttl 0`](#touch--persist) | Clear the TTL (equivalent to `kv persist`) |
-| [`kv persist <key>`](#touch--persist) | Make a key permanent |
+| `kv expire <key> --ttl-ms <duration>` | Set the TTL on an existing key, from now, without rewriting the value |
+| `kv expire <key> --ttl-ms 0` | Clear the TTL: make the key permanent |
 
-These are single-shard, no-replication-skip operations. Use them to extend session leases, refresh distributed locks, or promote a temporary value to permanent without losing it.
+`expire` takes `--cas-version`, `-r` and `--txn` like `delete`; a missing key is not found (exit 1).
+
+Each is a single Raft entry. Use it to extend session leases, refresh distributed locks, or promote a temporary value to permanent without losing it.
 
 ## Existence check
 
-`kv exists` (opcode `0x115`) returns a single byte (`0` or `1`) without transferring the value, and is significantly cheaper than `get` for large values.
+`kv exists` (opcode `0x115`) answers whether the key exists, and its version, without transferring the value, so it is much cheaper than `get` for large values.
 
 ```bash
-flo kv exists user:123    # exit 0 if present, 1 if absent
+flo kv exists user:123    # prints 1 and exits 0 if present; prints 0 and exits 1 if absent
 ```
 
 ## JSON paths
@@ -369,37 +370,37 @@ For keys whose value is a JSON document, three operations let you read or mutate
 
 | Op | Wire | Purpose |
 |----|------|---------|
-| `kv jget <key> [path]` | `0x10C` | Extract `path` from the JSON document. Path defaults to `$` (the whole document). |
-| `kv jset <key> <path> <json>` | `0x10D` | Atomically set the value at `path`. `path = "$"` replaces the document (and creates the key if missing). |
-| `kv jdel <key> [path]` | `0x10E` | Remove the value at `path`. |
+| `kv jget <key> [--path <path>]` | `0x10C` | Extract `path` from the JSON document. Path defaults to `$` (the whole document). |
+| `kv jset <key> <document> [--path <path>]` | `0x10D` | Atomically set the value at `path`. `$` replaces the document (and creates the key if missing); any other path needs an existing document. |
+| `kv jdel <key> [--path <path>]` | `0x10E` | Remove the value at `path`. `$` deletes the key. |
 
 Paths use a tiny JSONPath subset: `$`, `.field`, `.field.nested`, `[index]`. The operations are atomic per Raft entry — a sub-field update is a single committed write, not a read-modify-write loop.
 
-`jget` returns the document's current `version` alongside the bytes (same `GetResult` shape as `kv get`); `jset` and `jdel` return a `PutResult` with the new version. Use that version to drive CAS on subsequent writes.
+The answer to `jget` carries the document's current `version` alongside the JSON; `jset` and `jdel` answer the new version (`jdel` at `$` answers none, since the key is gone). Use that version to drive CAS on subsequent writes. A path with nothing at it is not found (exit 1); a key whose value isn't JSON is refused with `wrong_type`. The JSON ops don't run inside transactions.
 
 ### Recipe: status enrichment
 
 ```bash
 flo kv set order:42 '{"id":42,"items":3,"status":"new"}'
-flo kv jset order:42 '$.status' '"shipped"'
-flo kv jget order:42 '$.status'      # → "shipped"
+flo kv jset order:42 '"shipped"' --path '$.status'
+flo kv jget order:42 --path '$.status'      # → "shipped"
 ```
 
 The `jset` is a single Raft entry; concurrent writers updating different fields on the same document still each succeed atomically (last writer wins per field).
 
 ## Transactions
 
-Per-shard transactions buffer multiple writes on a single pinned partition and commit them atomically as **one Raft entry**. Open with a routing key, and give that routing key with every op inside the transaction (`-r`); a `set` or `get` with another is refused with `wrong_routing_key`. The transaction id names its shard, so `commit` and `rollback` take nothing else.
+Per-shard transactions buffer multiple writes on a single pinned partition and commit them atomically as **one Raft entry**. Open with a routing key, and give that routing key with every op inside the transaction (`-r`); an op with another is refused with `wrong_routing_key`. The transaction id names its shard, so `commit` and `rollback` take nothing else.
 
 | Op | Wire | Purpose |
 |----|------|---------|
 | `kv begin -r <routing-key>` | `0x110` | Open a new transaction. Returns a `txn_id` and the partition's `pinned_hash`. |
-| `kv commit <txn-id>` | `0x111` | Apply all buffered ops atomically. Returns the `commit_index` and `op_count`. |
+| `kv commit <txn-id>` | `0x111` | Apply all buffered ops atomically. Returns the op count and the `commit_index`. |
 | `kv rollback <txn-id>` | `0x112` | Discard buffered ops. Idempotent. |
 
-Inside a transaction, normal `kv` ops (`put`, `get`, `delete`, `incr`, `touch`, `persist`, `exists`) accept a `--txn <id>` flag and are buffered until commit. **Reads inside the transaction see the buffered writes.** The following are **not supported** inside a transaction and return `kv_txn_unsupported_op`: `scan`, `mget`, `jget`, `jset`, `jdel`, `history`.
+Inside a transaction, `set`, `get`, `delete`, `incr`, `expire` and `exists` accept a `--txn <id>` flag; writes are buffered until commit. **Reads inside the transaction see the buffered writes.** `list`, `mget`, `history` and the JSON ops take no transaction.
 
-**Server caps**: 256 ops per transaction, 1 MiB total payload, 1024 open transactions per server.
+**Server caps**: 256 ops per transaction, 1 MiB total payload, 1024 open transactions per shard (past that, `begin` is refused with `too_many_transactions`).
 
 ```bash
 # Open (prints txn_id=<id> pinned_hash=<hash>), write, commit
@@ -483,11 +484,11 @@ client.KV.Put("lock:resource", []byte("owner-1"), &flo.PutOptions{
 })
 
 // Atomic counter
-n, _ := client.KV.Incr("visits:home", nil)
+n, _ := client.KV.Incr("visits:home", nil) // n.Value, n.Version
 
 // TTL lifecycle
-client.KV.Touch("lock:resource", 60_000, nil) // extend lease to 60 s
-client.KV.Persist("lock:resource", nil)        // make permanent
+client.KV.Expire("lock:resource", 60_000, nil) // extend lease to 60 s
+client.KV.Expire("lock:resource", 0, nil)      // clear the TTL
 ok, _ := client.KV.Exists("lock:resource", nil)
 
 // JSON path operations
@@ -499,14 +500,15 @@ r, _ = client.KV.Get("job:result", &flo.GetOptions{WaitMs: 5000})
 
 // Prefix scan with pagination
 result, _ := client.KV.Scan("user:", &flo.ScanOptions{Limit: ptr(uint32(100))})
-for _, entry := range result.Entries {
-    fmt.Printf("%s = %s\n", entry.Key, entry.Value)
+for _, key := range result.Keys {
+    fmt.Println(key)
 }
+// result.Cursor is nil on the last page; pass it in ScanOptions.Cursor for the next
 
 // Version history
 history, _ := client.KV.History("counter", &flo.HistoryOptions{Limit: ptr(uint32(5))})
 for _, v := range history {
-    fmt.Printf("v%d: %s (at %d)\n", v.Version, v.Value, v.Timestamp)
+    fmt.Printf("v%d: %s (at %d ms)\n", v.Version, v.Value, v.AtMs)
 }
 
 // Namespace-scoped operations
@@ -518,7 +520,7 @@ r, _ = client.KV.Get("config", &flo.GetOptions{Namespace: "staging"})
 // Transaction — multiple writes on one shard, atomic commit
 txn, _ := client.KV.Begin("user:42", nil)
 _, _  = txn.Put("user:42:name", []byte("Jane"), nil)
-_, _  = txn.Incr("user:42:visits", 1)
+_     = txn.Incr("user:42:visits", 1)
 result, err := txn.Commit()
 if err != nil {
     _ = txn.Rollback() // idempotent
@@ -554,11 +556,11 @@ async with FloClient("localhost:9000") as client:
         PutOptions(condition=Condition.IF_ABSENT, ttl_ms=30_000))
 
     # Atomic counter
-    n = await client.kv.incr("visits:home")
+    n = (await client.kv.incr("visits:home")).value
 
     # TTL lifecycle
-    await client.kv.touch("lock:resource", 60_000)  # extend lease to 60 s
-    await client.kv.persist("lock:resource")
+    await client.kv.expire("lock:resource", 60_000)  # extend lease to 60 s
+    await client.kv.expire("lock:resource", 0)       # clear the TTL
     ok = await client.kv.exists("lock:resource")
 
     # JSON paths
@@ -570,13 +572,14 @@ async with FloClient("localhost:9000") as client:
 
     # Prefix scan
     result = await client.kv.scan("user:", ScanOptions(limit=100))
-    for entry in result.entries:
-        print(f"{entry.key}: {entry.value}")
+    for name in result.names:
+        print(name)
+    # result.cursor is None on the last page; pass it in ScanOptions(cursor=...) for the next
 
     # Version history
     history = await client.kv.history("counter", HistoryOptions(limit=5))
     for v in history:
-        print(f"v{v.version}: {v.value}")
+        print(f"v{v.version}: {v.value} (at {v.at_ms} ms)")
 
     # Namespace-scoped
     await client.kv.put("config", b"staging-db",
@@ -627,11 +630,11 @@ await client.kv.put("lock:resource", encode("owner-1"), {
 });
 
 // Atomic counter
-const n = await client.kv.incr("visits:home");
+const { value: n } = await client.kv.incr("visits:home");
 
 // TTL lifecycle
-await client.kv.touch("lock:resource", 60_000n); // extend lease to 60 s
-await client.kv.persist("lock:resource");
+await client.kv.expire("lock:resource", 60_000n); // extend lease to 60 s
+await client.kv.expire("lock:resource", 0n);      // clear the TTL
 const exists = await client.kv.exists("lock:resource");
 
 // JSON paths
@@ -643,9 +646,10 @@ const pending = await client.kv.get("job:result", { waitMs: 5000 });
 
 // Prefix scan
 const result = await client.kv.scan("user:", { limit: 100 });
-for (const entry of result.entries) {
-  console.log(`${entry.key} = ${entry.value}`);
+for (const key of result.keys) {
+  console.log(key);
 }
+// result.cursor is null on the last page; pass it as { cursor } for the next
 
 // Version history
 const history = await client.kv.history("counter", { limit: 5 });
@@ -707,11 +711,11 @@ _ = try kv.put("lock:resource", "owner-1", .{
 });
 
 // Atomic counter
-const n = try kv.incr("visits:home", .{});
+const n = (try kv.incr("visits:home", .{})).value;
 
 // TTL lifecycle
-try kv.touch("lock:resource", 60_000, .{}); // extend lease to 60 s
-try kv.persist("lock:resource", .{});
+try kv.expire("lock:resource", 60_000, .{}); // extend lease to 60 s
+try kv.expire("lock:resource", 0, .{});      // clear the TTL
 const exists = try kv.exists("lock:resource", .{});
 
 // JSON paths
@@ -731,10 +735,14 @@ if (try kv.get("job:result", .{ .wait_ms = 5000 })) |r_const| {
 // Prefix scan
 var result = try kv.scan("user:", .{ .limit = 100 });
 defer result.deinit();
+for (result.keys) |name| std.debug.print("{s}\n", .{name});
 
 // Version history
-var history = try kv.history("counter", .{ .limit = 5 });
-defer history.deinit();
+const versions = try kv.history("counter", .{ .limit = 5 });
+defer {
+    for (versions) |*v| v.deinit(allocator);
+    allocator.free(versions);
+}
 
 // Namespace-scoped
 try kv.put("config", "staging-db", .{ .namespace = "staging" });
@@ -743,7 +751,7 @@ try kv.put("config", "staging-db", .{ .namespace = "staging" });
 var txn = try kv.begin("user:42", .{});
 defer txn.deinit();
 _ = try txn.put("user:42:name", "Jane", .{});
-_ = try txn.incr("user:42:visits", 1);
+try txn.incr("user:42:visits", 1);
 const result = try txn.commit();
 std.debug.print("committed {d} ops at index {d}\n", .{ result.op_count, result.commit_index });
 ```
@@ -801,7 +809,7 @@ The KV store is implemented as a **KV Projection** — a hash table with MVCC ve
 | Max value size | ~256 KB |
 | Max namespace length | 63 bytes |
 | Version chain depth | 64 versions per key (oldest evicted) |
-| Default scan limit | 100 (max: 1,000) |
+| Default list limit | 100 (pages of up to 1,024) |
 | Reserved key prefixes | `_action:`, `_worker:`, `_sys:`, `_internal:`, `_flo:` |
 
 **Write path**: `kv_put` → Raft propose → majority commit → UAL append → KV projection update → response to client.

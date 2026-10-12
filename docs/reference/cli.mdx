@@ -198,7 +198,7 @@ flo kv get <key> [options]
 
 ### `flo kv mget`
 
-Get many keys in a single round trip. Keys may live on different shards — the server gathers results in parallel.
+Get many keys in one request. Keys may live on different shards; the server gathers them.
 
 ```bash
 flo kv mget <key1> <key2> ... [options]
@@ -206,14 +206,13 @@ flo kv mget <key1> <key2> ... [options]
 
 | Flag | Description |
 |------|-------------|
-| `--namespace <ns>` | Override default namespace |
 | `--output <fmt>` | `text` (default), `json`, or `table` |
 
-Maximum 256 keys per call. Missing keys are returned as `nil` entries (not errors).
+At most 256 keys per call. A missing key prints `(nil)`; it isn't an error. When the answers don't fit one response, the CLI asks again from where the server stopped.
 
 ### `flo kv delete`
 
-Delete a key.
+Delete a key. Deleting a key that doesn't exist succeeds.
 
 ```bash
 flo kv delete <key> [options]
@@ -221,26 +220,28 @@ flo kv delete <key> [options]
 
 | Flag | Description |
 |------|-------------|
-| `--cas <version>` | Only delete if the current version matches (race-free lock release) |
+| `--cas-version <version>` | Only delete if this is the key's version (race-free lock release) |
 | `-r, --routing-key <key>` | Explicit shard routing key |
 | `-t, --txn <id>` | Buffer inside a transaction |
 
+It prints `OK existed=true` or `OK existed=false`, or `OK` inside a transaction, where whether the key existed isn't known until commit.
+
 ### `flo kv list`
 
-List keys by prefix.
+List key names, optionally by prefix. Values aren't returned; use `get` or `mget`.
 
 ```bash
-flo kv list [prefix] [options]
+flo kv list [options]
 ```
 
 | Flag | Description |
 |------|-------------|
-| `--limit <n>` | Maximum number of keys |
-| `--keys-only` | Only return keys, not values |
+| `-p, --prefix <prefix>` | Only keys starting with this |
+| `-l, --limit <n>` | Most names to list (default 100); the CLI pages through the server 1024 at a time |
 
 ### `flo kv history`
 
-Show version history for a key.
+Show a key's versions, newest first.
 
 ```bash
 flo kv history <key> [options]
@@ -248,66 +249,79 @@ flo kv history <key> [options]
 
 | Flag | Description |
 |------|-------------|
-| `--limit <n>` | Maximum versions to return |
+| `-l, --limit <n>` | Most versions to show: 1 to 65, default 10 |
+
+Each row is the version, the time it was written (`at_ms`, Unix milliseconds) and the value.
 
 ### `flo kv incr`
 
-Atomically increment an `i64` counter.
+Add to an `i64` counter, starting from 0. It prints the new value.
 
 ```bash
-flo kv incr <key> [--by <delta>]
+flo kv incr <key> [--delta <n>]
 ```
 
 | Flag | Description |
 |------|-------------|
-| `-b, --by <n>` | Signed delta (default `+1`) |
+| `-d, --delta <n>` | What to add, may be negative (default `1`) |
+| `-r, --routing-key <key>` | Explicit shard routing key |
+| `-t, --txn <id>` | Buffer inside a transaction; prints `OK`, since the value isn't known until commit |
 
-### `flo kv touch` / `flo kv persist`
+A key whose value isn't an 8-byte counter is refused with `wrong_type` (exit 3).
 
-Adjust the TTL on an existing key without rewriting the value.
+### `flo kv expire`
+
+Set an existing key's TTL without rewriting its value, or clear it.
 
 ```bash
-flo kv touch <key> --ttl <duration>   # update TTL, e.g. 30s (0 clears it)
-flo kv persist <key>                   # clear TTL
+flo kv expire <key> --ttl-ms 30s   # expires 30s from now
+flo kv expire <key> --ttl-ms 0     # clears the TTL
 ```
 
 | Flag | Description |
 |------|-------------|
-| `--cas <version>` | Only update if the current version matches (race-free lease renewal) |
+| `--ttl-ms <ms>` | Required. Milliseconds, or a number and a unit (`500ms`, `30s`, `5m`, `1h`, `1d`); `0` clears the TTL |
+| `--cas-version <version>` | Only if this is the key's version (race-free lease renewal) |
 | `-r, --routing-key <key>` | Explicit shard routing key |
 | `-t, --txn <id>` | Buffer inside a transaction |
 
+A missing key exits 1.
+
 ### `flo kv exists`
 
-Existence check (no value transferred). Exits `0` when present, `1` when absent.
+Existence check, with no value transferred. Prints `1` and exits `0` when present; prints `0` and exits `1` when absent.
 
 ```bash
-flo kv exists <key>
+flo kv exists <key> [-r <routing-key>] [-t <txn-id>]
 ```
 
 ### `flo kv jget` / `jset` / `jdel`
 
-JSON sub-field operations using a small JSONPath subset (`$`, `.field`, `[index]`).
+Read and write inside a JSON document, using a small JSONPath subset (`$`, `.field`, `[index]`). `--path` defaults to `$`, the whole document.
 
 ```bash
-flo kv jset <key> <path> <json>
-flo kv jget <key> [path]
-flo kv jdel <key> [path]
+flo kv jset <key> <document> [--path <path>]
+flo kv jget <key> [--path <path>]
+flo kv jdel <key> [--path <path>]
 ```
 
-`jget` prints both the value and the document's current `version`; `jset` / `jdel` print the new version after the write.
+- `jget` prints the JSON at the path.
+- `jset` prints `OK version=<n>`. At `$` it writes the whole document, creating the key; at any other path the key must already hold a JSON object or array.
+- `jdel` prints `OK version=<n>`, or `OK (key deleted)` at `$`.
+
+A path with nothing at it exits 1; a key whose value isn't JSON is refused with `wrong_type` (exit 3). All three take `-r, --routing-key`; none run inside a transaction.
 
 ### `flo kv begin` / `commit` / `rollback`
 
-Per-shard transactions buffer multiple writes on a single pinned partition and commit them atomically as one Raft entry.
+Per-shard transactions buffer writes on one pinned partition and commit them atomically as one Raft entry.
 
 ```bash
-flo kv begin -r <routing-key>          # → prints txn_id and pinned_hash
-flo kv commit <txn-id>                 # → prints commit_index and op_count
-flo kv rollback <txn-id>               # discard buffered ops
+flo kv begin -r <routing-key>          # → txn_id=<id> pinned_hash=<hash>
+flo kv commit <txn-id>                 # → OK ops=<n> commit_index=<index>
+flo kv rollback <txn-id>               # drops the buffered writes
 ```
 
-Add `--txn <id>` to any of `set`, `get`, `delete`, `incr`, `touch`, `persist`, `exists` to run that operation inside the transaction:
+Add `--txn <id>` to `set`, `get`, `delete`, `incr`, `expire` or `exists` to run it inside the transaction:
 
 ```bash
 TXN=$(flo kv begin -r user:42 | sed 's/txn_id=\([0-9]*\).*/\1/')
@@ -316,9 +330,9 @@ flo kv incr user:42:visits      -r user:42 --txn "$TXN"
 flo kv commit "$TXN"
 ```
 
-The transaction id names its shard, so `commit` and `rollback` need nothing else. `set` and `get` inside a transaction need the routing key it was begun with (or a key equal to it), otherwise they are refused with `wrong_routing_key`. `scan`, `mget`, `jget`, `jset`, `jdel`, and `history` are not supported inside transactions.
+The transaction id names its shard, so `commit` and `rollback` need nothing else. Ops inside a transaction must give the routing key it was begun with, otherwise they are refused with `wrong_routing_key`. `list`, `mget`, `history` and the JSON ops don't run inside transactions.
 
-**Server caps**: 256 ops per transaction, 1 MiB total payload, 1024 open transactions per server. Transactions survive across stateless connections — they are owned by `txn_id`, not by the TCP connection.
+**Server caps**: 256 ops per transaction, 1 MiB total payload, 1024 open transactions per shard (past that, `begin` is refused with `too_many_transactions`). Transactions outlive connections: they are owned by `txn_id`, not by the TCP connection.
 
 ## Streams
 

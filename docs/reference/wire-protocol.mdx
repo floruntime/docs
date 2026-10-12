@@ -30,26 +30,43 @@ An empty namespace is the `default` namespace for most operations. Options are a
 
 ### Table ops
 
-`kv_get` (`0x101`) and `kv_put` (`0x100`) are declared in the op table. Their payload has no value length and no options; the body is the rest of the payload:
+Every KV op is declared in the op table. Their payload has no value length and no options; the body is the rest of the payload:
 
 ```
 [namespace_len:u16][namespace][key_len:u16][key][body]
 ```
 
-The body is the op's fields, in order. A field that may be left out is a presence byte (`0` or `1`) and then its value; a field with a default is sent present. Integers are fixed-width; bytes have a length prefix as wide as their bound needs: a routing key a `u16`, a value a `u32`. A body that doesn't decode is refused `bad_request` with `malformed`, `field_too_long` or `out_of_range`, naming the field and the bound it broke, with `ran` = no.
+The body is the op's fields, in order. A field that may be left out is a presence byte (`0` or `1`) and then its value; a field with a default is sent present. Integers are fixed-width; bytes have a length prefix as wide as their bound needs (`u8` up to 255, `u16` up to 65535, else `u32`): a cursor a `u8`, a routing key or a path a `u16`, a value or a document a `u32`. A list has a count prefix by the same rule, then its elements. An answer is the op's answer fields the same way, and must decode whole. A body that doesn't decode is refused `bad_request` with `malformed`, `field_too_long` or `out_of_range`, naming the field and the bound it broke, with `ran` = no.
 
 | Op | Request fields | Answer |
 |----|----------------|--------|
 | `kv_get` | `wait_ms: u64` (default 0, at most 300000), `wait_for: u8` (`0` exists, the default; `1` change), `routing_key?: bytes`, `txn?: u64` | `version: u64`, `value: bytes` |
 | `kv_put` | `value: bytes` (at most 253817), `ttl_ms?: u64`, `condition: u8` (`0` always, the default; `1` if_absent; `2` if_present), `cas_version?: u64`, `routing_key?: bytes`, `txn?: u64` | `version?: u64`, absent inside a transaction |
+| `kv_delete` | `cas_version?: u64`, `routing_key?: bytes`, `txn?: u64` | `existed?: bool`, absent inside a transaction |
+| `kv_scan` | `limit: u32` (1 to 1024), `cursor: bytes` (empty on the first page) | `names: [string]`, `cursor?: bytes`, absent on the last page |
+| `kv_history` | `limit: u32` (1 to 65, default 10) | `versions: [{version: u64, at_ms: i64, value: bytes}]`, newest first |
+| `kv_mget` | `keys: [bytes]` (1 to 256) | `entries: [{found: bool, version: u64, value: bytes}]`, `next?: u16` |
+| `kv_incr` | `delta: i64` (default 1), `routing_key?: bytes`, `txn?: u64` | `version?: u64`, `value?: i64`, both absent inside a transaction |
+| `kv_expire` | `ttl_ms: u64` (`0` clears the TTL), `cas_version?: u64`, `routing_key?: bytes`, `txn?: u64` | nothing |
+| `kv_exists` | `routing_key?: bytes`, `txn?: u64` | `exists: bool`, `version: u64` |
+| `kv_json_get` | `path: string` (default `$`), `routing_key?: bytes` | `version: u64`, `document: bytes` |
+| `kv_json_set` | `path: string` (default `$`), `document: bytes` (JSON text), `routing_key?: bytes` | `version: u64` |
+| `kv_json_del` | `path: string` (default `$`), `routing_key?: bytes` | `version?: u64`, absent when the path was `$`, which deleted the key |
+| `kv_begin_txn` | nothing | `txn: u64`, `pinned: u64` |
+| `kv_commit_txn` | `txn: u64` | `commit_index: u64`, `ops: u16` |
+| `kv_rollback_txn` | `txn: u64` | nothing |
+
+The key is the envelope's key, except: `kv_scan`'s is the prefix to list (empty for every key); `kv_begin_txn`'s is the routing key the transaction pins, and may not be empty; `kv_mget`, `kv_commit_txn` and `kv_rollback_txn` take an empty key.
+
+`kv_scan` pages across every shard: `cursor` is the previous page's, unchanged. `kv_mget` answers as many keys as fit one response; `next`, when present, is the index of the first key not answered, so the client asks again from there. Deleting a missing key isn't an error: it answers `existed` false. `kv_incr` on a value that isn't an 8-byte counter, and the JSON ops on a value that isn't JSON, are refused `bad_request` with `wrong_type`.
 
 `wait_for` exists answers at once if the key exists, else when it's written; change answers the key's next version. Either answers not found when the wait ends with the key absent, and change answers the value still there.
 
-A transaction id is `[shard:u16][counter:u48]`: a request carrying one runs on the shard it names, and on that shard's leader, reads included. An id no shard holds is refused `not_found` with `no_such_transaction`. `kv_commit_txn` and `kv_rollback_txn` route by the id in their `txn_id` option; they need no routing key.
+A transaction id is `[shard:u16][counter:u48]`: a request carrying one runs on the shard it names, and on that shard's leader, reads included. An id no shard holds is refused `not_found` with `no_such_transaction`. `kv_commit_txn` and `kv_rollback_txn` route by the id in their body; they need no routing key. Inside a transaction an op must give the routing key it was begun with. `kv_scan`, `kv_mget`, `kv_history` and the JSON ops take no transaction.
 
 ### List operations
 
-`kv_scan`, `stream_list`, `queue_list`, `ts_list`, `namespace_list`, `action_list`, `worker_list`, `processing_list` and `workflow_list_definitions` page across every shard. Their request value is:
+`stream_list`, `queue_list`, `ts_list`, `namespace_list`, `action_list`, `worker_list`, `processing_list` and `workflow_list_definitions` page across every shard. Their request value is:
 
 ```
 [limit:u32][cursor]
@@ -148,6 +165,8 @@ The status says whether to retry; the reason says what happened; `ran` says whet
 | `21` | `conflicting_fields` | Two fields given together that don't go together, such as a wait inside a transaction. |
 | `22` | `writes_stopped` | The shard stopped taking writes: one left memory before it reached disk. It takes them again once the node restarts. |
 | `23` | `too_many_proposals` | Too many writes wait for commit. |
+| `24` | `wrong_type` | The key's value isn't what the op works on: a counter for `kv_incr`, JSON for the JSON ops. |
+| `25` | `too_many_transactions` | The shard holds as many open transactions as it may. |
 
 The reasons are part of the op table, so a client and server that agree on the table hash agree on this list.
 
@@ -215,8 +234,7 @@ A `cluster_promote` value is the node id, u32 little-endian (4 bytes). A `cluste
 
 | OpCode | Value |
 |--------|-------|
-| `kv_touch` | `0x113` |
-| `kv_persist` | `0x114` |
+| `kv_expire` | `0x113` |
 | `kv_exists` | `0x115` |
 
 ### Streams (0x130 – 0x14F)
@@ -342,11 +360,7 @@ Tags the server reads. An option it doesn't recognise is ignored for now; that c
 
 | Tag | Name | Value |
 |-----|------|-------|
-| `0x01` | `ttl_ms` | u64: Time-to-live in milliseconds (0 = no expiration) |
-| `0x02` | `cas_version` | u64: Expected version for compare-and-swap |
-| `0x05` | `limit` | u32: Maximum results for `kv_history` (newest first) and `ts_read` (earliest first); absent or 0 is all. List operations take theirs in the value |
-| `0x08` | `routing_key` | string: Explicit routing key for shard co-location (overrides key-based routing) |
-| `0x09` | `txn_id` | u64: Per-shard transaction ID (returned by kv_begin_txn) |
+| `0x05` | `limit` | u32: Maximum results for `ts_read` (earliest first); absent or 0 is all. List operations take theirs in the value |
 | `0x10` | `priority` | u8: Message priority (0-255; lower is taken first) |
 | `0x15` | `count` | u32: Number of messages to dequeue |
 | `0x17` | `block_ms` | u32: Long-poll wait (at most 5 min; 0 = don't wait); a longer one is refused |
