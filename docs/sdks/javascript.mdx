@@ -56,8 +56,13 @@ if (r) console.log(r.value, "@", r.version); // r.version is bigint
 const res = await client.kv.put("key", encode("value"), {
   ttlMs: 3_600_000n,
   casVersion: r?.version,  // optimistic locking against the latest read
-  ifNotExists: true,
 });
+
+// Only if the key doesn't exist
+await client.kv.put("key", encode("value"), { condition: Condition.IfAbsent });
+
+// Wait up to 5 s for the key to appear (waitFor: WaitFor.Change waits for its next version)
+const waited = await client.kv.get("key", { waitMs: 5000 });
 console.log("committed at v", res.version);
 
 // Delete

@@ -71,9 +71,8 @@ if result != nil {
     fmt.Printf("%s @ v%d\n", result.Value, result.Version)
 }
 
-// Blocking get (wait for key to appear)
-blockMS := uint32(5000)
-result, _ = client.KV.Get("key", &flo.GetOptions{BlockMS: &blockMS})
+// Wait up to 5 s for the key to appear (WaitFor: flo.WaitForChange waits for its next version)
+result, _ = client.KV.Get("key", &flo.GetOptions{WaitMs: 5000})
 ```
 
 ### Put
@@ -99,7 +98,7 @@ zero := uint64(0)
 res, err = client.KV.Put("key", []byte("first"), &flo.PutOptions{CASVersion: &zero})
 
 // Conditional
-res, err = client.KV.Put("key", []byte("value"), &flo.PutOptions{IfNotExists: true})
+res, err = client.KV.Put("key", []byte("value"), &flo.PutOptions{Condition: flo.ConditionIfAbsent})
 ```
 
 ### Delete

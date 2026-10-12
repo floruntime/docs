@@ -28,6 +28,25 @@ Clients talk to Flo over TCP on the client port (default **9000**) with a binary
 
 An empty namespace is the `default` namespace for most operations. Options are a sequence of `[tag:u8][len:u8][value]` entries (see [Options](#options)).
 
+### Table ops
+
+`kv_get` (`0x101`) and `kv_put` (`0x100`) are declared in the op table. Their payload has no value length and no options; the body is the rest of the payload:
+
+```
+[namespace_len:u16][namespace][key_len:u16][key][body]
+```
+
+The body is the op's fields, in order. A field that may be left out is a presence byte (`0` or `1`) and then its value; a field with a default is sent present. Integers are fixed-width; bytes have a length prefix as wide as their bound needs: a routing key a `u16`, a value a `u32`. A body that doesn't decode is refused `bad_request` with `malformed`, `field_too_long` or `out_of_range`, naming the field and the bound it broke, with `ran` = no.
+
+| Op | Request fields | Answer |
+|----|----------------|--------|
+| `kv_get` | `wait_ms: u64` (default 0, at most 300000), `wait_for: u8` (`0` exists, the default; `1` change), `routing_key?: bytes`, `txn?: u64` | `version: u64`, `value: bytes` |
+| `kv_put` | `value: bytes` (at most 253817), `ttl_ms?: u64`, `condition: u8` (`0` always, the default; `1` if_absent; `2` if_present), `cas_version?: u64`, `routing_key?: bytes`, `txn?: u64` | `version?: u64`, absent inside a transaction |
+
+`wait_for` exists answers at once if the key exists, else when it's written; change answers the key's next version. Either answers not found when the wait ends with the key absent, and change answers the value still there.
+
+A transaction id is `[shard:u16][counter:u48]`: a request carrying one runs on the shard it names, and on that shard's leader, reads included. An id no shard holds is refused `not_found` with `no_such_transaction`. `kv_commit_txn` and `kv_rollback_txn` route by the id in their `txn_id` option; they need no routing key.
+
 ### List operations
 
 `kv_scan`, `stream_list`, `queue_list`, `ts_list`, `namespace_list`, `action_list`, `worker_list`, `processing_list` and `workflow_list_definitions` page across every shard. Their request value is:
@@ -118,6 +137,17 @@ The status says whether to retry; the reason says what happened; `ran` says whet
 | `10` | `committed_not_applied` | The write committed but this node didn't apply it (`ran` = yes). |
 | `11` | `answer_lost` | Its answer couldn't be built or sent. A committed write's lost answer has `ran` = yes; an answer too large to frame has `ran` = unknown. |
 | `12` | `unclassified` | From an op family not yet classified; the status and message say what happened. |
+| `13` | `not_found` | What the request names doesn't exist. |
+| `14` | `reserved_key` | The key is in a prefix the server keeps for itself. |
+| `15` | `cas_mismatch` | The write's `cas_version` isn't the key's version. |
+| `16` | `condition_failed` | The write's `condition` didn't hold. |
+| `17` | `no_such_transaction` | No open transaction has this id here: it committed, rolled back, was begun in another namespace, or never existed. |
+| `18` | `wrong_routing_key` | The routing key (the key, when none is given) isn't the one the transaction was begun with. |
+| `19` | `txn_too_large` | The transaction holds as many ops or bytes as it may. |
+| `20` | `too_many_waiters` | The shard holds as many waiting reads as it may. |
+| `21` | `conflicting_fields` | Two fields given together that don't go together, such as a wait inside a transaction. |
+| `22` | `writes_stopped` | The shard stopped taking writes: one left memory before it reached disk. It takes them again once the node restarts. |
+| `23` | `too_many_proposals` | Too many writes wait for commit. |
 
 The reasons are part of the op table, so a client and server that agree on the table hash agree on this list.
 
@@ -314,15 +344,12 @@ Tags the server reads. An option it doesn't recognise is ignored for now; that c
 |-----|------|-------|
 | `0x01` | `ttl_ms` | u64: Time-to-live in milliseconds (0 = no expiration) |
 | `0x02` | `cas_version` | u64: Expected version for compare-and-swap |
-| `0x03` | `if_not_exists` | void: Only set if key doesn't exist (NX) |
-| `0x04` | `if_exists` | void: Only set if key exists (XX) |
 | `0x05` | `limit` | u32: Maximum results for `kv_history` (newest first) and `ts_read` (earliest first); absent or 0 is all. List operations take theirs in the value |
 | `0x08` | `routing_key` | string: Explicit routing key for shard co-location (overrides key-based routing) |
 | `0x09` | `txn_id` | u64: Per-shard transaction ID (returned by kv_begin_txn) |
 | `0x10` | `priority` | u8: Message priority (0-255; lower is taken first) |
 | `0x15` | `count` | u32: Number of messages to dequeue |
-| `0x17` | `block_ms` | u32: Block timeout - wait until exists (at most 5 min; 0 = don't wait) |
-| `0x18` | `wait_ms` | u32: Watch timeout - wait for NEXT version change (at most 5 min; 0 = don't wait) |
+| `0x17` | `block_ms` | u32: Long-poll wait (at most 5 min; 0 = don't wait); a longer one is refused |
 | `0x21` | `stream_start` | [16]u8: Read records after this StreamID (exclusive) |
 | `0x22` | `stream_end` | [16]u8: End StreamID for reads (inclusive) |
 | `0x23` | `stream_tail` | void: Flag indicating tail read (start from end of stream) |

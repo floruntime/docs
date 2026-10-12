@@ -173,9 +173,13 @@ flo kv set <key> <value> [options]
 
 | Flag | Description |
 |------|-------------|
-| `--ttl <duration>` | Time-to-live; a unit is required: `500ms`, `30s`, `5m`, `1h`, `1d`. A bare number other than `0` is refused. Omit for no expiry |
-| `--if-not-exists` | Only set if key doesn't exist |
-| `--cas <version>` | Compare-and-swap version |
+| `--ttl-ms <ms>` | Time-to-live: milliseconds, or a number and a unit (`500ms`, `30s`, `5m`, `1h`, `1d`). `0` or omitted for no expiry |
+| `--condition <when>` | `always` (the default), `if_absent` (only if the key doesn't exist) or `if_present` (only if it does) |
+| `--cas-version <version>` | Only set if this is the key's version; `0` means the key doesn't exist |
+| `-r, --routing-key <key>` | Explicit shard routing key |
+| `-t, --txn <id>` | Buffer the write in a transaction |
+
+It prints `OK version=<n>`, or `OK` inside a transaction, where the write has no version until it commits. A failed condition or version exits 3 with `[conflict/condition_failed]` or `[conflict/cas_mismatch]`.
 
 ### `flo kv get`
 
@@ -187,8 +191,10 @@ flo kv get <key> [options]
 
 | Flag | Description |
 |------|-------------|
-| `--wait <ms>` | Wait until the key exists (at most 300000 ms, 5 minutes; 0 does not wait; a longer wait is refused) |
-| `--block <ms>` | Wait for the key's next change (at most 300000 ms, 5 minutes; 0 does not wait; a longer wait is refused). On timeout, prints the unchanged value, or not found if the key is gone |
+| `-w, --wait-ms <ms>` | How long to wait: milliseconds, or a number and a unit (`500ms`, `30s`, `5m`); at most `5m`; `0` or omitted doesn't wait |
+| `--wait-for <what>` | `exists` (the default: answers at once if the key exists, else when it's written) or `change` (the key's next version). On timeout, a change wait prints the unchanged value; either prints not found if the key is absent |
+| `-r, --routing-key <key>` | Explicit shard routing key |
+| `-t, --txn <id>` | Read inside a transaction, seeing its buffered writes; it can't wait |
 
 ### `flo kv mget`
 
@@ -296,7 +302,7 @@ flo kv jdel <key> [path]
 Per-shard transactions buffer multiple writes on a single pinned partition and commit them atomically as one Raft entry.
 
 ```bash
-flo kv begin <routing-key>             # → prints txn_id and pinned_hash
+flo kv begin -r <routing-key>          # → prints txn_id and pinned_hash
 flo kv commit <txn-id>                 # → prints commit_index and op_count
 flo kv rollback <txn-id>               # discard buffered ops
 ```
@@ -304,13 +310,13 @@ flo kv rollback <txn-id>               # discard buffered ops
 Add `--txn <id>` to any of `set`, `get`, `delete`, `incr`, `touch`, `persist`, `exists` to run that operation inside the transaction:
 
 ```bash
-TXN=$(flo kv begin user:42 -o json | jq -r .txn_id)
-flo kv set  user:42:name "Jane" --txn "$TXN"
-flo kv incr user:42:visits      --txn "$TXN"
+TXN=$(flo kv begin -r user:42 | sed 's/txn_id=\([0-9]*\).*/\1/')
+flo kv set  user:42:name "Jane" -r user:42 --txn "$TXN"
+flo kv incr user:42:visits      -r user:42 --txn "$TXN"
 flo kv commit "$TXN"
 ```
 
-Every key inside a transaction must hash to the same partition as the routing key, otherwise the server returns `kv_txn_cross_shard`. `scan`, `mget`, `jget`, `jset`, `jdel`, and `history` are not supported inside transactions.
+The transaction id names its shard, so `commit` and `rollback` need nothing else. `set` and `get` inside a transaction need the routing key it was begun with (or a key equal to it), otherwise they are refused with `wrong_routing_key`. `scan`, `mget`, `jget`, `jset`, `jdel`, and `history` are not supported inside transactions.
 
 **Server caps**: 256 ops per transaction, 1 MiB total payload, 1024 open transactions per server. Transactions survive across stateless connections — they are owned by `txn_id`, not by the TCP connection.
 
