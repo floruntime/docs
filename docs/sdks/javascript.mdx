@@ -66,7 +66,7 @@ const waited = await client.kv.get("key", { waitMs: 5000 });
 console.log("committed at v", res.version);
 
 // Delete
-await client.kv.delete("key");
+const existed = await client.kv.delete("key"); // a missing key isn't an error
 
 // Multi-key get (single round trip, up to 256 keys, may span shards)
 const entries = await client.kv.mget(["user:1", "user:2", "user:3"]);
@@ -79,19 +79,20 @@ for (const e of entries) {
   }
 }
 
-// Scan
-const result = await client.kv.scan("user:", { limit: 100 });
+// Scan key names (not values); cursor is null on the last page
+let page = await client.kv.scan("user:", { limit: 100 });
+while (page.cursor) page = await client.kv.scan("user:", { cursor: page.cursor });
 
 // History
-const versions = await client.kv.history("key");
+const versions = await client.kv.history("key"); // { version, atMs, value }[]
 
 // Atomic counter
-const n = await client.kv.incr("visits:home");        // +1
+const { value: n } = await client.kv.incr("visits:home"); // +1
 const m = await client.kv.incr("visits:home", { delta: 10n });
 
 // TTL lifecycle and existence
-await client.kv.touch("lock:resource", 60_000n); // extend TTL to 60 s
-await client.kv.persist("lock:resource");        // clear TTL
+await client.kv.expire("lock:resource", 60_000n); // extend TTL to 60 s
+await client.kv.expire("lock:resource", 0n);      // clear TTL
 const exists = await client.kv.exists("lock:resource");
 
 // JSON paths

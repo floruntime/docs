@@ -104,12 +104,12 @@ res, err = client.KV.Put("key", []byte("value"), &flo.PutOptions{Condition: flo.
 ### Delete
 
 ```go
-err := client.KV.Delete("key", nil)
+existed, err := client.KV.Delete("key", nil) // a missing key isn't an error
 ```
 
 ### Multi-key get
 
-Fetch up to 256 keys in a single round trip — keys may live on different shards. Each entry has a `Found` flag.
+Fetch up to 256 keys in one call — keys may live on different shards; when the answers don't fit one response, `MGet` asks again from where the server stopped. Each entry has a `Found` flag.
 
 ```go
 entries, err := client.KV.MGet([]string{"user:1", "user:2", "user:3"}, nil)
@@ -126,15 +126,15 @@ for _, e := range entries {
 ### Atomic counters
 
 ```go
-n, err := client.KV.Incr("visits:home", nil)            // +1
+n, err := client.KV.Incr("visits:home", nil)            // +1; n.Value, n.Version
 n, err = client.KV.Incr("visits:home", &flo.KVIncrOptions{Delta: flo.Int64Ptr(10)})
 ```
 
 ### TTL lifecycle and existence
 
 ```go
-client.KV.Touch("lock:resource", 60_000, nil) // extend TTL to 60 s
-client.KV.Persist("lock:resource", nil)        // clear TTL
+client.KV.Expire("lock:resource", 60_000, nil) // extend TTL to 60 s
+client.KV.Expire("lock:resource", 0, nil)      // clear TTL
 ok, _ := client.KV.Exists("lock:resource", nil)
 ```
 
@@ -170,7 +170,7 @@ if _, err := txn.Put("user:42:name", []byte("Jane"), nil); err != nil {
     _ = txn.Rollback()
     return err
 }
-if _, err := txn.Incr("user:42:visits", 1); err != nil {
+if err := txn.Incr("user:42:visits", 1); err != nil {
     _ = txn.Rollback()
     return err
 }
@@ -188,15 +188,15 @@ fmt.Printf("committed %d ops at index %d\n", result.OpCount, result.CommitIndex)
 ### Scan
 
 ```go
+// Names only; read values with Get or MGet. Pages of up to 1024 (the default).
 result, _ := client.KV.Scan("user:", nil)
-for _, entry := range result.Entries {
-    fmt.Printf("%s = %s\n", entry.Key, entry.Value)
-}
-
-// Paginated
-limit := uint32(100)
-result, _ := client.KV.Scan("user:", &flo.ScanOptions{Limit: &limit})
-for result.HasMore {
+for {
+    for _, key := range result.Keys {
+        fmt.Println(key)
+    }
+    if result.Cursor == nil {
+        break // last page
+    }
     result, _ = client.KV.Scan("user:", &flo.ScanOptions{Cursor: result.Cursor})
 }
 ```
@@ -206,7 +206,7 @@ for result.HasMore {
 ```go
 entries, _ := client.KV.History("key", nil)
 for _, e := range entries {
-    fmt.Printf("v%d at %d: %s\n", e.Version, e.Timestamp, e.Value)
+    fmt.Printf("v%d at %d ms: %s\n", e.Version, e.AtMs, e.Value)
 }
 ```
 

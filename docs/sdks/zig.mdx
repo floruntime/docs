@@ -91,7 +91,7 @@ if (try kv.get("key", .{})) |r_const| {
 }
 
 // Delete
-try kv.delete("key", .{});
+const existed = try kv.delete("key", .{}); // a missing key isn't an error
 
 // Multi-key get (single round trip, up to 256 keys, may span shards)
 var mget_res = try kv.mget(&.{ "user:1", "user:2", "user:3" }, .{});
@@ -104,20 +104,25 @@ for (mget_res.entries) |e| {
     }
 }
 
-// Scan
-var result = try kv.scan("prefix:", .{ .limit = 100 });
-defer result.deinit();
+// Scan key names (not values); cursor is null on the last page
+var page = try kv.scan("prefix:", .{ .limit = 100 });
+defer page.deinit();
+for (page.keys) |name| std.debug.print("{s}\n", .{name});
 
 // History
-const versions = try kv.history("key", .{ .limit = 10 });
+const versions = try kv.history("key", .{ .limit = 10 }); // version, at_ms, value
+defer {
+    for (versions) |*v| v.deinit(allocator);
+    allocator.free(versions);
+}
 
 // Atomic counter
-const n = try kv.incr("visits:home", .{});
+const n = (try kv.incr("visits:home", .{})).value;
 const m = try kv.incr("visits:home", .{ .delta = 10 });
 
 // TTL lifecycle and existence
-try kv.touch("lock:resource", 60_000, .{}); // extend TTL to 60 s
-try kv.persist("lock:resource", .{});
+try kv.expire("lock:resource", 60_000, .{}); // extend TTL to 60 s
+try kv.expire("lock:resource", 0, .{});      // clear TTL
 const exists = try kv.exists("lock:resource", .{});
 
 // JSON paths
@@ -135,7 +140,7 @@ _ = try kv.jsonDel("order:42", "$.status", .{});
 var txn = try kv.begin("user:42", .{});
 defer txn.deinit();
 _ = try txn.put("user:42:name", "Jane", .{});
-_ = try txn.incr("user:42:visits", 1);
+try txn.incr("user:42:visits", 1);
 const result = try txn.commit();
 std.debug.print("committed {d} ops at index {d}\n", .{ result.op_count, result.commit_index });
 // On error, call `txn.rollback()` instead — idempotent.
