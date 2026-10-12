@@ -60,7 +60,7 @@ a private interface, or firewall it.
 
 ```toml
 [storage]
-durability = "async_flush"       # sync | async_flush | ephemeral
+durability = "async_flush"       # sync | async_flush
 hot_buffer_capacity = 67108864   # Per-partition ring buffer size in bytes (64 MiB, the default; at least 2 MiB)
 # hot_flush_seconds = 0          # Max seconds before hot → warm flush (default 0 = disabled; 300 suits production)
 # max_hot_entries = 0            # Max entries in hot tier before eviction (0 = capacity only)
@@ -72,7 +72,6 @@ Durability modes:
 |------|-----------|-------------------------------|
 | `sync` | Segment written and `fsync`ed before the write is acknowledged | Nothing |
 | `async_flush` | Segments written and `fsync`ed by a background task, **at most once per second** — the default | Up to ~1 second of acknowledged writes |
-| `ephemeral` | Never written to disk | Everything |
 
 **What `async_flush` risks, concretely.** An acknowledged write lives only in
 memory until the next segment flush, which runs at most once per second. If the
