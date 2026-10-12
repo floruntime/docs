@@ -96,7 +96,10 @@ Fetch many keys in a single round trip. Keys may live on different shards — th
 ```bash
 flo kv mget user:1 user:2 user:3
 flo kv mget user:1 user:2 --output json
+flo kv mget user:42:name user:42:visits -r user:42   # keys written with -r user:42
 ```
+
+Keys written with a routing key live on its shard: read them with the same routing key, which applies to every key in the call.
 
 | Flag | Description |
 |------|-------------|
