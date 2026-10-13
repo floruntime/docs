@@ -23,11 +23,11 @@ The macOS binaries need macOS 15 or later.
 ## Docker
 
 ```bash
-docker run -p 9000:9000 -p 9001:9001 -p 9002:9002 ghcr.io/floruntime/flo:0.1.0-dev.11
+docker run -p 9000:9000 -p 9001:9001 -p 9002:9002 ghcr.io/floruntime/flo:latest
 ```
 
-Images are tagged by release without the leading `v`; see
-[the registry](https://github.com/floruntime/flo/pkgs/container/flo) for the newest.
+`latest` is the newest release. To pin one, use its tag without the leading `v`,
+e.g. `ghcr.io/floruntime/flo:0.1.0-dev.12`; [the registry](https://github.com/floruntime/flo/pkgs/container/flo) lists them.
 
 See the [Docker deployment guide](/deployment/docker/) for production usage with volumes and compose.
 
