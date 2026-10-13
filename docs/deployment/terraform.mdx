@@ -15,7 +15,6 @@ module "flo" {
   version = "~> 0.0.1"
 
   ssh_key_ids = [data.digitalocean_ssh_key.main.id]
-  flo_version = "v0.1.0" # pin in production
 
   # The firewall opens only SSH unless you name who may connect.
   api_allowed_cidrs = ["203.0.113.0/24"]
@@ -32,6 +31,8 @@ terraform apply
 # Point the CLI at your new node
 flo -e "$(terraform output -raw listen_endpoint)" kv set hello world
 ```
+
+The examples leave `flo_version` unset, so a droplet installs the newest release. In production, pin it to a tag from [Releases](https://github.com/floruntime/flo/releases), e.g. `flo_version = "v0.1.0-dev.12"`, so every droplet runs the same build.
 
 ## What It Provisions
 
@@ -103,7 +104,6 @@ module "flo" {
 
   environment = "prod"
   region      = "lon1"
-  flo_version = "v0.1.0"
 
   api_allowed_cidrs = ["203.0.113.0/24"] # where your clients connect from
 }
@@ -169,7 +169,6 @@ module "flo" {
 
   environment = "prod"
   region      = "lon1"
-  flo_version = "v0.1.0"
   listen_port = local.listen_port
   shards      = 1
 
@@ -293,7 +292,6 @@ module "flo" {
   version = "~> 0.0.2"
 
   ssh_key_ids = [data.digitalocean_ssh_key.main.id]
-  flo_version = "v0.1.0"
 
   volume_size = 50  # GB — survives droplet replacement
 }
@@ -419,14 +417,14 @@ Nodes built from different op tables can't link, and a server refuses clients bu
 ssh root@<ip> 'systemctl stop flo'
 
 # Then, on every droplet, install the new version and start it
-ssh root@<ip> 'curl -fsSL https://raw.githubusercontent.com/floruntime/flo/dev/scripts/install.sh | sh -s -- --version v0.2.0'
+ssh root@<ip> 'curl -fsSL https://raw.githubusercontent.com/floruntime/flo/dev/scripts/install.sh | sh -s -- --version <tag>'
 ssh root@<ip> 'systemctl start flo'
 ```
 
 For a clean rebuild, bump `flo_version` and replace the droplet:
 
 ```bash
-terraform apply -var="flo_version=v0.2.0" -replace=module.flo.digitalocean_droplet.this
+terraform apply -var="flo_version=<tag>" -replace=module.flo.digitalocean_droplet.this
 ```
 
 ## Publishing to the Terraform Registry
