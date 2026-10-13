@@ -91,7 +91,7 @@ flo kv get config:feature-flags --wait-ms 5m --wait-for change
 
 ### Multi-key get
 
-Fetch many keys in a single round trip. Keys may live on different shards — the server gathers results in parallel and returns one entry per requested key (with a `found` flag distinguishing missing keys from empty values).
+Fetch many keys in one request. Keys may live on different shards — the server looks each up on the shard that owns it and returns one entry per requested key, in order (with a `found` flag distinguishing missing keys from empty values).
 
 ```bash
 flo kv mget user:1 user:2 user:3
@@ -103,16 +103,19 @@ Keys written with a routing key live on its shard: read them with the same routi
 
 | Flag | Description |
 |------|-------------|
+| `-r, --routing-key <key>` | The routing key every key was written with: all are read from its shard |
 | `--output <fmt>` | `text` (default), `json`, `table` |
 | `-n <namespace>` | Target namespace |
 
-Limited to **256 keys per call**. The total response is capped at 1 MB; entries beyond that limit are omitted (re-issue the call with the remaining keys).
+Limited to **256 keys per call**. One answer holds about 256 KiB; when the values don't fit, the server answers what does and says where it stopped, and the CLI and SDKs ask again for the rest on their own.
 
 <Tabs syncKey="lang">
   <Tab title="Go">
     ```go
     entries, err := client.KV.MGet([]string{"user:1", "user:2", "user:3"}, nil)
     if err != nil { return err }
+    // Keys written with a routing key: read them with it.
+    routed, err := client.KV.MGet([]string{"user:42:name", "user:42:visits"}, &flo.KVMGetOptions{RoutingKey: "user:42"})
     for _, e := range entries {
         if e.Found {
             fmt.Printf("%s = %s (v%d)\n", e.Key, e.Value, e.Version)
@@ -125,6 +128,8 @@ Limited to **256 keys per call**. The total response is capped at 1 MB; entries 
   <Tab title="Python">
     ```python
     entries = await client.kv.mget(["user:1", "user:2", "user:3"])
+    # Keys written with a routing key: read them with it.
+    routed = await client.kv.mget(["user:42:name", "user:42:visits"], KVMGetOptions(routing_key="user:42"))
     for e in entries:
         if e.found:
             print(f"{e.key} = {e.value!r} (v{e.version})")
@@ -135,6 +140,8 @@ Limited to **256 keys per call**. The total response is capped at 1 MB; entries 
   <Tab title="JavaScript">
     ```ts
     const entries = await client.kv.mget(["user:1", "user:2", "user:3"]);
+    // Keys written with a routing key: read them with it.
+    const routed = await client.kv.mget(["user:42:name", "user:42:visits"], { routingKey: "user:42" });
     for (const e of entries) {
       if (e.found) {
         console.log(`${e.key} = ${new TextDecoder().decode(e.value)} (v${e.version})`);
@@ -148,6 +155,9 @@ Limited to **256 keys per call**. The total response is capped at 1 MB; entries 
     ```zig
     var result = try kv.mget(&.{ "user:1", "user:2", "user:3" }, .{});
     defer result.deinit();
+    // Keys written with a routing key: read them with it.
+    var routed = try kv.mget(&.{ "user:42:name", "user:42:visits" }, .{ .routing_key = "user:42" });
+    defer routed.deinit();
     for (result.entries) |e| {
         if (e.found) {
             std.debug.print("{s} = {s} (v{d})\n", .{ e.key, e.value, e.version });
