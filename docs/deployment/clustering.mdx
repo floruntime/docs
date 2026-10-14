@@ -401,9 +401,7 @@ several shards; what clients can see from it, and its metrics, are under
 :::note
 There are no `flo_raft_*` families yet (role, term, commit index, per-member
 lag); `flo cluster status` on each node is the signal until they land
-([issue #96](https://github.com/floruntime/flo/issues/96)). A counter such as
-`flo_tiered_log_cold_hits_total` is always `0`: the read path consults the hot
-ring and the warm store only.
+([issue #96](https://github.com/floruntime/flo/issues/96)).
 :::
 
 ## Configuration

@@ -188,7 +188,6 @@ These are refused at start, with the reason. Remove them from `flo.toml`.
 |---|---|
 | `[auth]` | Client authentication isn't implemented yet. |
 | `[websocket]` | The WebSocket endpoint was removed. |
-| `[cold_storage]` | Not wired up: nothing reads it, so no data moves to cold storage. |
 | `[background_tasks]` | Namespace delete is refused, so there's no deletion task to tune. |
 | `[kv] expose_internal_keys` | Never read; internal keys stay hidden. |
 | `[storage] max_local_segments`, `enable_wal_truncation` | Not wired up: nothing reads them. |

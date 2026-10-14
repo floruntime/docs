@@ -515,11 +515,10 @@ Stream data flows through a tiered storage hierarchy automatically:
 |------|----------|---------|
 | **Hot** | In-memory ring buffer | Recent writes, lowest latency |
 | **Warm** | On-disk segments | Overflowed from hot tier, still fast |
-| **Cold** | External backend (file, S3, Azure) | Archival storage |
 
 When you read with `--json`, each record includes a `"tier"` field indicating where it was served from. Reads are transparent — the server merges results across tiers automatically.
 
-The thresholds for spilling between tiers are configurable per server (hot buffer capacity, max hot entries). Cold storage can be enabled with file or cloud backends.
+The thresholds for spilling between tiers are configurable per server (hot buffer capacity, max hot entries).
 
 ## Durability
 
