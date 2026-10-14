@@ -28,13 +28,12 @@ Every UAL entry has a 40-byte header followed by a variable-length payload:
 
 The CRC covers the header and payload together. Payload layout varies by entry type — each projection knows how to parse its own payloads.
 
-### Three-Tier Storage
+### Two-Tier Storage
 
 | Tier | Implementation | Purpose |
 |------|---------------|---------|
 | **Hot** | mmap'd ring buffer in RAM (default 64 MB) | Recent entries for active reads. O(1) by index. |
 | **Warm** | Sealed disk segments (`.flseg` files), memory-mapped | Historical data, bounded by local disk space. |
-| **Cold** | S3/GCS/Azure Blob (planned) | Long-term archival, on-demand download. |
 
 When entries age out of the hot ring, they're flushed to warm segments. A warm store hash map keeps payload copies in memory (default 32 MB) for the stream read path, which fetches record payloads by index, so those reads don't have to go to disk immediately. KV entries are never copied there: the KV projection holds the value, and nothing reads a KV payload from the log.
 
@@ -160,32 +159,9 @@ When a node restarts, each partition recovers:
 1. **Load snapshot** — read MANIFEST, validate CRC, deserialize all projections
 2. **Open UAL** — discover warm segments on disk
 3. **Replay** — feed UAL entries from `snapshot_index + 1` through the one apply path (the same code a live write and a replicated entry take)
-4. **Load cold manifest** — metadata only, no data fetched
-5. **Ready for traffic**
+4. **Ready for traffic**
 
 If no snapshot exists, recovery replays the entire UAL from the first segment … slow, but correct.
-
-## Memory Controller
-
-Each shard gets a fixed memory budget. Default split for a 2 GB shard:
-
-| Component | Share | Default Budget |
-|-----------|-------|----------------|
-| UAL Hot Ring | 12.5% | 256 MB |
-| KV Projection | 37.5% | 768 MB |
-| Queue Projection | 6.25% | 128 MB |
-| TS Projection | 12.5% | 256 MB |
-| I/O Buffers | 6.25% | 128 MB |
-| Snapshot Buffer | 3.125% | 64 MB |
-| Warm Store | 6.25% | 128 MB |
-| Reserve | 15.625% | 320 MB |
-
-### Backpressure Levels
-
-1. **Eviction** — ask the component to free memory (drop old MVCC versions, spill to disk)
-2. **Reserve borrow** — borrow from the reserve pool, tracked and repaid
-3. **Client backpressure** — return `ShardMemoryPressure` as a retriable error
-4. **Hard reject** — write rejected immediately to prevent OOM
 
 ## Directory Layout
 
@@ -193,7 +169,7 @@ Each shard gets a fixed memory budget. Default split for a 2 GB shard:
 {data_dir}/
 ├── SYSTEM                              # Topology lock (shards, partitions, version)
 ├── 00000/                              # Shard 0 (zero-padded 5 digits)
-│   ├── MANIFEST                        # Latest snapshot ref + cold segment index
+│   ├── MANIFEST                        # Latest snapshot ref
 │   ├── HARDSTATE                       # Raft node id, current term, vote (28 bytes)
 │   ├── segs/
 │   │   ├── 0000000001.flseg            # UAL segment (10-digit zero-padded first index)
@@ -202,7 +178,6 @@ Each shard gets a fixed memory budget. Default split for a 2 GB shard:
 │   ├── snaps/
 │   │   ├── 0000001000-1709234567.fsnap # Snapshot at UAL index 1000
 │   │   └── *.fsnap.tmp                 # Transient (in-flight writes only)
-│   └── cold.fcold                      # (optional) Cold tier manifest
 ├── 00001/
 │   ├── MANIFEST
 │   ├── HARDSTATE
@@ -226,7 +201,7 @@ Written once on first boot. If `shards` or `partitions` don't match on restart, 
 
 ### MANIFEST
 
-One per shard — a JSON file tracking the latest snapshot pointer and cold segment inventory. No per-directory manifests to coordinate.
+One per shard — a JSON file naming the latest snapshot. No per-directory manifests to coordinate.
 
 ### HARDSTATE
 
