@@ -397,7 +397,7 @@ Per-shard transactions buffer multiple writes on a single pinned partition and c
 |----|------|---------|
 | `kv begin -r <routing-key>` | `0x110` | Open a new transaction. Returns a `txn_id` and the partition's `pinned_hash`. |
 | `kv commit <txn-id>` | `0x111` | Apply all buffered ops atomically. Returns the op count and the `commit_index`. |
-| `kv rollback <txn-id>` | `0x112` | Discard buffered ops. Idempotent. |
+| `kv rollback <txn-id>` | `0x112` | Discard buffered ops. A transaction that isn't open (already committed, rolled back or dropped as idle) is refused with `no_such_transaction`. |
 
 Inside a transaction, `set`, `get`, `delete`, `incr`, `expire` and `exists` accept a `--txn <id>` flag; writes are buffered until commit. **Reads inside the transaction see the buffered writes.** `list`, `mget`, `history` and the JSON ops take no transaction.
 
@@ -412,7 +412,7 @@ flo kv set user:42:last_seen "$(date -u +%s)" -r user:42 --txn $TXN
 flo kv commit $TXN               # → OK ops=3 commit_index=N
 ```
 
-If the client crashes before commit, the buffered ops are discarded automatically when the transaction expires server-side. Transactions survive across stateless connections — they are owned by `txn_id`, not by the TCP connection.
+Transactions survive across stateless connections — they are owned by `txn_id`, not by the TCP connection. So a transaction that goes **30 seconds without a request** is dropped with its buffered ops, freeing its slot when a client crashes before commit; any request in it, even one refused, counts as use. A later request on a dropped transaction is refused with `no_such_transaction`, and nothing of it is written. `flo_kv_txns_reaped_total{shard_id}` counts the drops.
 
 ### When to use transactions vs. JSON or workflows
 
