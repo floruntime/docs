@@ -1,9 +1,9 @@
 ---
 title: Stream Processing
-lede: Build continuous data pipelines with declarative YAML — filter, map, aggregate, enrich, window, and route data across streams, time-series, KV, and queues without leaving Flo.
+lede: Build continuous data pipelines with declarative YAML — filter, map, aggregate, enrich, and route data across streams, time-series, KV, and queues without leaving Flo.
 ---
 
-Flo ships a **built-in stream processing engine** inspired by Apache Flink. Jobs are defined in YAML, submitted via the CLI or SDKs, and executed entirely inside the Flo node — no external cluster required. The engine reads from Flo streams or time-series measurements, transforms records through a chain of operators, and writes results to stream, time-series, KV, or queue sinks.
+Flo ships a **built-in stream processing engine**. Jobs are defined in YAML, submitted with the CLI or an SDK, and executed entirely inside the Flo node — no external cluster required. The engine reads from Flo streams or time-series measurements, transforms records through a chain of operators, and writes results to stream, time-series, KV, or queue sinks.
 
 ## Why Built-In Processing?
 
@@ -12,8 +12,8 @@ Traditional architectures pair a storage layer (Kafka, Redis) with a separate pr
 Flo eliminates that gap:
 
 - **Zero-copy reads** — source records are read directly from the Unified Append Log, no network hop
-- **Thread-per-shard execution** — each pipeline runs on the shard that owns the source partition, no cross-thread coordination
-- **Integrated state** — operators can read and write Flo KV directly (e.g., `kv_lookup`), no external state store
+- **In-node execution** — a job runs on the shard that leads the job's home partition, and reads and writes other shards' data in-process
+- **Integrated KV** — `kv_lookup` reads Flo KV and a KV sink writes it, no external store
 - **Single deployment** — one binary, one config, one monitoring surface
 
 ## Core Concepts
@@ -25,10 +25,9 @@ A **job** is a long-running processing pipeline defined by a YAML file. Each job
 | Field | Description |
 |-------|-------------|
 | `kind` | Always `Processing` |
-| `name` | Human-readable job name |
+| `name` | Human-readable job name (default: `unnamed-job`) |
 | `namespace` | The namespace the job lives in. Optional; if given, it must be the one the job is submitted to (`-n`) |
-| `parallelism` | Number of parallel task slots (default: `1`) |
-| `batch_size` | Records to process per tick (default: `100`) |
+| `batch_size` | Records a stream source reads per tick (default: `100`, at most 1000) |
 | `sources` | Where to read data from |
 | `sinks` | Where to write results to |
 | `operators` | Transformation chain applied to every record |
@@ -37,15 +36,14 @@ A **job** is a long-running processing pipeline defined by a YAML file. Each job
 
 The fundamental data unit flowing through a pipeline is a **ProcessingRecord**:
 
-- **key** — optional partitioning key (empty = broadcast)
+- **key** — empty when read from a source; set by `keyby` or `flatmap`
 - **value** — payload bytes (typically JSON)
-- **event_time_ms** — event timestamp used for windowing and watermarks
-- **source** — origin stream name, partition, and offset for checkpoint tracking
-- **headers** — optional key-value metadata
+- **event_time_ms** — the point's timestamp for a time-series source; the time it was read for a stream source
+- **tags** — labels set by `classify`, used for [tag-based routing](#tag-based-routing)
 
 ### Pipeline Topology
 
-Pipelines are linear chains: **source → operator₁ → operator₂ → … → sink**. All operators in a chain execute on the same shard thread with zero-copy record passing (fused execution, mirroring Flink's operator chaining).
+Pipelines are linear chains: **source → operator₁ → operator₂ → … → sink**. All operators in a chain run on the same shard thread, one record at a time.
 
 ```
 ┌──────────┐    ┌──────────┐    ┌──────────┐    ┌──────────┐    ┌──────────┐
@@ -66,7 +64,6 @@ The simplest pipeline: read a stream, write to another stream, no transformation
 kind: Processing
 name: user-events-pipe
 namespace: analytics
-parallelism: 1
 batch_size: 100
 
 sources:
@@ -90,7 +87,6 @@ The job polls `payment-events` on a fixed interval (`poll_interval_ms`, default 
 kind: Processing
 name: order-analytics
 namespace: production
-parallelism: 4
 batch_size: 200
 
 sources:
@@ -116,12 +112,12 @@ operators:
     key_expression: "$.customer_id"
 
   - type: aggregate
-    name: hourly-total
+    name: running-total
     function: sum
     field: "$.amount"
-    window: tumbling
-    window_size: 3600
 ```
+
+Each completed order updates its customer's running total, and the new total is appended to `order-totals`.
 
 ## Sources
 
@@ -129,8 +125,7 @@ Sources define where the pipeline reads data. Two source kinds are supported: **
 
 ### Stream Source
 
-Reads records from a Flo stream, tracking a durable offset cursor for **at-least-once**
-processing (a crash redelivers at most the last debounce window — never skips records):
+Reads every partition of a Flo stream, tracking a durable cursor so a restart resumes where it left off:
 
 ```yaml
 sources:
@@ -138,24 +133,19 @@ sources:
     stream:
       name: click-events
       namespace: production
-      partitions: 0           # single partition (integer)
       batch_size: 500         # per-source override (records read per tick)
       poll_interval_ms: 1000  # how often to read from the source (default: 1000)
 ```
 
-#### Partition Selection
+The cursor is persisted at most once a second, so a crash re-delivers up to the last second of records (**at-least-once**). A record is not retried once the cursor has moved past it: if a sink write or an operator fails, the error is logged and the record is skipped.
 
-| Syntax | Behavior |
-|--------|----------|
-| `partitions: 0` | Read partition 0 only |
-| `partitions: "0-63"` | Expand into one source per partition (64 sources) |
-| `partitions: "0,3,7"` | Explicit partition list |
-| `partitions: "all"` | Resolved at runtime from stream metadata |
-| *(omitted)* | Defaults to partition 0 |
+:::note
+Leave `partitions:` out. A partition number, range or list is accepted, but each listed partition becomes a separate reader of the whole stream, so every record is written once per listed partition.
+:::
 
 ### Time-Series Source
 
-Polls a TS measurement at a configurable interval, emitting data points as JSON records:
+Polls a TS measurement at a configurable interval, up to 256 points per poll, emitting data points as JSON records:
 
 ```yaml
 sources:
@@ -164,7 +154,7 @@ sources:
       measurement: cpu_usage
       namespace: production
       field: value              # field to read (default: "value")
-      tags:                     # optional tag filter
+      tags:                     # optional: the series' full tag set
         host: web-01
       poll_interval_ms: 1000    # polling interval (default: 1000)
 ```
@@ -175,9 +165,15 @@ Each emitted record looks like:
 {"measurement": "cpu_usage", "value": 72.5, "timestamp_ms": 1700000000000}
 ```
 
+`tags` names one series exactly: all of its tags, not a subset.
+
+:::note
+A time-series source reads only the measurements stored on the shard that runs the job. On a server with more than one shard, a measurement stored on another shard reads nothing.
+:::
+
 ### Multi-Source Merge
 
-Multiple sources are polled round-robin into the same pipeline:
+Each source runs as its own pipeline with its own copy of the operators, and all of them write to the job's sinks. Operator state, such as an aggregate's totals, is kept per source, not merged:
 
 ```yaml
 sources:
@@ -224,11 +220,11 @@ sinks:
         cpu: cpu_percent        # TS field "cpu" ← JSON field "cpu_percent"
 ```
 
-Given the input `{"hostname":"web-01","cpu_percent":72.5}`, the sink writes a point to `proc_cpu_metrics` with tag `host=web-01` and field `cpu=72.5`.
+Given the input `{"hostname":"web-01","cpu_percent":72.5}`, the sink writes a point to `proc_cpu_metrics` with tag `host=web-01` and field `cpu=72.5`, stamped with the time it is written. Only top-level JSON fields are read, and a tag's value must be a JSON string. `measurement` defaults to the sink's name.
 
 #### `value_field` Shorthand
 
-If the JSON payload contains a single scalar field to use as the value, use `value_field` instead of a full `fields:` map:
+If the JSON payload contains a single number to use as the value, use `value_field` instead of a full `fields:` map. It is written as the point's `value` field; a payload that is just a number is used as it is:
 
 ```yaml
 sinks:
@@ -242,7 +238,7 @@ sinks:
 
 ### KV Sink
 
-Writes records to Flo KV storage:
+Writes each record's value to Flo KV under its key:
 
 ```yaml
 sinks:
@@ -253,9 +249,11 @@ sinks:
       ttl_ms: 86400000          # optional TTL in ms (one day)
 ```
 
+Records from a source have no key, so put a `keyby` (or `flatmap`) before a KV sink. Without one, every record overwrites the single key `user:`, or, with no `key_prefix`, nothing is written.
+
 ### Queue Sink
 
-Enqueues records into a Flo queue:
+Enqueues records into a Flo queue (`name` defaults to the sink's name):
 
 ```yaml
 sinks:
@@ -270,6 +268,8 @@ sinks:
 Sinks can subscribe to **tagged records** instead of receiving the full pipeline output. Tags are set by the `classify` operator and matched with AND logic — a record reaches a sink only when it carries **all** of the sink's declared `match` tags.
 
 Up to 32 distinct tag names per pipeline.
+
+Tags survive `filter`, `passthrough` and `classify` only. `keyby`, `map`, `flatmap`, `aggregate` and an enriching `kv_lookup` build new records without tags, so put `classify` after them.
 
 ```yaml
 operators:
@@ -286,11 +286,6 @@ sinks:
     stream:
       name: results
 
-  - name: late-events
-    stream:
-      name: late-data
-    match: [late]
-
   - name: failures
     queue:
       name: dead-letter
@@ -302,7 +297,7 @@ sinks:
     match: [errors, slow]          # AND — must have BOTH tags
 ```
 
-Sinks without `match` receive all records from the main operator chain. A single `match:` value is also accepted as sugar: `match: late` is equivalent to `match: [late]`.
+Sinks without `match` receive all records from the main operator chain. A single `match:` value is also accepted as sugar: `match: errors` is equivalent to `match: [errors]`.
 
 ## Operators
 
@@ -381,7 +376,7 @@ operators:
 
 Supports nested paths: `"$.metadata.region"`.
 
-If the value isn't valid JSON or the field doesn't exist, the record passes through with its original key.
+If the value isn't valid JSON or the field doesn't exist, the record passes through with its original key (empty, for a record straight from a source).
 
 ### `map` — Declarative Field Projection
 
@@ -397,9 +392,9 @@ operators:
 ```
 
 Rules:
-- Values starting with `$.` are **JSONPath extractions** from the input
-- All other values are treated as **string constants**
-- Output is always a JSON object with the declared fields
+- Values starting with `$.` are **JSONPath extractions** from the input; a missing path gives `null`
+- All other values are treated as **string constants**, written as they are (not escaped)
+- Output is always a JSON object with the declared fields; a record whose value isn't JSON is dropped
 
 ### `flatmap` — Array Explosion
 
@@ -417,7 +412,7 @@ Each element of the array at `$.order.items` becomes a separate downstream recor
 
 ### `aggregate` — Declarative Aggregation
 
-Accumulates numeric values extracted from JSON records. Records are grouped by key — chain a `keyby` operator before `aggregate` for custom grouping.
+Accumulates numeric values extracted from JSON records. Records are grouped by key — chain a `keyby` operator before `aggregate`; without one, every record falls in one group with the empty key. Totals are kept in memory and start again from zero when the server restarts or the job moves to another node.
 
 **Functions:** `sum`, `count`, `avg`, `min`, `max`
 
@@ -426,7 +421,6 @@ Accumulates numeric values extracted from JSON records. Records are grouped by k
 | Mode | Config | Behavior |
 |------|--------|----------|
 | Running | *(no window config)* | Emits updated aggregate on every record |
-| Tumbling | `window: tumbling`, `window_size: <seconds>` | Emits when window closes (on watermark) |
 | Count-based | `window: count`, `window_size: <n>` | Emits after every N records per key |
 
 Output format: `{"key": <group-key>, "value": <result>, "count": <n>}` (the `key` is the grouping key set by a preceding `keyby`, or the record's key otherwise)
@@ -438,13 +432,6 @@ operators:
     name: running-total
     function: sum
     field: "$.amount"
-
-  # Count per key in 60-second tumbling windows
-  - type: aggregate
-    name: event-counter
-    function: count
-    window: tumbling
-    window_size: 60
 
   # Average every 100 records per key
   - type: aggregate
@@ -467,6 +454,8 @@ Looks up keys in Flo KV storage to filter or enrich streaming records. The looku
 | `"${$.account_id}"` | `alice` |
 | `"user.${$.org}.${$.user_id}"` | `user.acme.u1` |
 
+A placeholder resolves only a JSON string; a number or a missing field leaves the key unresolved, and filter mode drops the record.
+
 `namespace` (optional) reads another namespace's keys, such as shared reference data; by default the lookup reads the job's own namespace.
 
 **Modes:**
@@ -474,7 +463,7 @@ Looks up keys in Flo KV storage to filter or enrich streaming records. The looku
 | Mode | Behavior |
 |------|----------|
 | `filter` (default) | Drop the record if the constructed key is **not found** in KV |
-| `enrich` | Attach the KV value to the record as a JSON field; records with no match pass through unchanged |
+| `enrich` | Attach the KV value to the record as the JSON field `enrich_field` (default: `_kv`); records with no match pass through unchanged |
 
 ```yaml
 operators:
@@ -539,116 +528,22 @@ operators:
     name: completed-only
     condition: "value_contains:completed"
 
+  - type: keyby
+    name: by-customer
+    key_expression: "$.customer_id"
+
   - type: map
     name: extract-fields
     order_id: "$.order.id"
     total: "$.order.total"
 
-  - type: keyby
-    name: by-customer
-    key_expression: "$.customer_id"
-
   - type: aggregate
-    name: daily-total
+    name: customer-total
     function: sum
     field: "$.total"
-    window: tumbling
-    window_size: 86400
 ```
 
-## Windowing
-
-The processing engine supports event-time windowing for time-based aggregations.
-
-### Window Types
-
-| Type | Description |
-|------|-------------|
-| **Tumbling** | Fixed-size, non-overlapping time windows. E.g., every 60 seconds. |
-| **Sliding** | Fixed-size windows that overlap by a slide interval. |
-| **Count** | Windows defined by element count, not time. |
-| **Session** | Dynamic, gap-based windows per key. A session extends as long as records arrive within the gap. |
-| **Global** | Single window for all elements (useful with custom triggers). |
-
-### Triggers
-
-Triggers decide when a window fires (evaluates its function and emits results):
-
-| Trigger | Fires when… |
-|---------|-------------|
-| **Event-time** (default) | Watermark passes the window end |
-| **Processing-time** | Wall clock reaches the window end |
-| **Count** | Element count reaches a threshold |
-| **Continuous** | At regular intervals |
-
-### Watermarks
-
-Watermarks signal event-time progress through the pipeline. They propagate the guarantee that no record with an earlier timestamp will arrive. The engine tracks watermarks across multiple inputs and advances them based on the minimum across all sources.
-
-### Late Data Handling
-
-Records that arrive after the watermark has passed their window are classified as:
-
-1. **On-time** — within the expected window
-2. **Late** — past the watermark but within the allowed lateness (re-fires window)
-3. **Dropped** — too late, beyond the allowed lateness threshold
-
-Late records can be tagged (via a `classify` rule) and routed to a dedicated sink for monitoring or reprocessing.
-
-## Keyed State
-
-Stateful operators (like `aggregate`) access per-key state scoped to the job and operator instance. Three state primitives are available:
-
-| Primitive | Description |
-|-----------|-------------|
-| **ValueState** | Single value per key |
-| **ListState** | Append-only list per key |
-| **MapState** | Sub-key → value map per key |
-
-State is stored in the per-shard state backend with automatic key namespacing:
-
-```
-proc:{job_id}:{operator_id}:kv:{user_key}          — ValueState
-proc:{job_id}:{operator_id}:list:{user_key}:{idx}  — ListState
-proc:{job_id}:{operator_id}:map:{user_key}:{mk}    — MapState
-```
-
-No locks are needed — single-threaded shard execution guarantees isolation.
-
-## Checkpoints and Savepoints
-
-### Checkpoints
-
-The engine implements Chandy-Lamport distributed snapshots for fault tolerance:
-
-1. **Trigger** — coordinator assigns a new `checkpoint_id`
-2. **Barrier injection** — `CheckpointBarrier` is injected into sources
-3. **Source snapshot** — sources save their current offsets
-4. **Operator snapshot** — each operator snapshots its state, forwards the barrier
-5. **Sink acknowledgment** — sinks confirm receipt of the barrier
-6. **Completion** — all acks received, checkpoint is marked complete
-
-Checkpoint metadata is persisted internally under `_proc:` keys in KV storage.
-
-### Savepoints
-
-Savepoints are user-triggered snapshots of a job's state:
-
-```bash
-flo processing savepoint job-1 -n analytics
-```
-
-A savepoint captures:
-
-- The job binding and configuration
-- Creation timestamp
-- `records_processed` at the savepoint time
-
-You can restore a job from a savepoint:
-
-```bash
-flo processing restore job-1 sp-1 -n analytics
-```
+Order matters: `keyby` comes before `map` here because the map's output keeps only `order_id` and `total`, so `$.customer_id` would no longer be there to key by.
 
 ## Pipeline Patterns
 
@@ -720,6 +615,8 @@ sinks:
       value_field: value
 ```
 
+When the source is a time-series measurement, the sink writes the source point's value and tags as they are, under the field named by `value_field`; operators can filter points but not change the value.
+
 ### KV-Enriched Pipeline
 
 Filter or enrich events using data stored in Flo KV:
@@ -746,7 +643,7 @@ operators:
 
 ```bash
 flo processing submit pipeline.yaml -n analytics
-# Output: Job submitted: job-1
+# Output: Job submitted: job-<id>
 ```
 
 On submission, the job enters the `RUNNING` state and begins polling its sources immediately.
@@ -757,29 +654,27 @@ On submission, the job enters the `RUNNING` state and begins polling its sources
 flo processing status job-1 -n analytics
 ```
 
-Returns JSON:
+Prints the job's id, name, status, batch size, the records it has processed since the server started, and when it was created:
 
-```json
-{
-  "job_id": "job-1",
-  "name": "order-analytics",
-  "status": "RUNNING",
-  "parallelism": 4,
-  "batch_size": 200,
-  "records_processed": 15420,
-  "created_at_ms": 1700000000000
-}
+```
+Job:        job-<id>
+Name:       order-analytics
+Status:     RUNNING
+Batch size: 200
+Processed:  15420 records
+Created:    1700000000000ms
 ```
 
 ### Listing Jobs
 
 ```bash
 flo processing list -n analytics
+flo processing list -n analytics -o json
 ```
 
 ### Stopping a Job
 
-Stops the job gracefully. The job can be restored later:
+Stops the job: its pipelines stop reading, and it stays listed as `STOPPED`:
 
 ```bash
 flo processing stop job-1 -n analytics
@@ -787,7 +682,7 @@ flo processing stop job-1 -n analytics
 
 ### Cancelling a Job
 
-Cancels the job permanently:
+Cancels the job; it stays listed as `CANCELLED`:
 
 ```bash
 flo processing cancel job-1 -n analytics
@@ -797,29 +692,11 @@ flo processing cancel job-1 -n analytics
 
 | State | Description |
 |-------|-------------|
-| `RUNNING` | Actively processing records |
-| `STOPPED` | Gracefully halted, can be restored |
-| `CANCELLED` | Permanently terminated |
-| `FAILED` | Terminated due to an error |
-| `COMPLETED` | Finished (for bounded sources) |
+| `RUNNING` | Processing records |
+| `STOPPED` | Stopped with `flo processing stop` |
+| `CANCELLED` | Cancelled with `flo processing cancel` |
 
-### Savepoints
-
-```bash
-# Create a savepoint
-flo processing savepoint job-1 -n analytics
-
-# Restore from a savepoint
-flo processing restore job-1 sp-1 -n analytics
-```
-
-### Rescaling
-
-Change the parallelism of a running job:
-
-```bash
-flo processing rescale job-1 8 -n analytics
-```
+A job whose pipeline can't be built (for example, an operator that can't start) is still listed as `RUNNING`; the server log says why it isn't processing.
 
 ## Namespaces
 
@@ -840,30 +717,29 @@ flo processing submit job.yaml -n staging
 
 ## Persistence
 
-Job state survives node restarts:
+Submit, stop and cancel go through Raft, so jobs survive a restart:
 
-- Submitted jobs persist and resume on restart — the execution pipeline is rebuilt for `RUNNING` jobs, not just the registry entry, so a job keeps consuming after restart instead of becoming an idle zombie
-- Stream- and time-series-source pipelines resume from a **durable source cursor** rather than re-reading from the beginning. The cursor is persisted as a `processing_checkpoint` entry (debounced to ≥1s per pipeline to bound write amplification)
-- Recovery is **at-least-once**: a crash loses at most the debounce window, which redelivers — it never skips records
-- Stopped and cancelled job states are preserved (they stay idle on restart)
-- Rescaled parallelism is remembered
+- A `RUNNING` job's pipelines are rebuilt on restart and keep consuming
+- Each pipeline resumes from its **durable source cursor**, persisted through Raft at most once a second, so a crash re-delivers up to the last second of records (at-least-once)
+- Stopped and cancelled jobs stay idle
 - New job IDs don't collide with pre-restart IDs
 
-All mutations (submit, stop, cancel, status updates) are persisted through Raft and replayed on startup.
+What does not survive a restart: `aggregate` totals and the processed-record count, both kept in memory.
 
 ## Processing Metrics
 
-The engine collects per-operator and per-pipeline metrics:
+With metrics enabled, the server exports these on `/metrics`. Counts start from zero when the server starts.
 
 | Metric | Description |
 |--------|-------------|
-| `records_in` | Records processed by each operator |
-| `records_out` | Records emitted by each operator |
-| `processing_time_ns` | Cumulative processing time |
-| `errors` | Error count |
-| `throughput` | Records per second (rolling) |
-| `latency` | Processing latency histogram (buckets: &lt;1ms, &lt;5ms, &lt;10ms, &lt;50ms, &lt;100ms, &lt;500ms, 500ms+) |
-| `backpressure` | Backpressure gauge (0.0–1.0) |
+| `flo_processing_active_jobs` | Jobs submitted and not yet stopped or cancelled |
+| `flo_processing_jobs_submitted_total` | Jobs submitted |
+| `flo_processing_jobs_completed_total` | Jobs stopped |
+| `flo_processing_jobs_cancelled_total` | Jobs cancelled |
+| `flo_processing_records_processed_total` | Records read from sources |
+| `flo_processing_records_dropped_total` | Records a sink could not write |
+| `flo_processing_checkpoints_completed_total` | Source cursors persisted |
+| `flo_processing_errors_total` | Cursor persists and operator chains that failed |
 
 ## Related Docs
 
