@@ -20,6 +20,55 @@ Download `flo-<arch>-<os>.tar.gz` for your platform from
 
 The macOS binaries need macOS 15 or later.
 
+## Linux Packages (.deb / .rpm)
+
+Each release has a `.deb` and an `.rpm` for x86_64 and aarch64 on
+[Releases](https://github.com/floruntime/flo/releases), each with a `.sha256` beside it.
+They install `flo` as a systemd service.
+
+```bash
+# Debian, Ubuntu
+sha256sum -c flo_<version>_amd64.deb.sha256
+sudo apt install ./flo_<version>_amd64.deb
+
+# Fedora, RHEL, Rocky
+sha256sum -c flo-<version>-1.x86_64.rpm.sha256
+sudo dnf install ./flo-<version>-1.x86_64.rpm
+```
+
+`<version>` is the release without its `v`, such as `0.1.0-dev.12` (inside the package a
+pre-release is versioned `0.1.0~dev.12`, so it sorts before `0.1.0`). On aarch64 the files
+are `flo_<version>_arm64.deb` and `flo-<version>-1.aarch64.rpm`.
+
+The package installs the service but doesn't enable or start it. Check the config first,
+then:
+
+```bash
+sudo systemctl enable --now flo
+```
+
+| | |
+|---|---|
+| Binary | `/usr/bin/flo` |
+| Config | `/etc/flo/flo.toml`, readable by root and the `flo` group |
+| Data | `/var/lib/flo`, owned by the `flo` user |
+| Service | `flo.service`; logs with `journalctl -u flo` |
+
+The packaged config binds the client port (9000), the dashboard and metrics to
+`127.0.0.1`, since clients aren't authenticated yet. To serve other hosts, set `bind` in
+`[server]` to a private interface's address and keep the port behind a firewall.
+
+An upgrade (installing a newer package) keeps your edits to `flo.toml` and restarts the
+service if it is running. Removing the package stops and disables the service and keeps
+the data and the `flo` user. On Debian, `apt remove flo` keeps `/etc/flo/flo.toml` and
+`apt purge flo` removes `/etc/flo`. On Fedora, RHEL and Rocky, removal keeps an edited
+`flo.toml` as `flo.toml.rpmsave` and deletes an unedited one. The data in `/var/lib/flo`
+is never removed by the package. To delete it:
+
+```bash
+sudo rm -rf /var/lib/flo
+```
+
 ## Docker
 
 ```bash
