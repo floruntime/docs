@@ -32,7 +32,7 @@ terraform apply
 flo -e "$(terraform output -raw listen_endpoint)" kv set hello world
 ```
 
-The examples leave `flo_version` unset, so a droplet installs the newest release. In production, pin it to a tag from [Releases](https://github.com/floruntime/flo/releases), e.g. `flo_version = "v0.1.0-dev.12"`, so every droplet runs the same build.
+The Quick Start leaves `flo_version` unset, so a droplet installs the newest release. In production, pin it to a tag from [Releases](https://github.com/floruntime/flo/releases), e.g. `flo_version = "v0.1.0-dev.13"`, so every droplet runs the same build. The module installs the release's `.deb`, so the release must ship packages (v0.1.0-dev.13 or later).
 
 ## What It Provisions
 
@@ -40,16 +40,15 @@ The examples leave `flo_version` unset, so a droplet installs the newest release
 |----------|---------|
 | **Droplet** | Ubuntu 24.04 LTS, configurable size/region |
 | **Firewall** | Inbound rules for SSH, wire protocol, dashboard, and cluster ports |
-| **Cloud-init** | Downloads Flo via `scripts/install.sh`, writes `flo.toml`, starts `flo.service` |
+| **Cloud-init** | Installs the release's `.deb`, writes `flo.toml`, starts `flo.service` |
 | **Project attachment** | Optional — adds the droplet to a DigitalOcean project |
 
 The cloud-init script runs once per droplet. It:
-1. Installs `curl` and `ca-certificates` if needed
-2. Downloads and installs flo via the [install script](/getting-started/installation/) (optionally pinned to a version)
-3. Creates a `flo` system user
-4. Writes `/etc/flo/flo.toml` from the module inputs
-5. Creates and chowns the data directory
-6. Writes and enables a systemd unit (`flo.service`)
+1. Downloads the release's `.deb` for the droplet's architecture (`flo_version`, or the newest release), checks its sha256, and installs it. The [package](/getting-started/installation/) brings `/usr/bin/flo`, the `flo` system user, `/var/lib/flo` and the `flo.service` unit
+2. Mounts the block-storage volume at `/var/lib/flo`, if there is one
+3. Writes `/etc/flo/flo.toml` from the module inputs
+4. Adds the restart backoff to the unit as a drop-in
+5. Enables and starts `flo.service`
 
 ## Port Layout
 
@@ -249,7 +248,7 @@ Node 1 leads a group of one until nodes 2 and 3 have joined it; a restarted memb
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
-| `flo_version` | `string` | `""` | Release tag for `install.sh`. Empty = latest. **Pin in production** |
+| `flo_version` | `string` | `""` | Release whose `.deb` to install. Empty = latest. **Pin in production** |
 
 ### Flo Runtime
 
@@ -257,7 +256,6 @@ Node 1 leads a group of one until nodes 2 and 3 have joined it; a restarted memb
 |----------|------|---------|-------------|
 | `listen_port` | `number` | `9000` | Wire-protocol port. Metrics = +1, Dashboard = +2 |
 | `bind_address` | `string` | `"0.0.0.0"` | Bind address for the wire listener |
-| `data_dir` | `string` | `"/var/lib/flo"` | Data directory. Created and chowned by cloud-init |
 | `shards` | `number` | `0` | Number of shards. `0` = auto-detect from CPU count |
 | `durability` | `string` | `"async_flush"` | Storage durability: `sync` or `async_flush` |
 | `hot_buffer_capacity` | `number` | `0` | In-memory hot buffer size in bytes. `0` = default |
@@ -278,7 +276,7 @@ Node 1 leads a group of one until nodes 2 and 3 have joined it; a restarted memb
 
 ### Persistent Storage
 
-By default Flo writes to the droplet's root disk, which means a `terraform apply -replace=...` wipes all data. Set `volume_size > 0` to provision a DigitalOcean block-storage volume, attach it at boot, and mount it at `data_dir`. The volume carries `prevent_destroy = true`, so it survives droplet replacement.
+By default Flo writes to the droplet's root disk, which means a `terraform apply -replace=...` wipes all data. Set `volume_size > 0` to provision a DigitalOcean block-storage volume, attach it at boot, and mount it at `/var/lib/flo`. The volume carries `prevent_destroy = true`, so it survives droplet replacement.
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
@@ -353,7 +351,7 @@ systemctl reset-failed flo && systemctl start flo
 
 ### Data directory
 
-Data lives in `/var/lib/flo` (owned by `flo:flo`, mode `0750`). The systemd unit has `ProtectSystem=strict` with only `ReadWritePaths=<data_dir>` — Flo cannot write elsewhere on the filesystem. When `volume_size > 0`, that path is the mount point for the attached block-storage volume; cloud-init formats blank volumes and adds an `/etc/fstab` entry with `nofail,discard` so the mount survives reboots.
+Data lives in `/var/lib/flo` (owned by `flo:flo`, mode `0750`). The packaged unit has `ProtectSystem=strict` with only `ReadWritePaths=/var/lib/flo`, so Flo cannot write elsewhere on the filesystem. When `volume_size > 0`, that path is the mount point for the attached block-storage volume; cloud-init formats blank volumes and adds an `/etc/fstab` entry with `nofail,discard` so the mount survives reboots.
 
 ### Rolling config changes
 
@@ -416,10 +414,16 @@ Nodes built from different op tables can't link, and a server refuses clients bu
 # On every droplet first
 ssh root@<ip> 'systemctl stop flo'
 
-# Then, on every droplet, install the new version and start it
-ssh root@<ip> 'curl -fsSL https://raw.githubusercontent.com/floruntime/flo/dev/scripts/install.sh | sh -s -- --version <tag>'
+# Then, on every droplet, check and install the new package and start it.
+# --force-confold keeps the module's flo.toml over the package's default.
+ssh root@<ip> 'b=https://github.com/floruntime/flo/releases/download/<tag> &&
+  curl -fsSL -O "$b/flo_<version>_amd64.deb" -O "$b/flo_<version>_amd64.deb.sha256" &&
+  sha256sum -c flo_<version>_amd64.deb.sha256 &&
+  apt-get install -y -o Dpkg::Options::=--force-confold ./flo_<version>_amd64.deb'
 ssh root@<ip> 'systemctl start flo'
 ```
+
+A droplet created by an earlier version of the module installed flo with `install.sh` and wrote its own `/etc/systemd/system/flo.service`, which overrides the package's unit: installing the `.deb` there succeeds while the old `/usr/local/bin/flo` keeps running. Replace such droplets, or first run `rm /etc/systemd/system/flo.service /usr/local/bin/flo && systemctl daemon-reload`, and move a custom `data_dir` to `/var/lib/flo`.
 
 For a clean rebuild, bump `flo_version` and replace the droplet:
 
