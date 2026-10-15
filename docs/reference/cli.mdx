@@ -91,8 +91,12 @@ the same one: in `[cluster] secret`, in a file named by `[cluster] secret_file`
 this form.
 
 ```bash
-flo server secret > /etc/flo/cluster.secret && chmod 600 /etc/flo/cluster.secret
+flo server secret > /etc/flo/cluster.secret
+chmod 600 /etc/flo/cluster.secret
+chown flo:flo /etc/flo/cluster.secret   # the user the server runs as
 ```
+
+The server refuses a `secret_file` that its group or others can read or write.
 
 ### `flo server inspect`
 
