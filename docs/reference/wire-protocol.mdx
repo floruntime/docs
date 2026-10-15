@@ -100,7 +100,7 @@ A response carries no opcode: the client knows which request it sent. Any status
 
 ### Versions
 
-The table hash covers every op's request and answer layout and every log entry's. Until an op family is declared in the table, its hand-coded layouts are versioned by an epoch folded into the hash, which every change to one bumps. A server serves only clients carrying its own hash and protocol version; `flo -V` prints both.
+The table hash covers every op's request and answer layout and every log entry's. Until an op family is declared in the table, its hand-coded layouts are versioned by an epoch folded into the hash, which every change to one bumps. A server serves only clients carrying its own hash and protocol version; `flo version --verbose` prints both.
 
 A request from another build is answered `bad_request` in the client's own version byte, carrying the server's hash, with a message naming both builds, such as `server table 0x…, client table 0x…: upgrade the client`. Then the connection is closed. The server counts these in `flo_client_version_refused_total`. A client checks an answer's version and hash before reading its data, and refuses an answer from another build.
 
