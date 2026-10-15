@@ -167,6 +167,7 @@ The status says whether to retry; the reason says what happened; `ran` says whet
 | `23` | `too_many_proposals` | Too many writes wait for commit. |
 | `24` | `wrong_type` | The key's value isn't what the op works on: a counter for `kv_incr`, JSON for the JSON ops. |
 | `25` | `too_many_transactions` | The shard holds as many open transactions as it may. |
+| `26` | `stale_report` | An action complete or fail for a run that has moved on: another worker holds it, or it finished with another outcome. The report was dropped; resending it is refused the same way. |
 
 The reasons are part of the op table, so a client and server that agree on the table hash agree on this list.
 
@@ -350,9 +351,6 @@ An `action_invoke` value is `[has_labels:u8]([labels_len:u16][labels])?[input]`:
 | `processing_cancel` | `0x362` |
 | `processing_status` | `0x363` |
 | `processing_list` | `0x364` |
-| `processing_savepoint` | `0x365` |
-| `processing_restore` | `0x366` |
-| `processing_rescale` | `0x367` |
 
 ## Options
 

@@ -423,6 +423,8 @@ Accumulates numeric values extracted from JSON records. Records are grouped by k
 | Running | *(no window config)* | Emits updated aggregate on every record |
 | Count-based | `window: count`, `window_size: <n>` | Emits after every N records per key |
 
+`window: tumbling` is refused at submit: the engine has no event-time windows yet.
+
 Output format: `{"key": <group-key>, "value": <result>, "count": <n>}` (the `key` is the grouping key set by a preceding `keyby`, or the record's key otherwise)
 
 ```yaml

@@ -462,7 +462,7 @@ Single worker detail (same shape).
 ```json
 [
   { "job_id": "job-...", "name": "events-filter", "namespace": "production",
-    "status": "RUNNING", "parallelism": 1, "batch_size": 100,
+    "status": "RUNNING", "batch_size": 100,
     "created_at": 1718900000000, "records_processed": 1000,
     "metrics": { "records_in": 1000, "records_out": 950,
                  "throughput_per_sec": 16.6, "output_per_sec": 15.8,
@@ -482,7 +482,7 @@ records so idle polls don't skew the average.
 
 ### `GET /api/v1/processing/jobs/:id`
 
-Detail with the full pipeline `yaml` and `savepoints[]`.
+Detail with the full pipeline `yaml`.
 
 ### Writes
 
