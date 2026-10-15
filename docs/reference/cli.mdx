@@ -333,7 +333,7 @@ flo kv commit "$TXN"
 
 The transaction id names its shard, so `commit` and `rollback` need nothing else. Ops inside a transaction must give the routing key it was begun with, otherwise they are refused with `wrong_routing_key`. `list`, `mget`, `history` and the JSON ops don't run inside transactions.
 
-**Server caps**: 256 ops per transaction, 1 MiB total payload, 1024 open transactions per shard (past that, `begin` is refused with `too_many_transactions`). Transactions outlive connections: they are owned by `txn_id`, not by the TCP connection.
+**Server caps**: 256 ops per transaction, 1 MiB total payload, 1024 open transactions per shard (past that, `begin` is refused with `too_many_transactions`). Transactions outlive connections: they are owned by `txn_id`, not by the TCP connection. One that goes 30 seconds without a request is dropped, and later use is refused with `no_such_transaction`.
 
 ## Streams
 
