@@ -189,7 +189,7 @@ const groupRecords = await client.stream.groupRead("events", {
 });
 await client.stream.groupAck("events",
   groupRecords.records.map(r => r.id),
-  { group: "processors" }
+  { group: "processors", consumer: "consumer-1" }
 );
 ```
 
