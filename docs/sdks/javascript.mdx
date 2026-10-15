@@ -45,6 +45,24 @@ for (const msg of result.messages) {
 await client.close();
 ```
 
+## Retries
+
+When the server refuses a request as `overloaded` or `unavailable` and says it didn't run it (`err.ran === Ran.No`), the client sends it again itself, as a new request, after a jittered wait. The server never ran it, so this is safe for writes too. Any other refusal, or one that may have run, is thrown at once.
+
+| `retry` field | Default | |
+|---|---|---|
+| `maxAttempts` | `4` | Tries in all, the first included; `1` turns retrying off |
+| `initialBackoffMs` | `50` | Ceiling of the first wait; it doubles each retry |
+| `maxBackoffMs` | `1000` | Largest ceiling |
+
+Each wait is uniform between 0 and its ceiling, so with the defaults a refused request is thrown after at most about 350 ms of waiting. Unset fields take the defaults.
+
+```typescript
+const client = new FloClient("localhost:9000", {
+  retry: { maxAttempts: 8, initialBackoffMs: 100, maxBackoffMs: 2000 },
+});
+```
+
 ## KV Operations
 
 ```typescript
@@ -139,23 +157,19 @@ await client.queue.dlqRequeue("tasks", seqs);
 ## Stream Operations
 
 ```typescript
-// Append accepts string, plain object, or Uint8Array
-const result = await client.stream.append("events", {
-  event: "signup",
-  userId: "user-123",
-}, {
-  partitionKey: "user-123",
-});
-
-await client.stream.append("events", "user signed in");
-
+// Append takes the payload as bytes
 const encoder = new TextEncoder();
-await client.stream.append("events", encoder.encode("raw-bytes-payload"));
+const result = await client.stream.append(
+  "events",
+  encoder.encode(JSON.stringify({ event: "signup", userId: "user-123" })),
+  { partitionKey: "user-123" },
+);
+
+await client.stream.append("events", encoder.encode("user signed in"));
 
 // Read
 const records = await client.stream.read("events", {
-  offset: 0n,
-  limit: 10,
+  limit: 10, // from the start; `start: id` resumes after a record, `tail: true` reads the end
 });
 
 // Access record fields
@@ -175,15 +189,15 @@ const groupRecords = await client.stream.groupRead("events", {
 });
 await client.stream.groupAck("events",
   groupRecords.records.map(r => r.id),
-  { group: "processors" }
+  { group: "processors", consumer: "consumer-1" }
 );
 ```
 
-`append()` auto-encodes strings as UTF-8 and auto-serializes plain objects to JSON. Use `Uint8Array` only when you need exact raw bytes on the wire.
+`append()` takes a `Uint8Array`: encode strings with `TextEncoder`, and objects with `JSON.stringify` first.
 
 ## StreamWorker (high-level)
 
-The recommended way to consume streams is the `StreamWorker`, available in `@floruntime/node`. It handles consumer group join, polling, concurrency, ack/nack, and reconnection automatically:
+The recommended way to consume streams is the `StreamWorker`, available in `@floruntime/node`. It handles consumer group join, polling, concurrency, ack/nack, and reconnection:
 
 ```typescript
 import { StreamWorker } from "@floruntime/node";
@@ -215,6 +229,7 @@ await worker.start();
 | `batchSize` | `number` | `10` | Records per poll |
 | `blockMs` | `number` | `30000` | Long-poll timeout (ms) |
 | `messageTimeoutMs` | `number` | `300000` | Max handler duration (ms) |
+| `retry` | `Partial<RetryPolicy>` | client default | Retries for the client the worker creates when given an endpoint; a worker given a client uses that client's |
 
 ### StreamContext
 
@@ -232,7 +247,7 @@ async (ctx) => {
 }
 ```
 
-Records are **auto-acked** on handler success and **auto-nacked** on exception. Connection errors trigger automatic reconnect and consumer group re-join.
+Records are **auto-acked** on handler success and **auto-nacked** on exception. If the connection drops, the worker redials (waiting as after a failed poll: jittered, from 100 ms up to 5 s, until `stop()`), rejoins the group and re-registers, then polls again. An `ActionWorker` does the same and registers its actions again.
 
 ## Action & Worker Operations
 
@@ -267,7 +282,8 @@ worker.action("process-image", async (ctx) => {
 
 await worker.start();
 ```
-```
+
+`ActionWorker` takes `retry` too, for the client it creates.
 
 ## Workflow Operations
 
@@ -295,7 +311,7 @@ const result2 = await client.workflow.syncBytes(
 // Start a run
 const runId = await client.workflow.start(
   "process-order",
-  JSON.stringify(&#123; orderId: "ORD-123", amount: 99.99 &#125;)
+  JSON.stringify({ orderId: "ORD-123", amount: 99.99 })
 );
 
 // Poll status
@@ -324,7 +340,7 @@ Deliver external events to a waiting workflow:
 await client.workflow.signal(
   runId,
   "approval_decision",
-  JSON.stringify(&#123; approved: true, approver: "manager@corp.com" &#125;)
+  JSON.stringify({ approved: true, approver: "manager@corp.com" })
 );
 ```
 
@@ -332,25 +348,25 @@ await client.workflow.signal(
 
 ```typescript
 // Run event history
-const events = await client.workflow.history(runId, &#123; limit: 20 &#125;);
-for (const event of events) &#123;
+const events = await client.workflow.history(runId, { limit: 20 });
+for (const event of events) {
   console.log(`[${event.timestamp}] ${event.type}: ${event.detail}`);
-&#125;
+}
 
 // List runs for a workflow
-const runs = await client.workflow.listRuns(&#123;
+const runs = await client.workflow.listRuns({
   workflowName: "process-order",
   limit: 50,
-&#125;);
-for (const run of runs) &#123;
+});
+for (const run of runs) {
   console.log(`${run.run_id} — ${run.status} (${run.created_at})`);
-&#125;
+}
 
 // List all registered definitions
 const defs = await client.workflow.listDefinitions();
-for (const def of defs) &#123;
+for (const def of defs) {
   console.log(`${def.name} v${def.version}`);
-&#125;
+}
 
 // Download a definition's YAML
 const yaml = await client.workflow.getDefinition("process-order");
