@@ -90,11 +90,11 @@ flo workflow status <run-id>
 ## Stream Processing
 
 ```bash
-# Submit a processing job
-flo processing submit --file jobs/user-spend-alerts.yaml
+# Submit a processing job; it prints the job's id
+flo processing submit jobs/user-spend-alerts.yaml
 
-# Check status
-flo processing status user-spend-alerts
+# Check status, by that id
+flo processing status <job-id>
 ```
 
 ## Dashboard
