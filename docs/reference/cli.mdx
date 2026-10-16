@@ -210,9 +210,10 @@ flo kv mget <key1> <key2> ... [options]
 
 | Flag | Description |
 |------|-------------|
+| `-r, --routing-key <key>` | The routing key every key was written with: all are read from its shard |
 | `--output <fmt>` | `text` (default), `json`, or `table` |
 
-At most 256 keys per call. A missing key prints `(nil)`; it isn't an error. When the answers don't fit one response, the CLI asks again from where the server stopped.
+At most 256 keys per call. Keys written with a routing key are found only with that routing key; mget them together with `-r`, and those written with another, or none, in a separate call. A missing key prints `(nil)`; it isn't an error. When the answers don't fit one response, the CLI asks again from where the server stopped.
 
 ### `flo kv delete`
 
