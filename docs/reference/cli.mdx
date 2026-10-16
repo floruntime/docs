@@ -172,7 +172,7 @@ The KV commands are generated from the KV op table: each flag is a field of the 
 - most print one `name: value` line per field (`version: 3`), leaving out a field the answer doesn't carry; an answer with no fields prints `OK`;
 - `get`, `incr` and `json get` print the value alone;
 - `scan` and `history` print rows;
-- `-o json` prints the whole answer as one JSON object, for every command.
+- `-o json` prints the whole answer as one JSON object, for every command; an integer past 2^53 (a transaction id, a routing hash) is a string, so `jq` and JavaScript don't round it.
 
 A flag whose name ends in `-ms` takes milliseconds, or a number and a unit (`500ms`, `30s`, `5m`, `1h`, `1d`). A value outside a flag's range, or not one of its choices, exits 2 naming the flag. A key that isn't there exits 1 with `not found`.
 
@@ -254,7 +254,7 @@ flo kv scan [prefix] [options]
 | `-l, --limit <n>` | Most names on the page: 1 to 1024, default 1024 |
 | `--cursor <hex>` | Where the last page stopped; omit to start |
 
-It prints one name per line, then `cursor: <hex>` when there are more; pass that to `--cursor` for the next page:
+It prints one name per line, then `cursor: <hex>` when there are more; pass that to `--cursor` for the next page. With `-o raw` the cursor line goes to stderr, so stdout is names alone for a `while read` loop:
 
 ```bash
 flo kv scan user: --limit 100
