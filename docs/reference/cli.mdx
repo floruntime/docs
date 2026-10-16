@@ -312,7 +312,7 @@ It prints `OK`. A missing key exits 1.
 
 ### `flo kv exists`
 
-Existence check, with no value transferred. It prints `exists: true` and `version: <n>`, exiting `0`, or `exists: false`, exiting `1`. Inside a transaction a key with only a buffered write prints `version: 0`: it has no version until commit.
+Existence check, with no value transferred. It prints `exists: true` and `version: <n>`, exiting `0`, or `exists: false` and `version: 0`, exiting `1`. Inside a transaction a key with only a buffered write prints `version: 0`: it has no version until commit.
 
 ```bash
 flo kv exists <key> [-r <routing-key>] [-t <txn-id>]
