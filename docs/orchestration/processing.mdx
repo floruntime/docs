@@ -140,7 +140,7 @@ sources:
 The cursor is persisted at most once a second, so a crash re-delivers up to the last second of records (**at-least-once**). A record is not retried once the cursor has moved past it: if a sink write or an operator fails, the error is logged and the record is skipped.
 
 :::note
-Leave `partitions:` out. A partition number, range or list is accepted, but each listed partition becomes a separate reader of the whole stream, so every record is written once per listed partition.
+Leave `partitions:` out: a stream source reads every partition, and `all` is the only value accepted. To process part of a stream, filter on a field, or write that part to its own stream.
 :::
 
 ### Time-Series Source
@@ -249,7 +249,9 @@ sinks:
       ttl_ms: 86400000          # optional TTL in ms (one day)
 ```
 
-Records from a source have no key, so put a `keyby` (or `flatmap`) before a KV sink. Without one, every record overwrites the single key `user:`, or, with no `key_prefix`, nothing is written.
+Records from a source have no key, so put a `keyby` (or `flatmap`) before a KV sink. Without one, every record overwrites the single key `user:`, or, with no `key_prefix`, the record is dropped and counted in `flo_processing_records_dropped_total`. A key longer than a KV key may be is dropped and counted the same way.
+
+A job with a time-series source and a KV sink is refused at submit: time-series records have no key.
 
 ### Queue Sink
 
@@ -421,7 +423,9 @@ Accumulates numeric values extracted from JSON records. Records are grouped by k
 | Mode | Config | Behavior |
 |------|--------|----------|
 | Running | *(no window config)* | Emits updated aggregate on every record |
-| Count-based | `window: count`, `window_size: <n>` | Emits after every N records per key |
+| Count-based | `window: count`, `window_count: <n>` | Emits after every N records per key |
+
+`window_size: <n>` is the older name for `window_count` and still works; a later release removes it. Give one or the other, not both.
 
 `window: tumbling` is refused at submit: the engine has no event-time windows yet.
 
@@ -441,7 +445,7 @@ operators:
     function: avg
     field: "$.latency_ms"
     window: count
-    window_size: 100
+    window_count: 100
 ```
 
 ### `kv_lookup` — KV-Backed Enrichment & Filtering
@@ -697,8 +701,15 @@ flo processing cancel job-1 -n analytics
 | `RUNNING` | Processing records |
 | `STOPPED` | Stopped with `flo processing stop` |
 | `CANCELLED` | Cancelled with `flo processing cancel` |
+| `FAILED` | Can't run: shown as `FAILED: <reason>` |
 
-A job whose pipeline can't be built (for example, an operator that can't start) is still listed as `RUNNING`; the server log says why it isn't processing.
+A job is `FAILED` when the server can't build it, for example when a stored job no longer parses after an upgrade, or an operator can't start. `flo processing status` and `list` show why:
+
+```
+Status:     FAILED: "partitions" must be all: a stream source reads every partition; …
+```
+
+A failed job keeps its definition and source cursors. Submit a corrected job to replace it.
 
 ## Namespaces
 
@@ -724,6 +735,7 @@ Submit, stop and cancel go through Raft, so jobs survive a restart:
 - A `RUNNING` job's pipelines are rebuilt on restart and keep consuming
 - Each pipeline resumes from its **durable source cursor**, persisted through Raft at most once a second, so a crash re-delivers up to the last second of records (at-least-once)
 - Stopped and cancelled jobs stay idle
+- A stored job the server can't rebuild is kept as `FAILED` with its reason and cursors, never dropped
 - New job IDs don't collide with pre-restart IDs
 
 What does not survive a restart: `aggregate` totals and the processed-record count, both kept in memory.
@@ -742,6 +754,30 @@ With metrics enabled, the server exports these on `/metrics`. Counts start from 
 | `flo_processing_records_dropped_total` | Records a sink could not write |
 | `flo_processing_checkpoints_completed_total` | Source cursors persisted |
 | `flo_processing_errors_total` | Cursor persists and operator chains that failed |
+| `flo_processing_failed_jobs{shard_id}` | Jobs held as `FAILED` on each shard; also `processing_failed_jobs` per shard on `/status` |
+
+## Not Supported Yet
+
+The job format reserves these for event time, time windows and stateful operators, which the engine doesn't run yet. A job using one is refused at submit (and by `flo validate processing`), naming the key and what to use today:
+
+| Where | Key or type | Today |
+|-------|-------------|-------|
+| source | `event_time_field`, `max_delay_ms` | Records are taken in the order they arrive |
+| aggregate | `window: tumbling`, `sliding` or `session` | `window: count` with `window_count`, or no window for a running aggregate |
+| aggregate | `window_size_ms`, `window_slide_ms`, `session_gap_ms` | `window: count` with `window_count` |
+| operator | `type: dedup`, `join`, `no_event_for` | — |
+
+```
+"window": tumbling isn't supported yet; use window: count with window_count, or no window for a running aggregate at operators[2]
+```
+
+### Changing in a later release
+
+These work today and will be refused by a later release, with the edit to make:
+
+- `partitions` on a stream source: remove it; a job reads every partition.
+- `poll_interval_ms` on a stream source: remove it; a job will read as records arrive.
+- `window_size` on a count window: use `window_count`.
 
 ## Related Docs
 
