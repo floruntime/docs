@@ -167,9 +167,18 @@ flo server metrics [--endpoint <host:port>] [--format text|json]
 
 ## KV
 
+The KV commands are generated from the KV op table: each flag is a field of the op's request, named after it (`ttl_ms` is `--ttl-ms`), and each command sends one request. Their output follows the answer's fields:
+
+- most print one `name: value` line per field (`version: 3`), leaving out a field the answer doesn't carry; an answer with no fields prints `OK`;
+- `get`, `incr` and `json get` print the value alone;
+- `scan` and `history` print rows;
+- `-o json` prints the whole answer as one JSON object, for every command.
+
+A flag whose name ends in `-ms` takes milliseconds, or a number and a unit (`500ms`, `30s`, `5m`, `1h`, `1d`). A value outside a flag's range, or not one of its choices, exits 2 naming the flag. A key that isn't there exits 1 with `not found`.
+
 ### `flo kv set`
 
-Set a key-value pair.
+Set a key's value.
 
 ```bash
 flo kv set <key> <value> [options]
@@ -177,17 +186,17 @@ flo kv set <key> <value> [options]
 
 | Flag | Description |
 |------|-------------|
-| `--ttl-ms <ms>` | Time-to-live: milliseconds, or a number and a unit (`500ms`, `30s`, `5m`, `1h`, `1d`). `0` or omitted for no expiry |
+| `--ttl-ms <ms>` | Time to live; omitted for none |
 | `--condition <when>` | `always` (the default), `if_absent` (only if the key doesn't exist) or `if_present` (only if it does) |
-| `--cas-version <version>` | Only set if this is the key's version; `0` means the key doesn't exist |
+| `--cas-version <version>` | Only if this is the key's version; `0` means the key doesn't exist |
 | `-r, --routing-key <key>` | Explicit shard routing key |
 | `-t, --txn <id>` | Buffer the write in a transaction |
 
-It prints `OK version=<n>`, or `OK` inside a transaction, where the write has no version until it commits. A failed condition or version exits 3 with `[conflict/condition_failed]` or `[conflict/cas_mismatch]`.
+It prints `version: <n>`, or `OK` inside a transaction, where the write has no version until it commits. A failed condition or version exits 3 with `[conflict/condition_failed]` or `[conflict/cas_mismatch]`.
 
 ### `flo kv get`
 
-Get a value by key.
+Read a key's value, and print it alone.
 
 ```bash
 flo kv get <key> [options]
@@ -195,14 +204,16 @@ flo kv get <key> [options]
 
 | Flag | Description |
 |------|-------------|
-| `-w, --wait-ms <ms>` | How long to wait: milliseconds, or a number and a unit (`500ms`, `30s`, `5m`); at most `5m`; `0` or omitted doesn't wait |
-| `--wait-for <what>` | `exists` (the default: answers at once if the key exists, else when it's written) or `change` (the key's next version). On timeout, a change wait prints the unchanged value; either prints not found if the key is absent |
+| `-w, --wait-ms <ms>` | How long to wait, at most `5m`; `0` (the default) doesn't wait |
+| `--wait-for <what>` | `exists` (the default: answers at once if the key exists, else when it's written) or `change` (the key's next version). On timeout, a change wait prints the unchanged value; a key still absent exits 1 |
 | `-r, --routing-key <key>` | Explicit shard routing key |
 | `-t, --txn <id>` | Read inside a transaction, seeing its buffered writes; it can't wait |
 
+`-o json` prints `{"version":<n>,"value":"<value>"}`.
+
 ### `flo kv mget`
 
-Get many keys in one request. Keys may live on different shards; the server gathers them.
+Get many keys in one call. Keys may live on different shards; the server gathers them.
 
 ```bash
 flo kv mget <key1> <key2> ... [options]
@@ -211,7 +222,6 @@ flo kv mget <key1> <key2> ... [options]
 | Flag | Description |
 |------|-------------|
 | `-r, --routing-key <key>` | The routing key every key was written with: all are read from its shard |
-| `--output <fmt>` | `text` (default), `json`, or `table` |
 
 At most 256 keys per call. Keys written with a routing key are found only with that routing key; mget them together with `-r`, and those written with another, or none, in a separate call. A missing key prints `(nil)`; it isn't an error. When the answers don't fit one response, the CLI asks again from where the server stopped.
 
@@ -225,24 +235,31 @@ flo kv delete <key> [options]
 
 | Flag | Description |
 |------|-------------|
-| `--cas-version <version>` | Only delete if this is the key's version (race-free lock release) |
+| `--cas-version <version>` | Only if this is the key's version (race-free lock release) |
 | `-r, --routing-key <key>` | Explicit shard routing key |
 | `-t, --txn <id>` | Buffer inside a transaction |
 
-It prints `OK existed=true` or `OK existed=false`, or `OK` inside a transaction, where whether the key existed isn't known until commit.
+It prints `existed: true` or `existed: false`, or `OK` inside a transaction, where whether the key existed isn't known until commit.
 
-### `flo kv list`
+### `flo kv scan`
 
-List key names, optionally by prefix. Values aren't returned; use `get` or `mget`.
+List key names starting with a prefix, a page at a time. Values aren't returned; use `get` or `mget`.
 
 ```bash
-flo kv list [options]
+flo kv scan [prefix] [options]
 ```
 
 | Flag | Description |
 |------|-------------|
-| `-p, --prefix <prefix>` | Only keys starting with this |
-| `-l, --limit <n>` | Most names to list (default 100); the CLI pages through the server 1024 at a time |
+| `-l, --limit <n>` | Most names on the page: 1 to 1024, default 1024 |
+| `--cursor <hex>` | Where the last page stopped; omit to start |
+
+It prints one name per line, then `cursor: <hex>` when there are more; pass that to `--cursor` for the next page:
+
+```bash
+flo kv scan user: --limit 100
+flo kv scan user: --limit 100 --cursor 0300
+```
 
 ### `flo kv history`
 
@@ -257,7 +274,7 @@ flo kv history <key> [options]
 | `-l, --limit <n>` | Most versions to show: 1 to 65, default 10 |
 | `-r, --routing-key <key>` | Explicit shard routing key: give the one the key was written with |
 
-Each row is the version, the time it was written (`at_ms`, Unix milliseconds) and the value.
+Each row is the version, the time it was written (`at_ms`, Unix milliseconds) and the value, under a header; `-o raw` leaves the header out.
 
 ### `flo kv incr`
 
@@ -286,59 +303,59 @@ flo kv expire <key> --ttl-ms 0     # clears the TTL
 
 | Flag | Description |
 |------|-------------|
-| `--ttl-ms <ms>` | Required. Milliseconds, or a number and a unit (`500ms`, `30s`, `5m`, `1h`, `1d`); `0` clears the TTL |
+| `--ttl-ms <ms>` | Required; `0` clears the TTL |
 | `--cas-version <version>` | Only if this is the key's version (race-free lease renewal) |
 | `-r, --routing-key <key>` | Explicit shard routing key |
 | `-t, --txn <id>` | Buffer inside a transaction |
 
-A missing key exits 1.
+It prints `OK`. A missing key exits 1.
 
 ### `flo kv exists`
 
-Existence check, with no value transferred. Prints `1 version=<n>` and exits `0` when present; prints `0` and exits `1` when absent. Inside a transaction a key with only a buffered write prints `1`: it has no version until commit.
+Existence check, with no value transferred. It prints `exists: true` and `version: <n>`, exiting `0`, or `exists: false`, exiting `1`. Inside a transaction a key with only a buffered write prints `version: 0`: it has no version until commit.
 
 ```bash
 flo kv exists <key> [-r <routing-key>] [-t <txn-id>]
 ```
 
-### `flo kv jget` / `jset` / `jdel`
+### `flo kv json get` / `set` / `del`
 
-Read and write inside a JSON document, using a small JSONPath subset (`$`, `.field`, `[index]`). `--path` defaults to `$`, the whole document.
+Read and write inside a JSON document, using a small JSONPath subset (`$`, `.field`, `[index]`). `--path` (`-p`) defaults to `$`, the whole document.
 
 ```bash
-flo kv jset <key> <document> [--path <path>]
-flo kv jget <key> [--path <path>]
-flo kv jdel <key> [--path <path>]
+flo kv json set <key> <document> [--path <path>]
+flo kv json get <key> [--path <path>]
+flo kv json del <key> [--path <path>]
 ```
 
-- `jget` prints the JSON at the path.
-- `jset` prints `OK version=<n>`. At `$` it writes the whole document, creating the key; at any other path the key must already hold a JSON object or array.
-- `jdel` prints `OK version=<n>`, or `OK (key deleted)` at `$`.
+- `json get` prints the JSON at the path.
+- `json set` prints `version: <n>`. At `$` it writes the whole document, creating the key; at any other path the key must already hold a JSON object or array.
+- `json del` prints `version: <n>`, or `OK` at `$`, which deletes the key.
 
 A path with nothing at it exits 1; a key whose value isn't JSON is refused with `wrong_type` (exit 3). All three take `-r, --routing-key`; none run inside a transaction.
 
-### `flo kv begin` / `commit` / `rollback`
+### `flo kv txn begin` / `commit` / `rollback`
 
 Per-shard transactions buffer writes on one pinned partition and commit them atomically as one Raft entry.
 
 ```bash
-flo kv begin -r <routing-key>          # → txn_id=<id> pinned_hash=<hash>
-flo kv commit <txn-id>                 # → OK ops=<n> commit_index=<index>
-flo kv rollback <txn-id>               # drops the buffered writes
+flo kv txn begin <routing-key>        # → txn: <id>, pinned: <hash>
+flo kv txn commit <txn-id>            # → commit_index: <index>, ops: <n>
+flo kv txn rollback <txn-id>          # drops the buffered writes
 ```
 
 Add `--txn <id>` to `set`, `get`, `delete`, `incr`, `expire` or `exists` to run it inside the transaction:
 
 ```bash
-TXN=$(flo kv begin -r user:42 | sed 's/txn_id=\([0-9]*\).*/\1/')
+TXN=$(flo kv txn begin user:42 | sed -n 's/^txn: //p')
 flo kv set  user:42:name "Jane" -r user:42 --txn "$TXN"
 flo kv incr user:42:visits      -r user:42 --txn "$TXN"
-flo kv commit "$TXN"
+flo kv txn commit "$TXN"
 ```
 
-The transaction id names its shard, so `commit` and `rollback` need nothing else. Ops inside a transaction must give the routing key it was begun with, otherwise they are refused with `wrong_routing_key`. `list`, `mget`, `history` and the JSON ops don't run inside transactions.
+The transaction id names its shard, so `commit` and `rollback` need nothing else. Ops inside a transaction must give the routing key it was begun with, otherwise they are refused with `wrong_routing_key`. `scan`, `mget`, `history` and the JSON commands don't run inside transactions.
 
-**Server caps**: 256 ops per transaction, 1 MiB total payload, 1024 open transactions per shard (past that, `begin` is refused with `too_many_transactions`). Transactions outlive connections: they are owned by `txn_id`, not by the TCP connection. One that goes 30 seconds without a request is dropped, and later use is refused with `no_such_transaction`.
+**Server caps**: 256 ops per transaction, 1 MiB total payload, 1024 open transactions per shard (past that, `txn begin` is refused with `too_many_transactions`). Transactions outlive connections: they are owned by their id, not by the TCP connection. One that goes 30 seconds without a request is dropped, and later use is refused with `no_such_transaction`.
 
 ## Streams
 

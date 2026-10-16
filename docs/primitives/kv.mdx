@@ -14,8 +14,8 @@ Every mutation to a key creates a new **version**: 1 on its first write, one mor
 Put responses include the new version number, which you can use for subsequent CAS updates:
 
 ```bash
-flo kv set counter "1"                   # → OK version=1
-flo kv set counter "2" --cas-version 1   # → OK version=2
+flo kv set counter "1"                   # → version: 1
+flo kv set counter "2" --cas-version 1   # → version: 2
 flo kv set counter "3" --cas-version 1   # → Error: conflict: cas_version isn't the key's version [conflict/cas_mismatch]
 ```
 
@@ -182,23 +182,22 @@ Aliases: `del`. Deleting a key that doesn't exist succeeds: it prints `OK existe
 | `-n <namespace>` | Target namespace |
 | `-r <routing-key>` | Explicit shard routing key |
 
-### List / Scan
+### Scan
 
 ```bash
-flo kv list                      # all keys
-flo kv list --prefix "user:"     # prefix filter
-flo kv list --limit 50           # cap results
+flo kv scan                          # the first page of all keys
+flo kv scan user:                    # keys starting with user:
+flo kv scan user: --limit 50         # 50 names a page
+flo kv scan user: --cursor 0300      # the next page
 ```
-
-Aliases: `ls`, `scan`.
 
 | Flag | Description |
 |------|-------------|
-| `--prefix <p>` / `-p` | Filter by key prefix |
-| `--limit <n>` / `-l` | Max keys to return (default: 100) |
+| `--limit <n>` / `-l` | Most names on the page, 1 to 1024 (default: 1024) |
+| `--cursor <hex>` | Where the last page stopped |
 | `-n <namespace>` | Target namespace |
 
-List returns names only; read values with `get` or `mget`. It walks **all shards** — keys are returned regardless of which shard they hash to — a page of up to 1024 names at a time, resuming from the previous page's cursor. The prefix filter is applied on each shard locally before results are merged.
+Scan returns names only; read values with `get` or `mget`. It walks **all shards** — keys are returned regardless of which shard they hash to — a page at a time. A page that isn't the last ends with `cursor: <hex>`; pass it to `--cursor` for the next. The prefix filter is applied on each shard locally before results are merged.
 
 ### Version History
 
@@ -207,7 +206,7 @@ flo kv history mykey
 flo kv history mykey --limit 5
 ```
 
-Aliases: `hist`. Returns previous values, newest first, each with its version and the time it was written in Unix milliseconds. History for a key with none returns not found (exit 1).
+Returns previous values, newest first, each with its version and the time it was written in Unix milliseconds. History for a key with none returns not found (exit 1).
 
 | Flag | Description |
 |------|-------------|
@@ -225,7 +224,7 @@ Set an expiration on keys:
 flo kv set session:abc '{"user":"alice"}' --ttl-ms 1h
 ```
 
-The key expires one hour after the write. Expired keys return `(nil)` on get, as if they were never written. Setting `--ttl-ms 0` explicitly means "no expiration."
+The key expires one hour after the write. Expired keys are not found on get (exit 1), as if they were never written. Setting `--ttl-ms 0` explicitly means "no expiration."
 
 TTLs are milliseconds, with millisecond resolution. `--ttl-ms` takes a bare number of milliseconds, or a number and a unit — `ms`, `s`, `m`, `h` or `d`, as in `500ms` or `1d`. `kv expire` takes the same.
 
@@ -276,7 +275,7 @@ Use the conditional flags on `kv set`/`KV.Put` to express "do this only if X". E
 | Compare-and-swap by version | `--cas-version <version>` |
 | Atomic create with lease | `--condition if_absent --ttl-ms <duration>` |
 | Atomic counter | [`kv incr`](#counters) |
-| Atomic JSON sub-field update | [`kv jset`](#json-paths) |
+| Atomic JSON sub-field update | [`kv json set`](#json-paths) |
 
 The classic read-modify-write loop becomes:
 
@@ -327,7 +326,7 @@ For multi-key writes that must commit or fail as a unit, Flo offers [**per-shard
 |------|---------------------|
 | "Several keys, all-or-nothing" | Open a [transaction](#transactions) pinned to a routing key — all writes commit atomically as one Raft entry. |
 | "All these keys live together" | Set the same `--routing-key` on every related key (see [Shard Co-location](#shard-co-location)). Reads and writes stay on one shard. |
-| "Update several fields of one document" | Model the state as a **single key with a JSON value** and use [`kv jset`](#json-paths) or CAS on the whole document. One Raft entry, no coordination. |
+| "Update several fields of one document" | Model the state as a **single key with a JSON value** and use [`kv json set`](#json-paths) or CAS on the whole document. One Raft entry, no coordination. |
 | "Atomic counter" | Use [`kv incr`](#counters) — unconditional and conflict-free. |
 | "Long-running multi-step state machine" | Use a [workflow](/orchestration/workflows). Workflows give you durable execution, retries, and compensation steps. |
 | "Idempotent producer / exactly-once write" | Use `--condition if_absent` on a dedupe key (e.g. `dedupe:<request-id>`) before doing the work. |
@@ -375,7 +374,7 @@ Each is a single Raft entry. Use it to extend session leases, refresh distribute
 `kv exists` (opcode `0x115`) answers whether the key exists, and its version, without transferring the value, so it is much cheaper than `get` for large values.
 
 ```bash
-flo kv exists user:123    # prints 1 version=<n> and exits 0 if present; prints 0 and exits 1 if absent
+flo kv exists user:123    # prints exists: true and its version, exit 0; or exists: false, exit 1
 ```
 
 ## JSON paths
@@ -384,23 +383,23 @@ For keys whose value is a JSON document, three operations let you read or mutate
 
 | Op | Wire | Purpose |
 |----|------|---------|
-| `kv jget <key> [--path <path>]` | `0x10C` | Extract `path` from the JSON document. Path defaults to `$` (the whole document). |
-| `kv jset <key> <document> [--path <path>]` | `0x10D` | Atomically set the value at `path`. `$` replaces the document (and creates the key if missing); any other path needs an existing document. |
-| `kv jdel <key> [--path <path>]` | `0x10E` | Remove the value at `path`. `$` deletes the key. |
+| `kv json get <key> [--path <path>]` | `0x10C` | Extract `path` from the JSON document. Path defaults to `$` (the whole document). |
+| `kv json set <key> <document> [--path <path>]` | `0x10D` | Atomically set the value at `path`. `$` replaces the document (and creates the key if missing); any other path needs an existing document. |
+| `kv json del <key> [--path <path>]` | `0x10E` | Remove the value at `path`. `$` deletes the key. |
 
 Paths use a tiny JSONPath subset: `$`, `.field`, `.field.nested`, `[index]`. The operations are atomic per Raft entry — a sub-field update is a single committed write, not a read-modify-write loop.
 
-The answer to `jget` carries the document's current `version` alongside the JSON; `jset` and `jdel` answer the new version (`jdel` at `$` answers none, since the key is gone). Use that version to drive CAS on subsequent writes. A path with nothing at it is not found (exit 1); a key whose value isn't JSON is refused with `wrong_type`. The JSON ops don't run inside transactions.
+The answer to `json get` carries the document's current `version` alongside the JSON (`-o json` shows it); `json set` and `json del` answer the new version (`json del` at `$` answers none, since the key is gone). Use that version to drive CAS on subsequent writes. A path with nothing at it is not found (exit 1); a key whose value isn't JSON is refused with `wrong_type`. The JSON ops don't run inside transactions.
 
 ### Recipe: status enrichment
 
 ```bash
 flo kv set order:42 '{"id":42,"items":3,"status":"new"}'
-flo kv jset order:42 '"shipped"' --path '$.status'
-flo kv jget order:42 --path '$.status'      # → "shipped"
+flo kv json set order:42 '"shipped"' --path '$.status'
+flo kv json get order:42 --path '$.status'      # → "shipped"
 ```
 
-The `jset` is a single Raft entry; concurrent writers updating different fields on the same document still each succeed atomically (last writer wins per field).
+The `json set` is a single Raft entry; concurrent writers updating different fields on the same document still each succeed atomically (last writer wins per field).
 
 ## Transactions
 
@@ -408,31 +407,31 @@ Per-shard transactions buffer multiple writes on a single pinned partition and c
 
 | Op | Wire | Purpose |
 |----|------|---------|
-| `kv begin -r <routing-key>` | `0x110` | Open a new transaction. Returns a `txn_id` and the partition's `pinned_hash`. |
-| `kv commit <txn-id>` | `0x111` | Apply all buffered ops atomically. Returns the op count and the `commit_index`. |
-| `kv rollback <txn-id>` | `0x112` | Discard buffered ops. A transaction that isn't open (already committed, rolled back or dropped as idle) is refused with `no_such_transaction`. |
+| `kv txn begin <routing-key>` | `0x110` | Open a new transaction. Returns its id (`txn`) and the partition's routing hash (`pinned`). |
+| `kv txn commit <txn-id>` | `0x111` | Apply all buffered ops atomically. Returns the op count and the `commit_index`. |
+| `kv txn rollback <txn-id>` | `0x112` | Discard buffered ops. A transaction that isn't open (already committed, rolled back or dropped as idle) is refused with `no_such_transaction`. |
 
-Inside a transaction, `set`, `get`, `delete`, `incr`, `expire` and `exists` accept a `--txn <id>` flag; writes are buffered until commit. **Reads inside the transaction see the buffered writes.** `list`, `mget`, `history` and the JSON ops take no transaction.
+Inside a transaction, `set`, `get`, `delete`, `incr`, `expire` and `exists` accept a `--txn <id>` flag; writes are buffered until commit. **Reads inside the transaction see the buffered writes.** `scan`, `mget`, `history` and the JSON ops take no transaction.
 
-**Server caps**: 256 ops per transaction, 1 MiB total payload, 1024 open transactions per shard (past that, `begin` is refused with `too_many_transactions`).
+**Server caps**: 256 ops per transaction, 1 MiB total payload, 1024 open transactions per shard (past that, `txn begin` is refused with `too_many_transactions`).
 
 ```bash
-# Open (prints txn_id=<id> pinned_hash=<hash>), write, commit
-TXN=$(flo kv begin -r user:42 | sed 's/txn_id=\([0-9]*\).*/\1/')
+# Open (prints txn: <id> and pinned: <hash>), write, commit
+TXN=$(flo kv txn begin user:42 | sed -n 's/^txn: //p')
 flo kv set user:42:name "Jane"   -r user:42 --txn $TXN
 flo kv incr user:42:visits       -r user:42 --txn $TXN
 flo kv set user:42:last_seen "$(date -u +%s)" -r user:42 --txn $TXN
-flo kv commit $TXN               # → OK ops=3 commit_index=N
+flo kv txn commit $TXN           # → commit_index: N, ops: 3
 ```
 
-Transactions survive across stateless connections — they are owned by `txn_id`, not by the TCP connection. So a transaction that goes **30 seconds without a request** is dropped with its buffered ops, freeing its slot when a client crashes before commit; any request in it, even one refused, counts as use. A later request on a dropped transaction is refused with `no_such_transaction`, and nothing of it is written. `flo_kv_txns_reaped_total{shard_id}` counts the drops.
+Transactions survive across stateless connections — they are owned by their id, not by the TCP connection. So a transaction that goes **30 seconds without a request** is dropped with its buffered ops, freeing its slot when a client crashes before commit; any request in it, even one refused, counts as use. A later request on a dropped transaction is refused with `no_such_transaction`, and nothing of it is written. `flo_kv_txns_reaped_total{shard_id}` counts the drops.
 
 ### When to use transactions vs. JSON or workflows
 
 | Pattern | Use |
 |---------|-----|
 | Atomic update of 2–10 related keys on the same partition | **Transaction** |
-| Atomic update of fields inside one document | [`kv jset`](#json-paths) |
+| Atomic update of fields inside one document | [`kv json set`](#json-paths) |
 | Atomic counter increment | [`kv incr`](#counters) |
 | Multi-step business process across shards / external systems | [Workflow](/orchestration/workflows) |
 
