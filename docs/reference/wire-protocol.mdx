@@ -58,7 +58,7 @@ The body is the op's fields, in order. A field that may be left out is a presenc
 
 The key is the envelope's key, except: `kv_scan`'s is the prefix to list (empty for every key); `kv_begin_txn`'s is the routing key the transaction pins, and may not be empty; `kv_mget`, `kv_commit_txn` and `kv_rollback_txn` take an empty key.
 
-`kv_scan` pages across every shard: `cursor` is the previous page's, unchanged. `kv_mget` answers as many keys as fit one response; `next`, when present, is the index of the first key not answered, so the client asks again from there. With `routing_key`, every key is looked up on that routing key's shard, where keys written with it live; without, each key is looked up on its own. Deleting a missing key isn't an error: it answers `existed` false. `kv_incr` on a value that isn't an 8-byte counter, and the JSON ops on a value that isn't JSON, are refused `bad_request` with `wrong_type`.
+`kv_scan` pages across every shard: `cursor` is the previous page's, unchanged. `kv_mget` answers as many keys as fit one response; `next`, when present, is the index of the first key not answered, so the client asks again from there. With `routing_key`, the request is answered on that routing key's shard, where keys written with it live; without, each key is looked up on the shard that owns it. Deleting a missing key isn't an error: it answers `existed` false. `kv_incr` on a value that isn't an 8-byte counter, and the JSON ops on a value that isn't JSON, are refused `bad_request` with `wrong_type`.
 
 `wait_for` exists answers at once if the key exists, else when it's written; change answers the key's next version. Either answers not found when the wait ends with the key absent, and change answers the value still there.
 

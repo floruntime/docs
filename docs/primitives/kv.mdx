@@ -99,7 +99,7 @@ flo kv mget user:1 user:2 --output json
 flo kv mget user:42:name user:42:visits -r user:42   # keys written with -r user:42
 ```
 
-Keys written with a routing key live on its shard: read them with the same routing key, which applies to every key in the call.
+Keys written with a routing key live on its shard: read them with the same routing key, which applies to every key in the call. An mget reads each key as it stands when it gets there: it isn't one snapshot across shards.
 
 | Flag | Description |
 |------|-------------|
