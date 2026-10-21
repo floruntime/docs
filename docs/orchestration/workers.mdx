@@ -92,9 +92,11 @@ Status transitions:
                  │
                  ├── drain ──▸ draining ──▸ deregister
                  │
-                 └── 90s no heartbeat ──▸ unhealthy ──▸ 10 min no heartbeat ──▸ (removed)
+                 └── 90s no heartbeat ──▸ unhealthy
                                               │
                                               └── heartbeat or register ──▸ active
+
+  any status, 10 min since the last heartbeat ──▸ (removed)
 ```
 
 ## Action Workers
@@ -656,7 +658,7 @@ Each worker registers a list of **processes** — the specific actions or stream
 
 ### Health Monitoring
 
-Each shard checks its workers once a second. A worker that hasn't sent a heartbeat in `heartbeat_timeout_ms` (**90 seconds**) is marked `unhealthy`: its `action_await` is refused with reason `worker_unhealthy`, including one already waiting, until it sends a heartbeat or registers again, either of which makes it `active`. A worker silent for `remove_after_ms` (**10 minutes**), draining or not, is removed, so workers that died without deregistering don't pile up. A draining worker's `action_await` is refused with reason `worker_draining`.
+Each shard checks its workers once a second. A worker that hasn't sent a heartbeat in `heartbeat_timeout_ms` (**90 seconds**) is marked `unhealthy`: its `action_await` is refused with reason `worker_unhealthy` until it sends a heartbeat or registers again, either of which makes it `active`. An await it parked earlier is refused the same way when a run arrives for it, or times out empty if none does. A worker silent for `remove_after_ms` (**10 minutes** since its last heartbeat, whatever its status, draining included) is removed, so workers that died without deregistering don't pile up. After that its heartbeats are answered `worker not found`, and it must register again to be listed, labelled or drained. A draining worker's `action_await` is refused with reason `worker_draining`.
 
 A worker that never registered can still await tasks; it has no labels and can't be drained.
 

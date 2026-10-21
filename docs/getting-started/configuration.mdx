@@ -188,7 +188,10 @@ the only keys `[cluster]` reads. See [Clustering](/deployment/clustering).
 # remove_after_ms = 600000       # silent this long, a worker is removed; at least heartbeat_timeout_ms
 ```
 
-The SDKs heartbeat every 30 seconds, so the default allows three missed beats.
+The SDKs heartbeat every 30 seconds by default, so the default allows three
+missed beats. Keep `heartbeat_timeout_ms` above your workers' heartbeat
+interval: a worker with heartbeats turned off (for example the JavaScript SDK's
+`heartbeatIntervalMs: 0`) is refused work once the timeout passes.
 A heartbeat or a fresh registration makes an unhealthy worker active again.
 See [Workers](/orchestration/workers#health-monitoring).
 
