@@ -775,7 +775,7 @@ The job format reserves these for event time, time windows and stateful operator
 
 These work today and will be refused by a later release, with the edit to make:
 
-- `partitions` on a stream source: remove it; a job reads every partition.
+- `partitions: all` on a stream source: remove it; a job reads every partition.
 - `poll_interval_ms` on a stream source: remove it; a job will read as records arrive.
 - `window_size` on a count window: use `window_count`.
 
