@@ -168,6 +168,8 @@ The status says whether to retry; the reason says what happened; `ran` says whet
 | `24` | `wrong_type` | The key's value isn't what the op works on: a counter for `kv_incr`, JSON for the JSON ops. |
 | `25` | `too_many_transactions` | The shard holds as many open transactions as it may. |
 | `26` | `stale_report` | An action complete or fail for a run that has moved on: another worker holds it, or it finished with another outcome. The report was dropped; resending it is refused the same way. |
+| `27` | `worker_unhealthy` | The worker missed its heartbeats and gets no work until it sends one or registers again. |
+| `28` | `worker_draining` | The worker is draining and gets no new work. |
 
 The reasons are part of the op table, so a client and server that agree on the table hash agree on this list.
 

@@ -180,6 +180,18 @@ reports which applies.
 half and all of it is replaced, heartbeats go out at a sixth of it. These are
 the only keys `[cluster]` reads. See [Clustering](/deployment/clustering).
 
+### `[workers]`
+
+```toml
+[workers]
+# heartbeat_timeout_ms = 90000   # silent this long, a worker is unhealthy and gets no work; minimum 1000
+# remove_after_ms = 600000       # silent this long, a worker is removed; at least heartbeat_timeout_ms
+```
+
+The SDKs heartbeat every 30 seconds, so the default allows three missed beats.
+A heartbeat or a fresh registration makes an unhealthy worker active again.
+See [Workers](/orchestration/workers#health-monitoring).
+
 ### Removed settings
 
 These are refused at start, with the reason. Remove them from `flo.toml`.
