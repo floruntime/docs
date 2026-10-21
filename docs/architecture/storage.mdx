@@ -1,6 +1,6 @@
 ---
 title: Storage Internals
-lede: How Flo stores data — the Unified Append Log, projections, snapshots, and recovery.
+lede: How Flo stores data — the Unified Append Log, projections, and recovery.
 ---
 
 ## Philosophy: The Log Is the Database
@@ -109,59 +109,26 @@ The projection router owns the three in-memory projections:
 
 Every other type — stream appends, trims and deletes, consumer-group commits, namespaces, actions, workflows, processing jobs — has one registered applier in its subsystem, and an entry type may have one or the other, never both; the server refuses to start otherwise. Raft's own control entries (`raft_noop`, `raft_config`, `raft_snapshot`) belong to the consensus layer and have no applier. Blocking reads wake on the apply, not on the request that caused it.
 
-## Snapshots
+## No Snapshots Yet
 
-Projections live in RAM. Without snapshots, recovery requires replaying the entire UAL from the beginning.
-
-### Snapshot Format (`.fsnap`)
-
-```
-┌─────────────────────────────────┐
-│ Header (64 bytes)               │
-│   magic: "FLO_SNP\0"           │
-│   ual_index (snapshot point)    │
-│   raft_term, section_count      │
-├─────────────────────────────────┤
-│ Section: KV (type=0x01)         │
-│ Section: Queue (type=0x02)      │
-│ Section: TS (type=0x03)         │
-│ Section: Stream (type=0x04)     │
-├─────────────────────────────────┤
-│ Footer (16 bytes)               │
-│   crc32c, magic: "FLO_SNE"     │
-└─────────────────────────────────┘
-```
-
-### Lifecycle
-
-1. Serialize all four projections at the current `applied_index`
-2. Write to `.fsnap.tmp`
-3. `fdatasync` the temp file
-4. Atomic rename `.fsnap.tmp` → `.fsnap`
-5. Update `MANIFEST`
-6. Old UAL segments with indices ≤ `snapshot_index` can now be compacted
-
-The atomic rename guarantees crash safety — if the process crashes before the rename, the previous snapshot remains valid.
+Projections live in RAM, and nothing writes a snapshot of them yet. The log is never compacted: every segment from index 1 stays on disk, and a restart replays all of them. A new member is replicated the whole log from index 1. Snapshots and compaction are planned.
 
 ### Crash Safety
 
 | Scenario | What You Lose | Why It's OK |
 |----------|--------------|-------------|
 | Crash during UAL append | The uncommitted entry | Wasn't acknowledged to client |
-| Crash during snapshot write | The in-progress snapshot | Previous snapshot still valid |
-| Crash after snapshot, before compaction | Nothing | Snapshot valid, extra UAL entries harmless |
 | Power loss (no fsync) | At most ~1ms of entries | Bounded by group commit interval |
 
 ## Recovery
 
-When a node restarts, each partition recovers:
+When a node restarts, each shard:
 
-1. **Load snapshot** — read MANIFEST, validate CRC, deserialize all projections
-2. **Open UAL** — discover warm segments on disk
-3. **Replay** — feed UAL entries from `snapshot_index + 1` through the one apply path (the same code a live write and a replicated entry take)
-4. **Ready for traffic**
+1. **Opens the log** — finds its segments in `segs/`; a `.flseg.tmp` is a flush a crash cut short and is discarded
+2. **Replays** — feeds every entry from index 1 through the one apply path (the same code a live write and a replicated entry take), rebuilding the Raft log from the same pass
+3. **Is ready for traffic**
 
-If no snapshot exists, recovery replays the entire UAL from the first segment … slow, but correct.
+A segment that won't read, or a hole in the log, is damage: the shard stops replaying there and goes offline, naming it, rather than serving a state with entries missing.
 
 ## Directory Layout
 
@@ -169,20 +136,14 @@ If no snapshot exists, recovery replays the entire UAL from the first segment �
 {data_dir}/
 ├── SYSTEM                              # Topology lock (shards, partitions, version)
 ├── 00000/                              # Shard 0 (zero-padded 5 digits)
-│   ├── MANIFEST                        # Latest snapshot ref
 │   ├── HARDSTATE                       # Raft node id, current term, vote (28 bytes)
 │   ├── segs/
 │   │   ├── 0000000001.flseg            # UAL segment (10-digit zero-padded first index)
 │   │   ├── 0000000257.flseg
 │   │   └── *.flseg.tmp                 # Transient (in-flight writes only)
-│   ├── snaps/
-│   │   ├── 0000001000-1709234567.fsnap # Snapshot at UAL index 1000
-│   │   └── *.fsnap.tmp                 # Transient (in-flight writes only)
 ├── 00001/
-│   ├── MANIFEST
 │   ├── HARDSTATE
-│   ├── segs/
-│   └── snaps/
+│   └── segs/
 └── ...{shard_count - 1}/
 ```
 
@@ -199,10 +160,6 @@ Written once on first boot. If `shards` or `partitions` don't match on restart, 
 }
 ```
 
-### MANIFEST
-
-One per shard — a JSON file naming the latest snapshot. No per-directory manifests to coordinate.
-
 ### HARDSTATE
 
 One per shard — a fixed 28-byte, CRC-protected record of the node's identity and its Raft hard state: node id, current term, and the vote cast in that term. It is rewritten (`.tmp` → `fsync` → rename) before the node grants a vote or adopts a new term, never on the write path. On restart the node resumes one term past the stored one, so a node can neither vote twice in a term nor re-enter a term it already left. The stored node id also fixes the node's cluster identity: once written, it survives restarts and port changes, and a configured `[cluster] node_id` that disagrees with it is refused at startup with `NodeIdMismatch`.
@@ -211,4 +168,4 @@ The Raft log itself is the segment files — index 1 (the first leadership no-op
 
 ### Atomic Writes
 
-Segments, snapshots and `HARDSTATE` are written atomically via `.tmp` → `fdatasync` → rename. If the process crashes before the rename, the previous file remains valid.
+Segments and `HARDSTATE` are written atomically via `.tmp` → `fdatasync` → rename. If the process crashes before the rename, the previous file remains valid.
