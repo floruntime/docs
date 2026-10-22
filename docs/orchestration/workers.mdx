@@ -8,7 +8,7 @@ Workers are **long-running processes** that connect to Flo and execute tasks. Th
 - **Action workers** — pull action tasks from a queue (long-polling), execute a handler, and report results. Used for durable task processing with retries, timeouts, and dead-letter routing.
 - **Stream workers** — consume records from a [stream](/primitives/streams/) via consumer groups, process each record, and auto-ack or nack. Used for continuous event processing.
 
-Both worker types register themselves in the **worker registry**, send periodic heartbeats, report load metrics, and support graceful drain. The server tracks each worker's health and can mark stale workers as unhealthy after 90 seconds of silence.
+Both worker types register themselves in the **worker registry**, send periodic heartbeats, report load metrics, and support graceful drain. The server marks a worker silent for 90 seconds unhealthy, and removes one silent for 10 minutes.
 
 ## Worker Types
 
@@ -50,7 +50,7 @@ Re-registering the same worker ID replaces the previous registration.
 
 Workers send a heartbeat every **30 seconds** (configurable). The heartbeat carries the worker's `current_load` (number of in-flight tasks). The server responds with the worker's current status — if the server returns `draining`, the SDK stops accepting new tasks.
 
-If a worker misses heartbeats for **90 seconds**, the server marks it as `unhealthy`.
+If a worker misses heartbeats for **90 seconds**, the server marks it `unhealthy` and gives it no work; after **10 minutes** of silence it removes it. Both are set in [`[workers]`](/getting-started/configuration#workers).
 
 ### 3. Process
 
@@ -81,7 +81,7 @@ Removes the worker from the registry entirely. SDKs call deregister automaticall
 | `active` | 0 | Healthy, processing or ready for tasks |
 | `idle` | 1 | Connected, no current tasks |
 | `draining` | 2 | Finishing current work, accepting nothing new |
-| `unhealthy` | 3 | No heartbeat for 90+ seconds |
+| `unhealthy` | 3 | No heartbeat for 90+ seconds; given no work |
 
 Status transitions:
 
@@ -94,7 +94,9 @@ Status transitions:
                  │
                  └── 90s no heartbeat ──▸ unhealthy
                                               │
-                                              └── heartbeat ──▸ active
+                                              └── heartbeat or register ──▸ active
+
+  any status, 10 min since the last heartbeat ──▸ (removed)
 ```
 
 ## Action Workers
@@ -486,7 +488,7 @@ The `concurrency` setting controls how many tasks a worker processes in parallel
 | **JavaScript** | `Promise` concurrency with semaphore | 10 |
 | **Zig** | Sequential (single-threaded polling loop) | 10 |
 
-The worker reports its `current_load` (number of in-flight tasks) in each heartbeat so the server can make load-aware routing decisions.
+The worker reports its `current_load` (number of in-flight tasks) in each heartbeat, and the worker list shows it. Tasks aren't routed by it.
 
 ## Stream Workers
 
@@ -633,7 +635,7 @@ Each `WorkerRecord` stores:
 | `status` | enum | `active`, `idle`, `draining`, `unhealthy` |
 | `namespace` | string | Namespace the worker belongs to |
 | `max_concurrency` | u32 | Maximum parallel tasks |
-| `current_load` | u32 | Current in-flight task count (from heartbeats) |
+| `current_load` | u32 | In-flight tasks, as the worker last reported in a heartbeat; 0 once unhealthy |
 | `tasks_completed` | u64 | Lifetime completed count |
 | `tasks_failed` | u64 | Lifetime failed count |
 | `registered_at` | timestamp | When the worker first registered |
@@ -656,12 +658,14 @@ Each worker registers a list of **processes** — the specific actions or stream
 
 ### Health Monitoring
 
-The server runs a periodic health check (on each shard tick). Workers that haven't sent a heartbeat in **90 seconds** are marked `unhealthy`. Unhealthy workers are not removed — they can recover by sending a heartbeat, which resets their status to `active`.
+Each shard checks its workers once a second. A worker that hasn't sent a heartbeat in `heartbeat_timeout_ms` (**90 seconds**) is marked `unhealthy`: its `action_await` is refused with reason `worker_unhealthy` until it sends a heartbeat or registers again, either of which makes it `active`. An await it parked earlier is refused the same way when a run arrives for it, or times out empty if none does. A worker silent for `remove_after_ms` (**10 minutes** since its last heartbeat, whatever its status, draining included) is removed, so workers that died without deregistering don't pile up. After that its heartbeats are answered `worker not found`, and it must register again to be listed, labelled or drained. A draining worker's `action_await` is refused with reason `worker_draining`.
+
+A worker that never registered can still await tasks; it has no labels and can't be drained.
 
 ### Limits
 
 - Maximum **10,000 workers** per shard
-- Heartbeat timeout: **90 seconds**
+- Heartbeat timeout: **90 seconds**; removal after **10 minutes** (both in `[workers]`)
 - Default heartbeat interval: **30 seconds** (SDK-side)
 
 ## Configuration Reference
