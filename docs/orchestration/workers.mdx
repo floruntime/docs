@@ -48,7 +48,7 @@ Re-registering the same worker ID replaces the previous registration.
 
 ### 2. Heartbeat
 
-Workers send a heartbeat every **30 seconds** (configurable). The heartbeat carries the worker's `current_load` (number of in-flight tasks). The server responds with the worker's current status — if the server returns `draining`, the SDK stops accepting new tasks.
+Workers send a heartbeat every **30 seconds**: fixed in Go and Python, set with `heartbeatIntervalMs` in JS and `heartbeat_interval_ms` in Zig. The heartbeat carries the worker's `current_load` (number of in-flight tasks). The server responds with the worker's current status — if the server returns `draining`, the SDK stops accepting new tasks.
 
 If a worker misses heartbeats for **90 seconds**, the server marks it `unhealthy` and gives it no work; after **10 minutes** of silence it removes it. Both are set in [`[workers]`](/getting-started/configuration#workers).
 
@@ -486,7 +486,7 @@ The `concurrency` setting controls how many tasks a worker processes in parallel
 | **Go** | Goroutines behind a semaphore channel | 10 |
 | **Python** | `asyncio` tasks with semaphore | 10 |
 | **JavaScript** | `Promise` concurrency with semaphore | 10 |
-| **Zig** | Sequential (single-threaded polling loop) | 10 |
+| **Zig** | One polling loop; above 1, a thread per slot, each with its own connection | 1 |
 
 The worker reports its `current_load` (number of in-flight tasks) in each heartbeat, and the worker list shows it. Tasks aren't routed by it.
 
@@ -613,7 +613,7 @@ fn processRecord(ctx: *flo.StreamContext) anyerror!void {
 | `group` | `"default"` | Consumer group name |
 | `consumer` | *(auto: worker_id)* | Consumer name within the group |
 | `worker_id` | *(auto: hostname-hex)* | Unique worker identifier |
-| `concurrency` | 10 | Maximum parallel record handlers |
+| `concurrency` | 10 (Zig: 1) | Maximum parallel record handlers |
 | `batch_size` | 10 | Records to read per poll |
 | `block_ms` | 30,000 | Blocking read timeout (ms) |
 | `message_timeout` | 5 minutes | Maximum time for a handler to process one record |
@@ -676,7 +676,7 @@ A worker that never registered can still await tasks; it has no labels and can't
 |--------|----|---------|----|-----|---------|
 | Worker ID | `WorkerID` | `worker_id` | `workerId` | `worker_id` | hostname-random |
 | Machine ID | `MachineID` | `machine_id` | `machineId` | `machine_id` | hostname |
-| Concurrency | `Concurrency` | `concurrency` | `concurrency` | `concurrency` | 10 |
+| Concurrency | `Concurrency` | `concurrency` | `concurrency` | `concurrency` | 10 (Zig: 1) |
 | Action timeout | `ActionTimeout` | `action_timeout` | `actionTimeoutMs` | `action_timeout_ms` | 5 min |
 | Block timeout | `BlockMS` | `block_ms` | `blockMs` | `block_ms` | 30,000 ms |
 
@@ -688,7 +688,7 @@ A worker that never registered can still await tasks; it has no labels and can't
 | Group | `Group` | `group` | `group` | `group` | `"default"` |
 | Consumer | `Consumer` | `consumer` | `consumer` | `consumer` | worker_id |
 | Worker ID | `WorkerID` | `worker_id` | `workerId` | `worker_id` | hostname-random |
-| Concurrency | `Concurrency` | `concurrency` | `concurrency` | `concurrency` | 10 |
+| Concurrency | `Concurrency` | `concurrency` | `concurrency` | `concurrency` | 10 (Zig: 1) |
 | Batch size | `BatchSize` | `batch_size` | `batchSize` | `batch_size` | 10 |
 | Block timeout | `BlockMS` | `block_ms` | `blockMs` | `block_ms` | 30,000 ms |
 | Message timeout | `MessageTimeout` | — | — | — | 5 min |
