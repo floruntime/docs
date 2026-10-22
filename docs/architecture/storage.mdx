@@ -134,6 +134,7 @@ A segment that won't read, or a hole in the log, is damage: the shard stops repl
 
 ```
 {data_dir}/
+├── FORMAT                              # Data directory format (a number)
 ├── SYSTEM                              # Topology lock (shards, partitions, version)
 ├── 00000/                              # Shard 0 (zero-padded 5 digits)
 │   ├── HARDSTATE                       # Raft node id, current term, vote (28 bytes)
@@ -146,6 +147,16 @@ A segment that won't read, or a hole in the log, is damage: the shard stops repl
 │   └── segs/
 └── ...{shard_count - 1}/
 ```
+
+### FORMAT
+
+One number and a newline: the layout the directory is written in, `1` today. A server starting on a directory without it writes it. A server, `flo server inspect` or `flo server force-members` that finds a newer format than it reads refuses, naming it:
+
+```
+data directory format 2, this binary reads up to 1 (/var/lib/flo/FORMAT); start a flo that reads format 2
+```
+
+A file that holds anything else is refused the same way. Downgrading to a release that reads an older format isn't supported.
 
 ### SYSTEM
 
