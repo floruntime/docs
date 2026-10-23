@@ -10,10 +10,6 @@ Workers are **long-running processes** that connect to Flo and execute tasks. Th
 
 Both worker types register themselves in the **worker registry**, send periodic heartbeats, report load metrics, and support graceful drain. The server marks a worker silent for 90 seconds unhealthy, and removes one silent for 10 minutes.
 
-:::note
-The Python SDK's stream worker doesn't register or heartbeat yet: it joins and leaves its consumer group only, so it doesn't appear in the worker list and can't be drained. Its action worker does both.
-:::
-
 ## Worker Types
 
 | Type | Purpose | Task Source | Completion |
@@ -21,7 +17,7 @@ The Python SDK's stream worker doesn't register or heartbeat yet: it joins and l
 | **Action** | Durable task execution | `action_await` long-poll | Explicit `complete` / `fail` |
 | **Stream** | Continuous event processing | `group_read` on stream | Auto-ack on success, auto-nack on error |
 
-Both types share the same registration, heartbeat, drain, and health-monitoring infrastructure (except Python's stream worker; see the note above).
+Both types share the same registration, heartbeat, drain, and health-monitoring infrastructure.
 
 ## Lifecycle
 
@@ -52,7 +48,7 @@ Re-registering the same worker ID replaces the previous registration.
 
 ### 2. Heartbeat
 
-Workers send a heartbeat every **30 seconds**: fixed in Go and Python, set with `heartbeatIntervalMs` in JS and `heartbeat_interval_ms` in Zig. The heartbeat carries the worker's `current_load` (number of in-flight tasks). The server responds with the worker's current status — if the server returns `draining`, the SDK stops accepting new tasks. (Python's action worker learns of a drain from its next await, which the server refuses with `worker_draining`.)
+Workers send a heartbeat every **30 seconds**: fixed in Go and Python, set with `heartbeatIntervalMs` in JS and `heartbeat_interval_ms` in Zig. The heartbeat carries the worker's `current_load` (number of in-flight tasks). The server responds with the worker's current status — if the server returns `draining`, the SDK stops accepting new tasks.
 
 If a worker misses heartbeats for **90 seconds**, the server marks it `unhealthy` and gives it no work; after **10 minutes** of silence it removes it. Both are set in [`[workers]`](/getting-started/configuration#workers).
 
