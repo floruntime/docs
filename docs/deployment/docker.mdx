@@ -226,6 +226,8 @@ The data directory structure:
 
 ```
 /data/flo/
+├── FORMAT          # the data directory's format
+├── SYSTEM          # its shard and partition counts
 └── 00000/          # one directory per shard
     ├── segs/       # the durable log
     └── HARDSTATE   # the node's id and its Raft term and vote
