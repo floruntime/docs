@@ -204,17 +204,23 @@ Scan returns names only; read values with `get` or `mget`. It walks **all shards
 ```bash
 flo kv history mykey
 flo kv history mykey --limit 5
+flo kv history mykey --before-version 40
 ```
 
-Returns previous values, newest first, each with its version and the time it was written in Unix milliseconds. History for a key with none returns not found (exit 1).
+Returns the key's versions, newest first, each with its version, the time it was written in Unix milliseconds, and whether it is a delete. History for a key with none returns not found (exit 1).
 
 | Flag | Description |
 |------|-------------|
 | `--limit <n>` / `-l` | Max entries, 1 to 65 (default: 10) |
+| `--before-version <v>` | Only versions older than `v` |
 | `-r <routing-key>` | Explicit shard routing key: give the one the key was written with |
 | `-n <namespace>` | Target namespace |
 
-Flo maintains a bounded version chain per key (default depth: 64). Oldest versions are evicted when the chain is full. Deletes create tombstone entries — prior versions remain queryable through history even after deletion.
+Each key keeps at most **64 older versions and at most 64 KiB of them**, each charged its value's bytes plus 64; the oldest go first while either bound is exceeded, and the newest older version is always kept, however large. So a key with small values keeps 64 versions, one with 4 KiB values about 15, and one large write can evict a key's whole small history. An oldest kept version above 1 means older ones were evicted.
+
+Deletes are versions too (`deleted: true`): a key's history survives its deletion, and its memory comes back only when the key is removed.
+
+One answer holds 256 KiB, so a history of large values can take several. An answer says `more` when older kept versions follow; ask again with `before_version` set to the last version it gave. The CLI does this itself up to `--limit`, and prints `more: true` (on stderr with `-o raw`) when versions remain beyond it.
 
 ## TTL (Time-to-Live)
 
@@ -821,7 +827,7 @@ The KV store is implemented as a **KV Projection** — a hash table with MVCC ve
 | Key bytes | Any except NUL (`0x00`), which is refused |
 | Max value size | ~256 KB |
 | Max namespace length | 63 bytes |
-| Version chain depth | 64 versions per key (oldest evicted) |
+| Version history per key | 64 older versions and 64 KiB of them, oldest evicted first; the newest older version is always kept |
 | Default list limit | 100 (pages of up to 1,024) |
 | Reserved key prefixes | `_action:`, `_worker:`, `_sys:`, `_internal:`, `_flo:` |
 
@@ -833,4 +839,4 @@ The KV store is implemented as a **KV Projection** — a hash table with MVCC ve
 
 **TTL enforcement**: Lazy — expired keys are detected at read time rather than proactively swept. This avoids background I/O for expiry.
 
-**Tombstones**: Deletes write a tombstone entry to the UAL. Prior versions remain in the version chain and are queryable via `history`. Tombstones are purged during compaction.
+**Tombstones**: Deletes write a tombstone entry to the UAL. Prior versions remain in the version history and are queryable via `history`. A tombstone and its history stay in memory until the key is removed; nothing purges them sooner.

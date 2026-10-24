@@ -379,7 +379,16 @@ Prefer a node-local collector or a sidecar over exposing the port directly.
 Metric families include server counters (`flo_commands_total`,
 `flo_bytes_received_total`, `flo_connections_current`, `flo_uptime_seconds`),
 per-shard series (`flo_shard_*`), per-stream / per-queue / per-KV-namespace
-counters, workflow and processing aggregates, and the peer link counters:
+counters, workflow and processing aggregates, and the peer link counters.
+
+Per-KV-namespace memory, each a lower bound on what the node holds:
+`flo_kv_bytes_stored` (keys and current values, tombstones and expired values
+included) and `flo_kv_history_bytes` (older versions, value bytes plus 64
+each), with `flo_kv_history_evicted_total` counting versions evicted since the
+process started, replay included. Every node reports its own full copy, so
+across a cluster take the `max` of these, not the `sum`.
+
+The peer link counters:
 
 | Metric | Description |
 |--------|-------------|

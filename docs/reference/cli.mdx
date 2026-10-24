@@ -272,9 +272,10 @@ flo kv history <key> [options]
 | Flag | Description |
 |------|-------------|
 | `-l, --limit <n>` | Most versions to show: 1 to 65, default 10 |
+| `--before-version <v>` | Only versions older than `v` |
 | `-r, --routing-key <key>` | Explicit shard routing key: give the one the key was written with |
 
-Each row is the version, the time it was written (`at_ms`, Unix milliseconds) and the value, under a header; `-o raw` leaves the header out.
+Each row is the version, the time it was written (`at_ms`, Unix milliseconds), whether it is a delete, and the value, under a header; `-o raw` leaves the header out. When one answer can't hold them all, the command asks again until it has shown `--limit` versions; if older ones remain it prints `more: true` last (on stderr with `-o raw`). `-o json` prints `{"versions": [...], "more": bool}`.
 
 ### `flo kv incr`
 
