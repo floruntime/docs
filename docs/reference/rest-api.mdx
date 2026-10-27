@@ -237,28 +237,36 @@ Namespace detail. Sub-collections: `GET /namespaces/:namespace/streams`, `/queue
 ]
 ```
 
-### `GET /api/v1/kv/namespaces/:namespace/keys?prefix=<p>&limit=<n>`
+### `GET /api/v1/kv/namespaces/:namespace/keys?prefix=<p>&limit=<n>&cursor=<c>`
 
-Scan keys. Returns `{ keys: [{ key, size, version }], count, has_more, cursor, namespace }` (here `version` is the entry LSN).
+A page of keys, with each one's size and MVCC version. A page holds at most 256 keys (`limit`, default 100). `prefix` is percent-encoded and may not hold a NUL. `cursor` is the hex `cursor` the page before gave; `has_more` is true until the last page, whose `cursor` is `null`.
+
+```json
+{ "keys": [{ "key": "user:42", "size": 128, "version": 3 }],
+  "has_more": false, "cursor": null, "count": 1, "namespace": "production" }
+```
 
 ### `GET /api/v1/kv/namespaces/:namespace/keys/:key`
 
 ```json
 {
-  "found": true, "key": "user:42", "namespace": "production",
-  "value": "...", "version": 3, "size": 128,
-  "updated_at": 1718900000000, "ttl_ms": null
+  "key": "user:42", "namespace": "production", "found": true,
+  "value": "...", "version": 3, "size": 128, "expires_at_ms": null
 }
 ```
 
-`version` here is the MVCC version count.
+`version` is the key's MVCC version. `expires_at_ms` is when its TTL runs out, in milliseconds since the epoch, or `null`. A key that isn't there, or was deleted, gives `{ "key", "namespace", "found": false }`.
 
-### `GET /api/v1/kv/namespaces/:namespace/keys/:key/history`
+### `GET /api/v1/kv/namespaces/:namespace/keys/:key/history?limit=<n>`
+
+The key's versions, newest first; `limit` defaults to 10. A deleted version is a `tombstone`.
 
 ```json
-{ "key": "user:42", "namespace": "production", "version_count": 3,
-  "versions": [{ "version": 3, "term": 1, "timestamp_ms": 1718900000000, "size": 128, "tombstone": false }] }
+{ "key": "user:42", "namespace": "production", "version_count": 1,
+  "versions": [{ "version": 3, "timestamp_ms": 1718900000000, "size": 128, "tombstone": false }] }
 ```
+
+A KV read the node doesn't answer in time gives `{ "error": "KV scan: the node didn't answer in time" }` (or `KV get`, `KV history`).
 
 ### `PUT /api/v1/kv/namespaces/:namespace/keys/:key`
 
@@ -436,22 +444,37 @@ Invoke (async). Body is the input JSON. Returns `{ ok, action, namespace, status
 
 ## Workers
 
-### `GET /api/v1/workers?namespace=<ns>`
+### `GET /api/v1/workers?namespace=<ns>&limit=<n>&cursor=<id>`
+
+A namespace's workers in id order, a page at a time. `limit` is at most 1024 (the default); `cursor` is the `cursor` the page before gave, percent-encoded. `has_more` is true until the last page, whose `cursor` is `null`.
 
 ```json
-[
-  { "worker_id": "worker-1", "status": "active", "worker_type": "action",
-    "namespace": "production", "machine_id": null, "current_load": 0,
-    "max_concurrent": 10, "tasks_completed": 6, "tasks_failed": 1,
-    "last_seen": 1718900000000, "registered_at": 1718900000000, "metadata": null,
-    "processes": [ { "name": "send-email", "kind": "action",
-                     "run_count": 6, "fail_count": 1, "last_run_at": 1718900009000 } ] }
-]
+{
+  "workers": [
+    { "worker_id": "worker-1", "status": "active", "worker_type": "action",
+      "namespace": "production", "machine_id": null, "current_load": 0,
+      "max_concurrent": 10, "tasks_completed": 6, "tasks_failed": 1,
+      "last_seen": 1718900000000, "registered_at": 1718900000000 }
+  ],
+  "has_more": false,
+  "cursor": null
+}
 ```
 
-### `GET /api/v1/workers/:id`
+A read the node doesn't answer in time gives `{ "error": "worker list: the node didn't answer in time" }`.
 
-Single worker detail (same shape).
+### `GET /api/v1/workers/:id?namespace=<ns>`
+
+One worker: the list's fields, plus its registration metadata and its processes.
+
+```json
+{ "worker_id": "worker-1", "status": "active", "worker_type": "action",
+  "namespace": "production", "machine_id": null, "current_load": 0,
+  "max_concurrent": 10, "tasks_completed": 6, "tasks_failed": 1,
+  "last_seen": 1718900000000, "registered_at": 1718900000000, "metadata": null,
+  "processes": [ { "name": "send-email", "kind": "action",
+                   "run_count": 6, "fail_count": 1, "last_run_at": 1718900009000 } ] }
+```
 
 ---
 
