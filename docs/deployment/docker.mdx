@@ -222,10 +222,28 @@ docker volume create flo-data
 docker run -v flo-data:/data/flo ghcr.io/floruntime/flo:latest
 ```
 
+:::note
+**Keep the data directory on a filesystem that enforces file locks.** A
+server holds an flock on `flo.lock` in its data directory, and that lock is
+what refuses a second server on the same directory. Two servers on one data
+directory lose data. Some filesystems ignore flock between processes, and on
+them nothing stops the second server:
+
+- **Docker Desktop bind mounts from a Mac** (`docker run -v ./data:/data/flo …`).
+  Use a named volume, as above.
+- **NFS mounted without locking** (`nolock`, or no lock daemon).
+- **NFS with `local_lock=flock`**: the lock holds on one host only, so a
+  server on another host can still start.
+
+flo warns at start when another process can take its lock. That covers the
+first two cases. It can't see the third.
+:::
+
 The data directory structure:
 
 ```
 /data/flo/
+├── flo.lock        # held by the running server
 ├── FORMAT          # the data directory's format
 ├── SYSTEM          # its shard and partition counts
 └── 00000/          # one directory per shard
