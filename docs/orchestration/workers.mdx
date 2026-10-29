@@ -46,11 +46,24 @@ The worker announces itself to the server with:
 
 Re-registering the same worker ID replaces the previous registration.
 
+A registration past a limit is refused `bad_request`, with `ran` = no, and the reason says which:
+
+| Limit | Reason |
+|-------|--------|
+| More than 1024 processes | `out_of_range` |
+| A process name longer than 4096 bytes, processes too long to list together, or a machine id longer than 255 bytes | `field_too_long` |
+
+The SDKs don't check these themselves; the server's refusal comes back as the error.
+
 ### 2. Heartbeat
 
 Workers send a heartbeat every **30 seconds**: fixed in Go and Python, set with `heartbeatIntervalMs` in JS and `heartbeat_interval_ms` in Zig. The heartbeat carries the worker's `current_load` (number of in-flight tasks). The server responds with the worker's current status — if the server returns `draining`, the SDK stops accepting new tasks.
 
 If a worker misses heartbeats for **90 seconds**, the server marks it `unhealthy` and gives it no work; after **10 minutes** of silence it removes it. Both are set in [`[workers]`](/getting-started/configuration#workers).
+
+### Halted shards
+
+If the worker's shard is [halted](/deployment/clustering#a-halted-shard), its registration, group join and polls are refused with reason `shard_halted`. Those calls are safe to repeat, so every SDK's workers keep trying instead of failing: from 100 ms apart up to 30 seconds apart, logging a warning with the halt reason each time. They resume by themselves once the shard is repaired, and stop or drain ends the wait. A worker started during a halt comes up the same way.
 
 ### 3. Process
 
@@ -643,6 +656,10 @@ Each `WorkerRecord` stores:
 | `machine_id` | string? | Host identifier for grouping |
 | `metadata` | JSON? | Arbitrary key-value data |
 | `processes` | array | Per-action or per-stream tracking (see below) |
+
+### Listing Workers
+
+The worker list pages through a namespace's workers in id order, up to 1024 a page. Give it an action name to list only the workers that run that action: `Action` on Go's `WorkerListOptions`, `action` in the JavaScript, Python and Zig options. Left empty, it lists every worker.
 
 ### Process Tracking
 
