@@ -421,6 +421,8 @@ Inside a transaction, `set`, `get`, `delete`, `incr`, `expire` and `exists` acce
 
 **Server caps**: 256 ops per transaction, 1 MiB total payload, 1024 open transactions per shard (past that, `txn begin` is refused with `too_many_transactions`).
 
+**A commit applies whole or not at all.** If one of its ops can't apply when the commit does (an `incr` on a value that isn't a counter, or one that would overflow; an `expire` of a key that's gone or past its TTL by then), the whole commit is refused with that op's reason and position, as in `the transaction's op 2: not found; nothing in the transaction applied`, and none of its writes apply. The status is that op's: `bad_request` (exit 3) for an `incr`, `not_found` (exit 1) for an `expire`.
+
 ```bash
 # Open (prints txn: <id> and pinned: <hash>), write, commit
 TXN=$(flo kv txn begin user:42 | sed -n 's/^txn: //p')
