@@ -523,8 +523,8 @@ The thresholds for spilling between tiers are configurable per server (hot buffe
 ## Durability
 
 - All appends are Raft-replicated before acknowledgment
-- Stream data, consumer group offsets, and pending state all survive server restarts
-- Consumer-group recovery is **at-least-once**: a group restores its ack-floor cursor across restart, so unacked and never-delivered records redeliver while acked records are skipped
+- Stream data survives server restarts, and so does each consumer group: its ack floor and its config, whether `group create` or a first `group read` made it
+- A group's pending list does not survive a restart yet. Recovery is **at-least-once**: the group resumes from its ack floor, so records delivered but not acked are delivered again, and acked records are skipped
 - Replay is deterministic — Stream IDs are anchored to the originating entry timestamp, so a record keeps the same ID when rebuilt from the log
 - After restart, new appends continue with monotonically increasing Stream IDs (no duplicates, no gaps)
 - Immediate consistency — a read right after restart returns all pre-restart data
