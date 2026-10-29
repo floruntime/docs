@@ -14,6 +14,8 @@ lede: Complete reference for the flo command-line interface.
 | `-v, --verbose` | Verbose output |
 | `-V, --version` | The release, such as `flo 0.2.0`, or `flo dev` for a development build. `flo version --verbose` adds the protocol version, op table hash and build. A server serves only clients built from its table; a mismatch exits 5 naming both tables. |
 
+`-e`, `-p`, `-n`, `-o` and `-v` mean the same thing on every command; no command reuses those letters for a flag of its own.
+
 ## Errors and exit codes
 
 A refused command prints `Error: <message> [<status>]`, or `[<status>/<reason>]` when the server names a [reason](/reference/wire-protocol#refusals), e.g. `[bad_request/out_of_range]`, and exits:
@@ -76,7 +78,7 @@ flo server start [options]
 | `--log-format <format>` | `text` or `json` | — |
 | `--cluster` | Start as the first member of a cluster; leads alone until others join | — |
 | `-j, --join <host:port,...>` | Join members that exist, by their peer port (`listen_port + 500`) | — |
-| `-n, --node-id <id>` | Unique node identifier | derived from `hostname:port` |
+| `--node-id <id>` | Unique node identifier | derived from `hostname:port` |
 | `--raft-port <port>` | Peer port, with `--cluster` or `--join` | `listen_port + 500` |
 | `--metrics-port <port>` | Metrics HTTP port | `listen_port + 1` |
 | `--dashboard-port <port>` | Dashboard HTTP port | `listen_port + 2` |
@@ -320,7 +322,7 @@ flo kv exists <key> [-r <routing-key>] [-t <txn-id>]
 
 ### `flo kv json get` / `set` / `del`
 
-Read and write inside a JSON document, using a small JSONPath subset (`$`, `.field`, `[index]`). `--path` (`-p`) defaults to `$`, the whole document.
+Read and write inside a JSON document, using a small JSONPath subset (`$`, `.field`, `[index]`). `--path` defaults to `$`, the whole document.
 
 ```bash
 flo kv json set <key> <document> [--path <path>]
@@ -369,7 +371,7 @@ flo stream create <name> [options]
 
 | Flag | Description |
 |------|-------------|
-| `--partitions`, `-p <n>` | Number of partitions (default 1) |
+| `--partitions <n>` | Number of partitions (default 1) |
 | `--retention`, `-r <hours>` | Keep records this many hours (0 = no age bound) |
 | `--retention-count <n>` | Keep at most this many records (0 = no count bound) |
 
@@ -400,7 +402,7 @@ flo stream read <stream> [options]
 | Flag | Description |
 |------|-------------|
 | `--start`, `-s <id>` | Read records after this StreamID (exclusive; `0-0` is the beginning, `$` the latest) |
-| `--end`, `-e <id>` | Last StreamID to read (inclusive) |
+| `--end <id>` | Last StreamID to read (inclusive) |
 | `--limit`, `-l <n>` | Maximum records (default 10); a larger append comes back whole |
 | `--block`, `-b <ms>` | Wait for new records (at most 300000 ms, 5 minutes; 0 does not wait; a longer wait is refused) |
 | `--follow`, `-f` | Keep reading new records, like `tail -f` |
@@ -560,7 +562,7 @@ flo action register <name> [options]
 
 | Flag | Description |
 |------|-------------|
-| `--owner`, `-o <name>` | Owner or team name |
+| `--owner <name>` | Owner or team name |
 | `--timeout <ms>` | Execution timeout (default 30000) |
 | `--retries`, `-r <n>` | Maximum retry attempts (default 0) |
 
