@@ -252,6 +252,33 @@ status` and its log both say what to do: stop it, move its data directory
 aside, and start it again with `--join` naming a live member — not
 `--cluster`. It rejoins with no log, as below.
 
+### A halted shard
+
+A shard that reaches a log entry every replica fails to apply the same way
+**halts** at it, on every replica together. It applies nothing past that
+entry and takes no writes until the entry is repaired, but it still serves
+reads. Restarting doesn't help: a halted shard comes up halted. The node
+stays ready, since a 503 would pull the whole group; `/status` shows the
+shard as `halted` with the reason and `halt_index`, the entry it halted at,
+and the log says the same. Flo has no command to repair the entry yet.
+
+| Answer | Meaning | What to do |
+|--------|---------|------------|
+| a read, marked `stale` | served from the state just before the halting entry; a not-found is marked too | use it knowing it's stale |
+| `unavailable: shard N is halted at …; this request was not run` (reason `shard_halted`) | a write sent to the halted shard | don't retry: it fails the same way until the repair |
+| `outcome_pending` (reason `shard_halted`) | the write committed at or past the halting entry but hasn't applied | don't resend it unchanged; see below |
+
+`outcome_pending`'s message says which case it is. A write past the halt
+applies when the shard resumes. The write the shard halted at never runs: a
+repair skips that entry. Resending either unchanged would write it twice, or
+halt the shard again. The CLI exits 6 on `outcome_pending` and 3 on the
+refused write; the SDKs never retry either. An SDK worker's registration,
+group join and polls keep backing off on `shard_halted` instead, up to about
+30 seconds apart, and resume by themselves once the shard is repaired.
+
+Membership changes still go through, so a halted group can replace a dead
+node.
+
 ### A member that lost its data
 
 Start it with `--join`, never with `--cluster`. A member that starts with

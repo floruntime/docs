@@ -463,6 +463,10 @@ In a multi-node cluster:
 - **Node failures** are tolerated as long as a majority (quorum) of nodes remain healthy. A 3-node cluster survives 1 node failure.
 - **CAS and conditional writes** are consistent across the cluster — the version check happens at the leader during Raft proposal.
 
+### Reads from a halted shard
+
+A [halted shard](/deployment/clustering#a-halted-shard) refuses writes but still answers reads, from the state just before the entry it halted at, and marks each answer stale. Every KV read result in the SDKs carries it as `stale` (`Stale` in Go): get, mget, scan, history, exists and JSON get. A key missing on a stale answer may only be missing as of the halt, so `get` and JSON get report it as a distinct error rather than as absent: `flo.ErrStaleNotFound` in Go (`flo.IsStale` and `flo.IsNotFound` both hold), `StaleNotFoundError` in JavaScript and Python (a `NotFoundError` with `stale` true), `error.StaleNotFound` in Zig. A plain missing key is reported as before. The CLI doesn't show the mark, and the SDKs don't yet carry it on reads outside KV.
+
 ## SDK Examples
 
 <Tabs>
