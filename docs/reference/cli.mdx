@@ -55,7 +55,7 @@ flo ns info <name>
 none. `flo ns ls` lists every name in name order.
 
 Deleting a namespace isn't supported yet: `flo ns delete` is refused and
-removes nothing. A namespace's data lives on every
+removes nothing. It no longer takes `--force`, which had no effect. A namespace's data lives on every
 shard, and its name can't yet be retired so that a later create doesn't
 inherit it.
 
