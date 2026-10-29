@@ -150,13 +150,15 @@ A segment that won't read, or a hole in the log, is damage: the shard stops repl
 
 ### FORMAT
 
-One number and a newline: the layout the directory is written in, `1` today. A server starting on a directory without it writes it. A server, `flo server inspect` or `flo server force-members` that finds a newer format than it reads refuses, naming it:
+One number and a newline: the layout the directory is written in, `1` today. It is checked before anything else in the directory is read, and a binary reads only its own format. There is no migration.
 
-```
-data directory format 2, this binary reads up to 1 (/var/lib/flo/FORMAT); start a flo that reads format 2
-```
+- **An empty directory** gets `FORMAT` first. Empty allows `lost+found`, dotfiles, and the lock, PID file and admin socket a server leaves.
+- **A newer format** is refused: `data directory format 2, this binary reads format 1 (/var/lib/flo/FORMAT); start a flo that reads format 2`.
+- **An older format, or a Flo directory without `FORMAT`** (one with `SYSTEM` or a shard directory) is refused: `data directory /var/lib/flo was written by an older Flo (before format gating); this server needs format 1. There is no migration: run flo server wipe --data-dir /var/lib/flo`. Empty it with [`flo server wipe`](/reference/cli#flo-server-wipe), or start the older release.
+- **A non-empty directory with no Flo data** is refused, without suggesting a wipe, since it may be something else's: `/var/lib is not a Flo data directory and isn't empty (it holds postgresql); check data_dir`.
+- **A file that isn't a format number** is refused, naming what it holds.
 
-A file that holds anything else is refused the same way. Downgrading to a release that reads an older format isn't supported.
+The server, `flo server inspect`, `force-members`, `repair skip` and `salvage` refuse these alike, and exit with code 78. Keep config files and logs outside the data directory.
 
 ### SYSTEM
 
