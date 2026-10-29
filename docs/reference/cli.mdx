@@ -157,7 +157,7 @@ flo server repair skip --data-dir /var/lib/flo --shard 3 --index 18234 --reason 
 
 Empty a stopped node's data directory: for one written by an older Flo, which a server refuses (there is no migration), or to start over. It deletes everything in the directory but keeps the directory, so it works on a mount point. Keys, streams, queues, runs and the cluster membership are gone for good. Without `--yes` it lists what it would delete and stops.
 
-It refuses a running server's directory, and one that holds no Flo data (no `FORMAT`, `SYSTEM` or shard directory). It never follows a symlink: a link in the directory is removed, not what it points at. It keeps `lost+found` and dotfiles.
+It needs the directory named: `--data-dir`, or `-c` with a config that sets `data_dir`. It never falls back to a default directory. It refuses a running server's directory, one with another file system mounted inside it, and one that holds no Flo data: no `FORMAT` that parses, no `SYSTEM` that loads, no shard directory holding a log. It names any entries Flo never writes before it deletes them. It never follows a symlink: a link in the directory is removed, not what it points at. It keeps `lost+found` and dotfiles. A wipe cut short leaves the shard directories, which a server refuses, naming wipe; run wipe again to finish.
 
 ```bash
 flo server wipe --data-dir /var/lib/flo
@@ -166,8 +166,8 @@ flo server wipe --data-dir /var/lib/flo --keep-as before-upgrade --yes
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `-c, --config <path>` | Config file naming the data directory | `flo.toml` |
-| `-d, --data-dir <path>` | Data directory | from the config |
+| `-c, --config <path>` | Config file that sets `data_dir` | — |
+| `-d, --data-dir <path>` | Data directory | from `-c` |
 | `--keep-as <name>` | Move the contents into `<data-dir>/.flo-kept-<name>` instead of deleting them; the next start leaves that directory alone | — |
 | `--yes` | Delete (or move) the contents | — |
 

@@ -156,7 +156,7 @@ One number and a newline: the layout the directory is written in, `1` today. It 
 - **A newer format** is refused: `data directory format 2, this binary reads format 1 (/var/lib/flo/FORMAT); start a flo that reads format 2`.
 - **An older format, or a Flo directory without `FORMAT`** (one with `SYSTEM` or a shard directory) is refused: `data directory /var/lib/flo was written by an older Flo (before format gating); this server needs format 1. There is no migration: run flo server wipe --data-dir /var/lib/flo`. Empty it with [`flo server wipe`](/reference/cli#flo-server-wipe), or start the older release.
 - **A non-empty directory with no Flo data** is refused, without suggesting a wipe, since it may be something else's: `/var/lib is not a Flo data directory and isn't empty (it holds postgresql); check data_dir`.
-- **A file that isn't a format number** is refused, naming what it holds.
+- **A `FORMAT` that isn't a format number**, or isn't a file, is refused, naming what it holds.
 
 The server, `flo server inspect`, `force-members`, `repair skip` and `salvage` refuse these alike, and exit with code 78. Keep config files and logs outside the data directory.
 
