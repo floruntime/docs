@@ -150,11 +150,11 @@ A segment that won't read, or a hole in the log, is damage: the shard stops repl
 
 ### FORMAT
 
-One number and a newline: the layout the directory is written in, `1` today. It is checked before anything else in the directory is read, and a binary reads only its own format. There is no migration.
+One number and a newline: the layout the directory is written in, `4` today. It is checked before anything else in the directory is read, and a binary reads only its own format. There is no migration.
 
 - **An empty directory** gets `FORMAT` first. Empty allows `lost+found`, dotfiles, and the lock, PID file and admin socket a server leaves.
-- **A newer format** is refused: `data directory format 2, this binary reads format 1 (/var/lib/flo/FORMAT); start a flo that reads format 2`.
-- **An older format, or a Flo directory without `FORMAT`** (one with `SYSTEM` or a shard directory) is refused: `data directory /var/lib/flo was written by an older Flo (before format gating); this server needs format 1. There is no migration: run flo server wipe --data-dir /var/lib/flo`. Empty it with [`flo server wipe`](/reference/cli#flo-server-wipe), or start the older release.
+- **A newer format** is refused: `data directory format 5, this binary reads format 4 (/var/lib/flo/FORMAT); start a flo that reads format 5`.
+- **An older format** is refused: `data directory /var/lib/flo was written by an older Flo (format 3); this server needs format 4. There is no migration: run flo server wipe --data-dir /var/lib/flo`. **A Flo directory without `FORMAT`** (one with `SYSTEM` or a shard directory) is refused the same way, saying `(before format gating)`. Empty it with [`flo server wipe`](/reference/cli#flo-server-wipe), or start the older release.
 - **A non-empty directory with no Flo data** is refused, without suggesting a wipe, since it may be something else's: `/var/lib is not a Flo data directory and isn't empty (it holds postgresql); check data_dir`.
 - **A `FORMAT` that isn't a format number**, or isn't a file, is refused, naming what it holds.
 
