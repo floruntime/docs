@@ -188,7 +188,7 @@ Deleting a key that doesn't exist succeeds: it prints `existed: false`, and `exi
 flo kv scan                          # the first page of all keys
 flo kv scan user:                    # keys starting with user:
 flo kv scan user: --limit 50         # 50 names a page
-flo kv scan user: --cursor 0300      # the next page
+flo kv scan user: --cursor 0300757365723a3432   # the next page
 ```
 
 | Flag | Description |
@@ -198,6 +198,8 @@ flo kv scan user: --cursor 0300      # the next page
 | `-n <namespace>` | Target namespace |
 
 Scan returns names only; read values with `get` or `mget`. It walks **all shards** — keys are returned regardless of which shard they hash to — a page at a time. A page that isn't the last ends with `cursor: <hex>`; pass it to `--cursor` for the next. The prefix filter is applied on each shard locally before results are merged.
+
+Names come in key order within a shard, shard by shard. A page resumes after the last name the one before it returned, so a key written or deleted between pages adds or removes only itself: no other name is sent twice or skipped.
 
 ### Version History
 
