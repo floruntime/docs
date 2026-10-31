@@ -58,6 +58,17 @@ flo ns ls
 flo ns info <name>
 ```
 
+A read, list or scan in a namespace that was never created is refused
+`no_namespace`, not answered empty or not found: the CLI prints `namespace not
+found` and exits 1. A write to it creates it instead. A node that is behind the
+leader asks the leader before it answers so, and a name it has just found
+missing it answers so for 100 ms without asking again. While it asks, the read
+is held and later requests on the same connection go ahead of it, as with a
+blocking read: reads and writes on one connection aren't ordered while a read
+is held, so a write sent after the read may be one it sees. On one node, a
+read through a shard other than the namespaces' owner waits a moment the same
+way while that shard checks with the owner.
+
 `flo ns info` prints when the namespace was created, and exits 1 if there is
 none. `flo ns ls` lists every name in name order.
 
