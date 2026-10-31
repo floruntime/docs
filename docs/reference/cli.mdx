@@ -250,10 +250,10 @@ flo server stop [--config <path>] [--data-dir <path>] [--force]
 Fetch the server's metrics.
 
 ```bash
-flo server metrics [--endpoint <host:port>] [--format text|json]
+flo server metrics [--metrics-endpoint <host:port>] [--format text|json]
 ```
 
-`text` prints the Prometheus exposition as served; `json` prints `{"metrics": "<exposition>"}`. `--endpoint` defaults to `localhost:9001`.
+`text` prints the Prometheus exposition as served; `json` prints `{"metrics": "<exposition>"}`. `--metrics-endpoint` defaults to `localhost:9001`. `-e`/`--endpoint` and `-p`/`--port`, which name the client port, are refused here.
 
 ## KV
 
