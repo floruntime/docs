@@ -343,6 +343,8 @@ If the server fails 10 times within an hour, systemd stops restarting it and lea
 journalctl -u flo -n 200
 ```
 
+A server that can't use its data directory (written by an older Flo, after an upgrade that changed the [format](/architecture/storage#format)) exits with code 78, and systemd doesn't restart it. There is no migration: run `flo server wipe --data-dir /var/lib/flo --yes` as the `flo` user (it deletes the node's data), then start it.
+
 A panic during log replay happens again on every start until its cause is fixed, so restarting without a fix just loops again. Once fixed:
 
 ```bash

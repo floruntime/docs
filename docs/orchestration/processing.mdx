@@ -719,6 +719,7 @@ A job lives in the namespace it is submitted to (`-n`), and is listed, inspected
 - A job **may read other namespaces**: a source or a `kv_lookup` can name one, for shared reference data or to gather from several namespaces into one.
 - Sources, sinks and lookups that name no namespace use the job's.
 - The same job name in different namespaces are **independent jobs**.
+- On a server of more than one shard, a stream or queue sink outside `default` must be stored on the job's own shard. Where a stream or queue is stored follows from its name and namespace, so one stored on another shard is refused at submit, naming the sink. Use the `default` namespace for it, or run one shard (`--shards 1`). KV and time-series sinks, and sinks in `default`, have no such limit.
 
 To move data from namespace A into B, submit the job in B and have it read from A.
 
