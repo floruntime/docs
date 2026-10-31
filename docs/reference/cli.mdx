@@ -29,6 +29,7 @@ A refused command prints `Error: <message> [<status>]`, or `[<status>/<reason>]`
 | `4` | retryable (`overloaded`, `rate_limited`, `unavailable`) |
 | `5` | transport failure, timeout, version mismatch, a cut-off answer, or the CLI out of memory |
 | `6` | pending (`outcome_pending`): the write committed but its shard halted before applying it; the message says whether it applies when the shard resumes. Don't resend it unchanged |
+| `78` | the data directory can't be used: written in another [format](/architecture/storage#format), or not a Flo data directory. Restarting doesn't help; the packaged systemd unit stops on it |
 
 ## Namespaces
 
@@ -42,8 +43,14 @@ A namespace is created by `flo ns create <name>`, or by the first write that
 brings data into it (a delete, a dequeue or an ack never creates one). Either way the name is 1–63 bytes of lowercase letters, digits,
 `_` and `-`, starts with a letter or digit, and does not end in `-`; names
 starting with `_` are the system's. A request naming any other namespace is
-refused with the reason. Each shard holds at most 1024 namespaces, and
-`default` always has room.
+refused with the reason. A node holds at most 4096 namespaces, `default`
+among them.
+
+Shard 0 owns the namespaces: it gives each one its id and records it in its
+log, and every other shard learns of it from there. `flo ns create` answers
+once the namespace is on disk, so it is usable on every shard by then; if it
+can't be written within 5 seconds it answers `unavailable` and creates nothing
+you can use yet. A first write to a new namespace waits the same way.
 
 ```bash
 flo ns create <name>
@@ -62,8 +69,11 @@ is held, so a write sent after the read may be one it sees. On one node, a
 read through a shard other than the namespaces' owner waits a moment the same
 way while that shard checks with the owner.
 
-Deleting a namespace isn't supported yet: `flo ns delete` is refused, with or
-without `--force`, and removes nothing. A namespace's data lives on every
+`flo ns info` prints when the namespace was created, and exits 1 if there is
+none. `flo ns ls` lists every name in name order.
+
+Deleting a namespace isn't supported yet: `flo ns delete` is refused and
+removes nothing. It no longer takes `--force`, which had no effect. A namespace's data lives on every
 shard, and its name can't yet be retired so that a later create doesn't
 inherit it.
 
@@ -163,9 +173,57 @@ flo server repair skip --data-dir /var/lib/flo --shard 3 --index 18234 --reason 
 | `--reason <text>` | Why, recorded with the repair | — |
 | `--yes` | Append the repair | — |
 
+### `flo server wipe`
+
+Empty a stopped node's data directory: for one written by an older Flo, which a server refuses (there is no migration), or to start over. It deletes everything in the directory but keeps the directory, so it works on a mount point. Keys, streams, queues, runs and the cluster membership are gone for good. Without `--yes` it lists what it would delete and stops.
+
+It needs the directory named: `--data-dir`, or `-c` with a config that sets `data_dir`. It never falls back to a default directory. It refuses a running server's directory, one with another file system mounted inside it, and one that holds no Flo data: no `FORMAT` that parses, no `SYSTEM` that loads, no shard directory holding a log. It names any entries Flo never writes before it deletes them. It never follows a symlink: a link in the directory is removed, not what it points at. It keeps `lost+found` and dotfiles. A wipe cut short leaves the shard directories, which a server refuses, naming wipe; run wipe again to finish.
+
+```bash
+flo server wipe --data-dir /var/lib/flo
+flo server wipe --data-dir /var/lib/flo --keep-as before-upgrade --yes
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `-c, --config <path>` | Config file that sets `data_dir` | — |
+| `-d, --data-dir <path>` | Data directory | from `-c` |
+| `--keep-as <name>` | Move the contents into `<data-dir>/.flo-kept-<name>` instead of deleting them; the next start leaves that directory alone | — |
+| `--yes` | Delete (or move) the contents | — |
+
+### `flo server salvage`
+
+Bring back a shard that is offline on a single node because its data won't
+read (`/status` names the shard and the reason). On the stopped node it drops
+every entry after `--truncate-after`, and the shard comes up with the entries
+through it. What it drops is gone for good, committed writes included: their
+clients were told they succeeded, and salvage prints how many there are.
+
+It reads the shard as far as it reads and refuses a cut at or past the
+damage, naming the highest entry it can keep. It also refuses when the cut
+would drop a repair that skips an entry it keeps, since that entry would run
+again, unless `--undo-repairs` says to. It keeps entry 1 at least. A data
+directory that belonged to a cluster is refused: a member's damaged shard is
+recovered by rejoining instead. Without `--yes` it prints what it would drop
+and stops.
+
+```bash
+flo server salvage --data-dir /var/lib/flo --shard 3 --truncate-after 18233
+flo server salvage --data-dir /var/lib/flo --shard 3 --truncate-after 18233 --yes
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `-c, --config <path>` | Config file naming the data directory | `flo.toml` |
+| `-d, --data-dir <path>` | Data directory | from the config |
+| `--shard <n>` | The offline shard | — |
+| `--truncate-after <index>` | The last entry to keep | — |
+| `--undo-repairs` | Cut even where it drops a repair of an entry it keeps | — |
+| `--yes` | Drop the entries | — |
+
 ### `flo server status`
 
-Show whether the server process is running and the port it bound, from its PID file.
+Show whether the server process is running and the port it bound, from its PID file, and what the data directory holds: its format (or why a server would refuse it) and its shard and partition counts.
 
 ```bash
 flo server status [--config <path>] [--data-dir <path>]
@@ -290,7 +348,7 @@ It prints one name per line, then `cursor: <hex>` when there are more; pass that
 
 ```bash
 flo kv scan user: --limit 100
-flo kv scan user: --limit 100 --cursor 0300
+flo kv scan user: --limit 100 --cursor 0300757365723a3432
 ```
 
 ### `flo kv history`
