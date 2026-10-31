@@ -80,6 +80,14 @@ A transaction id is `[shard:u16][counter:u48]`: a request carrying one runs on t
 
 `worker_list` is declared in the op table: its request is `limit: u32` (1 to 1024, default 1024), `cursor: bytes` (the last id of the page before; empty to start) and `action: bytes` (only workers that run this action; empty for every worker). Its answer is `workers: [{id, worker_type, status, current_load, max_concurrency, tasks_completed, tasks_failed, registered_at_ms, last_heartbeat_ms, machine_id?}]` in id order, then `cursor?: bytes`, absent on the last page.
 
+`workflow_list_runs` takes the workflow's name as its key, or an empty key for every workflow's runs, and pages with its own request value:
+
+```
+[limit:u32][status_len:u16][status][cursor_len:u16][cursor][search_len:u16][search]
+```
+
+Every field is sent, an empty one with a length of 0. Runs come newest first. `limit` 0 is a page of 100, and anything over 1024 is a page of 1024. Each entry is `[run_id_len:u16][run_id][workflow_len:u16][workflow][status_len:u16][status][created_at:i64]`, and the answer ends like the other lists. A page can hold fewer runs than `limit` while more follow, so keep paging until `has_more` is 0. A cursor the server didn't send is refused `bad_request`.
+
 Paging is not a snapshot. A cursor resumes each shard by name or by position, so names created or deleted between pages can be listed twice or skipped.
 
 ## Response
