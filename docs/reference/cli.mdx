@@ -58,7 +58,9 @@ leader asks the leader before it answers so, and a name it has just found
 missing it answers so for 100 ms without asking again. While it asks, the read
 is held and later requests on the same connection go ahead of it, as with a
 blocking read: reads and writes on one connection aren't ordered while a read
-is held, so a write sent after the read may be one it sees.
+is held, so a write sent after the read may be one it sees. On one node, a
+read through a shard other than the namespaces' owner waits a moment the same
+way while that shard checks with the owner.
 
 Deleting a namespace isn't supported yet: `flo ns delete` is refused, with or
 without `--force`, and removes nothing. A namespace's data lives on every
