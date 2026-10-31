@@ -29,6 +29,7 @@ A refused command prints `Error: <message> [<status>]`, or `[<status>/<reason>]`
 | `4` | retryable (`overloaded`, `rate_limited`, `unavailable`) |
 | `5` | transport failure, timeout, version mismatch, a cut-off answer, or the CLI out of memory |
 | `6` | pending (`outcome_pending`): the write committed but its shard halted before applying it; the message says whether it applies when the shard resumes. Don't resend it unchanged |
+| `78` | the data directory can't be used: written in another [format](/architecture/storage#format), or not a Flo data directory. Restarting doesn't help; the packaged systemd unit stops on it |
 
 ## Namespaces
 
@@ -152,9 +153,27 @@ flo server repair skip --data-dir /var/lib/flo --shard 3 --index 18234 --reason 
 | `--reason <text>` | Why, recorded with the repair | — |
 | `--yes` | Append the repair | — |
 
+### `flo server wipe`
+
+Empty a stopped node's data directory: for one written by an older Flo, which a server refuses (there is no migration), or to start over. It deletes everything in the directory but keeps the directory, so it works on a mount point. Keys, streams, queues, runs and the cluster membership are gone for good. Without `--yes` it lists what it would delete and stops.
+
+It needs the directory named: `--data-dir`, or `-c` with a config that sets `data_dir`. It never falls back to a default directory. It refuses a running server's directory, one with another file system mounted inside it, and one that holds no Flo data: no `FORMAT` that parses, no `SYSTEM` that loads, no shard directory holding a log. It names any entries Flo never writes before it deletes them. It never follows a symlink: a link in the directory is removed, not what it points at. It keeps `lost+found` and dotfiles. A wipe cut short leaves the shard directories, which a server refuses, naming wipe; run wipe again to finish.
+
+```bash
+flo server wipe --data-dir /var/lib/flo
+flo server wipe --data-dir /var/lib/flo --keep-as before-upgrade --yes
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `-c, --config <path>` | Config file that sets `data_dir` | — |
+| `-d, --data-dir <path>` | Data directory | from `-c` |
+| `--keep-as <name>` | Move the contents into `<data-dir>/.flo-kept-<name>` instead of deleting them; the next start leaves that directory alone | — |
+| `--yes` | Delete (or move) the contents | — |
+
 ### `flo server status`
 
-Show whether the server process is running and the port it bound, from its PID file.
+Show whether the server process is running and the port it bound, from its PID file, and what the data directory holds: its format (or why a server would refuse it) and its shard and partition counts.
 
 ```bash
 flo server status [--config <path>] [--data-dir <path>]

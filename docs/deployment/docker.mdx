@@ -251,6 +251,18 @@ The data directory structure:
     └── HARDSTATE   # the node's id and its Raft term and vote
 ```
 
+### After an upgrade that changes the format
+
+A server refuses a volume written in another [format](/architecture/storage#format) and exits with code 78. Docker's restart policies can't stop on one exit code, so `restart: unless-stopped` restarts it in a loop; `docker logs` shows why. There is no migration: stop the service, empty the volume, and start it again.
+
+```bash
+docker compose stop flo
+docker compose run --rm flo server wipe -c /etc/flo/flo.toml --yes
+docker compose start flo
+```
+
+`--keep-as <name>` moves the old contents into `/data/flo/.flo-kept-<name>` instead of deleting them.
+
 ## Building the Image
 
 ```bash
