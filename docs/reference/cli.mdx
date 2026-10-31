@@ -632,7 +632,8 @@ The server gives each run an id that names the shard it runs on, so
 you choose the id instead (not of the form `wfr-<hex>-<hex>`, which is the
 server's): those commands then ask every shard which holds it, so a generated
 id is the faster path. A start refuses, as `conflict`, an id a run of any
-workflow already has in the namespace. Two starts sent at once with one id
+workflow already has in the namespace; a start retried with the same
+`--idempotency-key` answers the run it started. Two starts sent at once with one id
 can both run; those commands then refuse the id as `conflict`, so give
 concurrent starts ids of their own.
 
