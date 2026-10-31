@@ -730,6 +730,14 @@ Stop a running job.
 flo processing stop <job-id>
 ```
 
+### `flo processing remove`
+
+Remove a stopped, cancelled or failed job, freeing its slot. A running job is refused: stop or cancel it first.
+
+```bash
+flo processing remove <job-id>
+```
+
 ## Cluster
 
 ### `flo cluster status`

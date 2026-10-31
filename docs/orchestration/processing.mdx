@@ -694,6 +694,17 @@ Cancels the job; it stays listed as `CANCELLED`:
 flo processing cancel job-1 -n analytics
 ```
 
+### Removing a Job
+
+A stopped, cancelled or failed job keeps its definition, and counts toward the server's limit of 10,000 jobs, until it is removed. Removing it frees that slot; afterwards its id is not found:
+
+```bash
+flo processing cancel job-1 -n analytics
+flo processing remove job-1 -n analytics
+```
+
+A running job is refused: stop or cancel it first. A submit past the limit is refused, and the refusal says to remove a job.
+
 ### Job States
 
 | State | Description |
@@ -709,7 +720,7 @@ A job is `FAILED` when the server can't build it, for example when a stored job 
 Status:     FAILED: "partitions" must be all: a stream source reads every partition; …
 ```
 
-A failed job keeps its definition and source cursors. Submit a corrected job to replace it.
+A failed job keeps its definition and source cursors. Submit a corrected job, and remove the failed one to free its slot.
 
 ## Namespaces
 
@@ -731,11 +742,11 @@ flo processing submit job.yaml -n staging
 
 ## Persistence
 
-Submit, stop and cancel go through Raft, so jobs survive a restart:
+Submit, stop, cancel and remove go through Raft, so jobs survive a restart:
 
 - A `RUNNING` job's pipelines are rebuilt on restart and keep consuming
 - Each pipeline resumes from its **durable source cursor**, persisted through Raft at most once a second, so a crash re-delivers up to the last second of records (at-least-once)
-- Stopped and cancelled jobs stay idle
+- Stopped and cancelled jobs stay idle, and removed jobs stay removed
 - A stored job the server can't rebuild is kept as `FAILED` with its reason and cursors, never dropped
 - New job IDs don't collide with pre-restart IDs
 
