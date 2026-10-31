@@ -80,6 +80,8 @@ A transaction id is `[shard:u16][counter:u48]`: a request carrying one runs on t
 
 `worker_list` is declared in the op table: its request is `limit: u32` (1 to 1024, default 1024), `cursor: bytes` (the last id of the page before; empty to start) and `action: bytes` (only workers that run this action; empty for every worker). Its answer is `workers: [{id, worker_type, status, current_load, max_concurrency, tasks_completed, tasks_failed, registered_at_ms, last_heartbeat_ms, machine_id?}]` in id order, then `cursor?: bytes`, absent on the last page.
 
+`processing_remove` is declared in the op table: its key is the job id, and its request and answer are empty. A running job is refused `conflict` with reason `job_running`; a job that doesn't exist, `not_found`.
+
 `workflow_list_runs` takes the workflow's name as its key, or an empty key for every workflow's runs, and pages with its own request value:
 
 ```
@@ -200,18 +202,23 @@ The status says whether to retry; the reason says what happened; `ran` says whet
 | `27` | `worker_unhealthy` | The worker missed its heartbeats and gets no work until it sends one or registers again. |
 | `28` | `worker_draining` | The worker is draining and gets no new work. |
 | `29` | `shard_halted` | The shard halted at an entry every replica fails the same way. With `unavailable` (`ran` = no) it takes no writes until the entry is repaired, so retrying doesn't help; with `outcome_pending`, see above. |
+| `30` | `admin_only` | The op is served only on the node's admin socket. |
+| `31` | `job_running` | The processing job is running: stop or cancel it, then remove it. |
 
 The reasons are part of the op table, so a client and server that agree on the table hash agree on this list.
 
 ## OpCodes
 
-The protocol defines 100 operation codes, grouped by subsystem.
+The protocol defines 101 operation codes, grouped by subsystem.
 
 ### System (0x000 – 0x00F)
 
 | OpCode | Value |
 |--------|-------|
 | `ping` | `0x000` |
+| `system_walk_page` | `0x001` (between shards only) |
+| `system_runs_page` | `0x002` (between shards only) |
+| `system_holds_run` | `0x003` (between shards only) |
 
 ### Namespace (0x010 – 0x02F)
 
@@ -222,6 +229,7 @@ The protocol defines 100 operation codes, grouped by subsystem.
 | `namespace_list` | `0x012` |
 | `namespace_info` | `0x013` |
 | `namespace_ensure` | `0x016` (between shards only) |
+| `namespace_published` | `0x017` (between shards only) |
 
 ### Cluster (0x030 – 0x04F)
 
@@ -231,6 +239,7 @@ The protocol defines 100 operation codes, grouped by subsystem.
 | `cluster_members` | `0x031` |
 | `cluster_promote` | `0x032` |
 | `cluster_remove` | `0x033` |
+| `cluster_repair_skip` | `0x034` (admin socket only) |
 
 A `cluster_promote` value is the node id, u32 little-endian (4 bytes). A `cluster_remove` value is the node id, u32 little-endian, then one byte that is non-zero to allow a removal that leaves an even number of voters (5 bytes). Any other length is refused with `bad_request`. Both are answered with an empty value once the change commits; promoting a node that is already a voter is answered at once.
 
@@ -382,6 +391,7 @@ An `action_invoke` value is `[has_labels:u8]([labels_len:u16][labels])?[input]`:
 | `processing_cancel` | `0x362` |
 | `processing_status` | `0x363` |
 | `processing_list` | `0x364` |
+| `processing_remove` | `0x365` |
 
 ## Options
 
