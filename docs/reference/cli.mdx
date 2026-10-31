@@ -631,9 +631,10 @@ The server gives each run an id that names the shard it runs on, so
 `status`, `history`, `signal` and `cancel` go straight there. With `--run-id`
 you choose the id instead (not of the form `wfr-<hex>-<hex>`, which is the
 server's): those commands then ask every shard which holds it, so a generated
-id is the faster path. Choose ids unique in their namespace: nothing checks
-it across workflows, and an id that runs of two workflows hold is refused as
-`conflict` by each of those commands.
+id is the faster path. A start refuses, as `conflict`, an id a run of any
+workflow already has in the namespace. Two starts sent at once with one id
+can both run; those commands then refuse the id as `conflict`, so give
+concurrent starts ids of their own.
 
 | Flag | Description |
 |------|-------------|
