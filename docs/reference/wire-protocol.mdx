@@ -43,7 +43,7 @@ The body is the op's fields, in order. A field that may be left out is a presenc
 | `kv_get` | `wait_ms: u64` (default 0, at most 300000), `wait_for: u8` (`0` exists, the default; `1` change), `routing_key?: bytes`, `txn?: u64` | `version: u64`, `value: bytes` |
 | `kv_put` | `value: bytes` (at most 253817), `ttl_ms?: u64`, `condition: u8` (`0` always, the default; `1` if_absent; `2` if_present), `cas_version?: u64`, `routing_key?: bytes`, `txn?: u64` | `version?: u64`, absent inside a transaction |
 | `kv_delete` | `cas_version?: u64`, `routing_key?: bytes`, `txn?: u64` | `existed?: bool`, absent inside a transaction |
-| `kv_scan` | `limit: u32` (1 to 1024), `cursor: bytes` (empty on the first page) | `names: [string]`, `cursor?: bytes`, absent on the last page |
+| `kv_scan` | `limit: u32` (1 to 1024), `cursor: bytes` (empty on the first page) | `names: [string]`, `cursor?: bytes`, absent on the last page; a page can hold fewer names than `limit`, even none, while more follow |
 | `kv_history` | `limit: u32` (1 to 65, default 10), `before_version?: u64`, `routing_key?: bytes` | `versions: [{version: u64, at_ms: i64, deleted: bool, value: bytes}]`, newest first, `more: bool` |
 | `kv_mget` | `keys: [bytes]` (1 to 256), `routing_key?: bytes` | `entries: [{found: bool, version: u64, value: bytes}]`, `next?: u16` |
 | `kv_incr` | `delta: i64` (default 1), `routing_key?: bytes`, `txn?: u64` | `version?: u64`, `value?: i64`, both absent inside a transaction |
@@ -86,7 +86,7 @@ A transaction id is `[shard:u16][counter:u48]`: a request carrying one runs on t
 [limit:u32][status_len:u16][status][cursor_len:u16][cursor][search_len:u16][search]
 ```
 
-Every field is sent, an empty one with a length of 0. Runs come newest first. `limit` 0 is a page of 100, and anything over 1024 is a page of 1024. Each entry is `[run_id_len:u16][run_id][workflow_len:u16][workflow][status_len:u16][status][created_at:i64]`, and the answer ends like the other lists. A page can hold fewer runs than `limit` while more follow, so keep paging until `has_more` is 0. A cursor the server didn't send is refused `bad_request`.
+Every field is sent, an empty one with a length of 0. Runs come newest first. `limit` 0 is a page of 100, and anything over 1024 is a page of 1024. Each entry is `[run_id_len:u16][run_id][workflow_len:u16][workflow][status_len:u16][status][created_at:i64]`, and the answer ends like the other lists. A page can hold fewer runs than `limit` while more follow, so keep paging until `has_more` is 0. Pages run newest first from the cursor, so runs started after a listing's first page don't appear in that listing. A malformed cursor is refused `bad_request`.
 
 Paging is not a snapshot. A cursor resumes each shard by name or by position, so names created or deleted between pages can be listed twice or skipped.
 
