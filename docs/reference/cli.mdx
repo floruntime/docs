@@ -180,6 +180,36 @@ flo server wipe --data-dir /var/lib/flo --keep-as before-upgrade --yes
 | `--keep-as <name>` | Move the contents into `<data-dir>/.flo-kept-<name>` instead of deleting them; the next start leaves that directory alone | — |
 | `--yes` | Delete (or move) the contents | — |
 
+### `flo server salvage`
+
+Bring back a shard that is offline on a single node because its data won't
+read (`/status` names the shard and the reason). On the stopped node it drops
+every entry after `--truncate-after`, and the shard comes up with the entries
+through it. What it drops is gone for good, committed writes included: their
+clients were told they succeeded, and salvage prints how many there are.
+
+It reads the shard as far as it reads and refuses a cut at or past the
+damage, naming the highest entry it can keep. It also refuses when the cut
+would drop a repair that skips an entry it keeps, since that entry would run
+again, unless `--undo-repairs` says to. It keeps entry 1 at least. A data
+directory that belonged to a cluster is refused: a member's damaged shard is
+recovered by rejoining instead. Without `--yes` it prints what it would drop
+and stops.
+
+```bash
+flo server salvage --data-dir /var/lib/flo --shard 3 --truncate-after 18233
+flo server salvage --data-dir /var/lib/flo --shard 3 --truncate-after 18233 --yes
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `-c, --config <path>` | Config file naming the data directory | `flo.toml` |
+| `-d, --data-dir <path>` | Data directory | from the config |
+| `--shard <n>` | The offline shard | — |
+| `--truncate-after <index>` | The last entry to keep | — |
+| `--undo-repairs` | Cut even where it drops a repair of an entry it keeps | — |
+| `--yes` | Drop the entries | — |
+
 ### `flo server status`
 
 Show whether the server process is running and the port it bound, from its PID file, and what the data directory holds: its format (or why a server would refuse it) and its shard and partition counts.

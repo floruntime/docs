@@ -128,7 +128,7 @@ When a node restarts, each shard:
 2. **Replays** — feeds every entry from index 1 through the one apply path (the same code a live write and a replicated entry take), rebuilding the Raft log from the same pass
 3. **Is ready for traffic**
 
-A segment that won't read, or a hole in the log, is damage: the shard stops replaying there and goes offline, naming it, rather than serving a state with entries missing.
+A segment that won't read, or a hole in the log, is damage: the shard stops replaying there and goes offline, naming it, rather than serving a state with entries missing. On a single node, [`flo server salvage`](/reference/cli#flo-server-salvage) cuts that shard's log back to the entries before the damage, so it can serve again with what it kept.
 
 ## Directory Layout
 
