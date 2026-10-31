@@ -25,9 +25,10 @@ A refused command prints `Error: <message> [<status>]`, or `[<status>/<reason>]`
 | `0` | ok |
 | `1` | not found or absent |
 | `2` | usage error |
-| `3` | refused (`bad_request`, `conflict`, `unauthorized`, `internal_error`) |
+| `3` | refused (`bad_request`, `conflict`, `unauthorized`, `internal_error`, and `unavailable` from a halted shard, which retrying doesn't help) |
 | `4` | retryable (`overloaded`, `rate_limited`, `unavailable`) |
 | `5` | transport failure, timeout, version mismatch, a cut-off answer, or the CLI out of memory |
+| `6` | pending (`outcome_pending`): the write committed but its shard halted before applying it; the message says whether it applies when the shard resumes. Don't resend it unchanged |
 
 ## Namespaces
 
@@ -132,6 +133,24 @@ flo server force-members --data-dir /var/lib/flo --yes
 | `-c, --config <path>` | Config file naming the data directory and the secret | `flo.toml` |
 | `-d, --data-dir <path>` | Data directory | from the config |
 | `--yes` | Make the change | — |
+
+### `flo server repair skip`
+
+Skip the entry a stopped single node's shard [halted](/deployment/clustering#a-halted-shard) at, so the shard comes up past it. The skipped write never runs, on this build or any later one; its client was told so. Without `--yes` it prints the entry it would skip and stops. It refuses a running server's data directory, a cluster member's (a member's shard is repaired by the cluster), an index the shard isn't halted at, and a config entry or a term's no-op, which a halted shard still applies.
+
+```bash
+flo server repair skip --data-dir /var/lib/flo --shard 3 --index 18234
+flo server repair skip --data-dir /var/lib/flo --shard 3 --index 18234 --reason "malformed invoke" --yes
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `-c, --config <path>` | Config file naming the data directory | `flo.toml` |
+| `-d, --data-dir <path>` | Data directory | from the config |
+| `--shard <n>` | The halted shard (`/status` names it) | required |
+| `--index <i>` | The entry it halted at (`halt_index` in `/status`) | required |
+| `--reason <text>` | Why, recorded with the repair | — |
+| `--yes` | Append the repair | — |
 
 ### `flo server salvage`
 
@@ -304,9 +323,10 @@ flo kv history <key> [options]
 | Flag | Description |
 |------|-------------|
 | `-l, --limit <n>` | Most versions to show: 1 to 65, default 10 |
+| `--before-version <v>` | Only versions older than `v` |
 | `-r, --routing-key <key>` | Explicit shard routing key: give the one the key was written with |
 
-Each row is the version, the time it was written (`at_ms`, Unix milliseconds) and the value, under a header; `-o raw` leaves the header out.
+Each row is the version, the time it was written (`at_ms`, Unix milliseconds), whether it is a delete, and the value, under a header; `-o raw` leaves the header out. When one answer can't hold them all, the command asks again until it has shown `--limit` versions; if older ones remain it prints `more: true` last (on stderr with `-o raw`). `-o json` prints `{"versions": [...], "more": bool}`.
 
 ### `flo kv incr`
 

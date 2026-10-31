@@ -44,7 +44,7 @@ The body is the op's fields, in order. A field that may be left out is a presenc
 | `kv_put` | `value: bytes` (at most 253817), `ttl_ms?: u64`, `condition: u8` (`0` always, the default; `1` if_absent; `2` if_present), `cas_version?: u64`, `routing_key?: bytes`, `txn?: u64` | `version?: u64`, absent inside a transaction |
 | `kv_delete` | `cas_version?: u64`, `routing_key?: bytes`, `txn?: u64` | `existed?: bool`, absent inside a transaction |
 | `kv_scan` | `limit: u32` (1 to 1024), `cursor: bytes` (empty on the first page) | `names: [string]`, `cursor?: bytes`, absent on the last page |
-| `kv_history` | `limit: u32` (1 to 65, default 10), `routing_key?: bytes` | `versions: [{version: u64, at_ms: i64, value: bytes}]`, newest first |
+| `kv_history` | `limit: u32` (1 to 65, default 10), `before_version?: u64`, `routing_key?: bytes` | `versions: [{version: u64, at_ms: i64, deleted: bool, value: bytes}]`, newest first, `more: bool` |
 | `kv_mget` | `keys: [bytes]` (1 to 256), `routing_key?: bytes` | `entries: [{found: bool, version: u64, value: bytes}]`, `next?: u16` |
 | `kv_incr` | `delta: i64` (default 1), `routing_key?: bytes`, `txn?: u64` | `version?: u64`, `value?: i64`, both absent inside a transaction |
 | `kv_expire` | `ttl_ms: u64` (`0` clears the TTL), `cas_version?: u64`, `routing_key?: bytes`, `txn?: u64` | nothing |
@@ -58,7 +58,7 @@ The body is the op's fields, in order. A field that may be left out is a presenc
 
 The key is the envelope's key, except: `kv_scan`'s is the prefix to list (empty for every key); `kv_begin_txn`'s is the routing key the transaction pins, and may not be empty; `kv_mget`, `kv_commit_txn` and `kv_rollback_txn` take an empty key.
 
-`kv_scan` pages across every shard: `cursor` is the previous page's, unchanged. `kv_mget` answers as many keys as fit one response; `next`, when present, is the index of the first key not answered, so the client asks again from there. With `routing_key`, the request is answered on that routing key's shard, where keys written with it live; without, each key is looked up on the shard that owns it. Deleting a missing key isn't an error: it answers `existed` false. `kv_incr` on a value that isn't an 8-byte counter, and the JSON ops on a value that isn't JSON, are refused `bad_request` with `wrong_type`.
+`kv_scan` pages across every shard: `cursor` is the previous page's, unchanged. `kv_mget` answers as many keys as fit one response; `next`, when present, is the index of the first key not answered, so the client asks again from there. With `routing_key`, the request is answered on that routing key's shard, where keys written with it live; without, each key is looked up on the shard that owns it. `kv_history` answers versions older than `before_version` when it's given; `more` says older kept versions follow, so the client asks again with `before_version` set to the last version it got. Deleting a missing key isn't an error: it answers `existed` false. `kv_incr` on a value that isn't an 8-byte counter, and the JSON ops on a value that isn't JSON, are refused `bad_request` with `wrong_type`.
 
 `wait_for` exists answers at once if the key exists, else when it's written; change answers the key's next version. Either answers not found when the wait ends with the key absent, and change answers the value still there.
 
@@ -66,7 +66,7 @@ A transaction id is `[shard:u16][counter:u48]`: a request carrying one runs on t
 
 ### List operations
 
-`stream_list`, `queue_list`, `ts_list`, `namespace_list`, `action_list`, `worker_list`, `processing_list` and `workflow_list_definitions` page across every shard. Their request value is:
+`stream_list`, `queue_list`, `ts_list`, `namespace_list`, `action_list`, `processing_list` and `workflow_list_definitions` page across every shard. Their request value is:
 
 ```
 [limit:u32][cursor]
@@ -77,6 +77,8 @@ A transaction id is `[shard:u16][counter:u48]`: a request carrying one runs on t
 ```
 [has_more:u8][cursor_len:u16][cursor]
 ```
+
+`worker_list` is declared in the op table: its request is `limit: u32` (1 to 1024, default 1024), `cursor: bytes` (the last id of the page before; empty to start) and `action: bytes` (only workers that run this action; empty for every worker). Its answer is `workers: [{id, worker_type, status, current_load, max_concurrency, tasks_completed, tasks_failed, registered_at_ms, last_heartbeat_ms, machine_id?}]` in id order, then `cursor?: bytes`, absent on the last page.
 
 Paging is not a snapshot. A cursor resumes each shard by name or by position, so names created or deleted between pages can be listed twice or skipped.
 
@@ -92,9 +94,11 @@ Paging is not a snapshot. A cursor resumes each shard by name or by position, so
 | 16 | `crc32` | `u32` | CRC-32 of the header (this field excluded) and the data |
 | 20 | `version` | `u8` | `0x02` |
 | 21 | `status` | `u8` | See [Status codes](#status-codes) |
-| 22 | `flags` | `u8` | `0` |
+| 22 | `flags` | `u8` | `0x01` `stale`; no other bit is defined |
 | 23 | `_pad` | `u8` | `0` |
 | 24 | `table_hash` | `u64` | The hash of the op table the server was built for |
+
+`stale` is set on every answer a [halted shard](/deployment/clustering#a-halted-shard) gives to a read, a not-found included: the read succeeded, from the state just before the entry the shard halted at. It isn't an error.
 
 A response carries no opcode: the client knows which request it sent. Any status but `ok` is a refusal, and its data is a [refusal body](#refusals).
 
@@ -123,6 +127,9 @@ Nodes built from different tables can't link either: a peer's hello carries the 
 | `10` | `overloaded` |
 | `11` | `rate_limited` |
 | `12` | `unavailable` |
+| `13` | `outcome_pending` |
+
+`outcome_pending` is a write that committed but hasn't applied, because its shard halted at it or before it (reason `shard_halted`, `ran` = unknown). The message says which: one past the halt applies when the shard resumes; the one it halted at never runs. Don't resend it unchanged: that writes it twice, or halts again.
 
 ### Refusals
 
@@ -170,6 +177,7 @@ The status says whether to retry; the reason says what happened; `ran` says whet
 | `26` | `stale_report` | An action complete or fail for a run that has moved on: another worker holds it, or it finished with another outcome. The report was dropped; resending it is refused the same way. |
 | `27` | `worker_unhealthy` | The worker missed its heartbeats and gets no work until it sends one or registers again. |
 | `28` | `worker_draining` | The worker is draining and gets no new work. |
+| `29` | `shard_halted` | The shard halted at an entry every replica fails the same way. With `unavailable` (`ran` = no) it takes no writes until the entry is repaired, so retrying doesn't help; with `outcome_pending`, see above. |
 
 The reasons are part of the op table, so a client and server that agree on the table hash agree on this list.
 

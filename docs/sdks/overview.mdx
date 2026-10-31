@@ -69,7 +69,12 @@ All SDKs provide typed errors:
 | `BadRequest` | Invalid parameters |
 | `Unauthorized` | Authentication failed |
 | `Overloaded` | Server at capacity, retry later |
+| `Unavailable` | No leader, or the shard takes no writes; with reason `shard_halted` the shard [halted](/deployment/clustering#a-halted-shard) |
+| `OutcomePending` | The write committed but hasn't applied: its shard halted |
+| `StaleNotFound` | A KV get or JSON get on a halted shard found no key: absent as of the halt, not absent |
 | `Internal` | Server error |
 | `NotConnected` | Client not connected |
 
 Every server error also carries the refusal's `reason` and `ran` ([Refusals](/reference/wire-protocol#refusals)): `ran` says whether the request took effect, so decide whether to resend from it, not from the message. Go: `ServerError.Reason`/`.Ran`; JavaScript: `ServerError.reason`/`.ran`; Python: `ServerError.reason`/`.ran`; Zig: `client.lastError().?.reason`/`.ran`.
+
+The SDKs retry `unavailable` by themselves, except from a halted shard: they never retry `outcome_pending` (the write is committed, so resending it would write it twice) or `unavailable` with reason `shard_halted` (it fails the same way until an operator repairs the shard). A worker's own registration, group join and polls do keep backing off on `shard_halted`, up to about 30 seconds apart, warning each time, and resume by themselves.
