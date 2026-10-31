@@ -624,7 +624,16 @@ Start a workflow execution.
 
 ```bash
 flo workflow start <name> [data]
+flo workflow start <name> [data] --run-id <id>
 ```
+
+The server gives each run an id that names the shard it runs on, so
+`status`, `history`, `signal` and `cancel` go straight there. With `--run-id`
+you choose the id instead (not of the form `wfr-<hex>-<hex>`, which is the
+server's): those commands then ask every shard which holds it, so a generated
+id is the faster path. A chosen id must be unique in its namespace; one that
+runs of two workflows hold is refused as `conflict`, and the run is reached by
+its generated id.
 
 | Flag | Description |
 |------|-------------|
