@@ -244,6 +244,16 @@ With `async_flush` (the default) an acknowledgement comes from memory and is
 flushed within a second. A majority that crashes inside that window can lose
 acknowledged writes, and the survivors' logs follow the new leader.
 
+For the same reason, a member restarted under `async_flush` applies nothing
+from its log until a leader commits it: what it flushed may be history that a
+crashed majority lost and a new leader rewrote. Until it has caught up it
+serves no reads (`unavailable: this node restarted and is catching up with
+its group's leader; retry, or read from another node`) and `/ready` answers
+`503 catching_up`; writes go to the leader as usual. A member normally catches
+up as soon as a leader reaches it. A lone survivor, with the rest of its group
+down, serves nothing until a majority is back, or until
+`flo server force-members` makes it a group of one (below).
+
 Either way, a member whose applied state no longer matches the group marks
 itself **diverged**: it stops taking part (writes are refused with
 `unavailable: this node's data diverged from the group and it takes no
