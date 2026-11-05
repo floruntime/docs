@@ -198,16 +198,17 @@ holds the largest value a plain set takes, under the longest key.
 
 A committed transaction is one log entry, and the shard does nothing else while
 it applies one, so raising these costs latency for every tenant on the shard,
-not correctness. Apply times, from `bench-contract` in ReleaseFast on a shared
-Apple-silicon Mac under load, range over five runs:
+not correctness. Apply times, built as a release is, on a shared Apple-silicon
+Mac under load, range over five runs:
 
 | Transaction | Apply |
 |---|---|
-| 32 small ops | 47-49 µs |
-| 64 small ops | 104-109 µs |
-| 256 small ops | 400-540 µs |
-| 32 ops, 256 KiB (full at both defaults) | 84-95 µs |
-| 32 ops, 1 MiB | 214-284 µs |
+| 32 small ops | 37-39 µs |
+| 64 small ops | 83-88 µs |
+| 256 small ops | 311-344 µs |
+| 32 ops, 256 KiB (full at both defaults) | 80-89 µs |
+| 32 ops, 1 MiB | 217-234 µs |
+| 256 ops, 1 MiB (both most) | 518-536 µs |
 
 Set the same values on every node. A mismatch is safe, since replicas apply
 whatever a leader committed, but the leader's values decide, so the same
