@@ -184,19 +184,29 @@ the only keys `[cluster]` reads. See [Clustering](/deployment/clustering).
 
 ```toml
 [kv]
-# max_txn_ops = 32   # most ops one transaction may hold, 1 to 256; a value outside that is refused at start
+# max_txn_ops = 32          # most ops one transaction may hold, 1 to 256
+# max_txn_bytes = 262144    # most key and value bytes it may hold, up to 1048576 (1 MiB)
 ```
 
-`--max-txn-ops` sets it too, and beats the file. Past the limit, a put into the
-transaction is refused with `txn_too_large`.
+A value outside its range is refused at start. `--max-txn-ops` and
+`--max-txn-bytes` set them too, and beat the file. Past either limit, a put into
+the transaction is refused with `txn_too_large`. The default bytes hold the
+largest value a plain set takes.
 
 A committed transaction is one log entry, and the shard does nothing else while
-it applies one. Above about 38 small ops, that takes longer than the shard's
-apply target of 66 µs: raising the limit past there costs latency, for every
-tenant on the shard, not correctness.
+it applies one, so raising these costs latency for every tenant on the shard,
+not correctness. Measured apply times against a target of 66 µs:
 
-Set the same value on every node. A mismatch is safe, since replicas apply
-whatever a leader committed, but the leader's value decides, so the same
+| Transaction | Apply |
+|---|---|
+| 32 small ops | about 45 µs |
+| About 38 small ops | about 66 µs, the target |
+| 32 ops, 256 KiB (both defaults, full) | about 80 µs |
+| 32 ops, 1 MiB | about 200 µs |
+| 256 small ops | about 460 µs |
+
+Set the same values on every node. A mismatch is safe, since replicas apply
+whatever a leader committed, but the leader's values decide, so the same
 transaction can be accepted or refused depending on which node leads.
 
 ### `[workers]`

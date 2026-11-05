@@ -97,6 +97,7 @@ flo server start [options]
 | `-s, --shards <n>` | Number of shard threads, at most 256; a cluster member runs 1 (the default resolves to it) | CPU count, less one on 4 or more cores |
 | `--partitions <n>` | Virtual partitions, at most 16384 | `max(4096, shards × 32)` |
 | `--max-txn-ops <n>` | Most ops one KV transaction may hold, 1 to 256 | `32` |
+| `--max-txn-bytes <n>` | Most key and value bytes one KV transaction may hold, 1 to 1048576 | `262144` |
 | `-l, --log-level <level>` | `debug`, `info`, `warn` or `error` | — |
 | `--log-format <format>` | `text` or `json` | — |
 | `--cluster` | Start as the first member of a cluster; leads alone until others join | — |
@@ -447,7 +448,7 @@ flo kv txn commit "$TXN"
 
 The transaction id names its shard, so `commit` and `rollback` need nothing else. Ops inside a transaction must give the routing key it was begun with, otherwise they are refused with `wrong_routing_key`. `scan`, `mget`, `history` and the JSON commands don't run inside transactions.
 
-**Server caps**: 32 ops per transaction unless the operator sets [`max_txn_ops`](/getting-started/configuration#kv) (at most 256), 1 MiB total payload, 1024 open transactions per shard (past that, `txn begin` is refused with `too_many_transactions`). Transactions outlive connections: they are owned by their id, not by the TCP connection. One that goes 30 seconds without a request is dropped, and later use is refused with `no_such_transaction`.
+**Server caps**: 32 ops and 256 KiB of keys and values per transaction, unless the operator [sets them higher or lower](/getting-started/configuration#kv) (at most 256 ops and 1 MiB), 1024 open transactions per shard (past that, `txn begin` is refused with `too_many_transactions`). Transactions outlive connections: they are owned by their id, not by the TCP connection. One that goes 30 seconds without a request is dropped, and later use is refused with `no_such_transaction`.
 
 ## Streams
 
