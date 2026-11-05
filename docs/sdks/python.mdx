@@ -115,7 +115,7 @@ async with await client.kv.begin("user:42") as txn:
     await txn.commit()
 ```
 
-`scan`, `mget`, `json_get`, `json_set`, `json_del`, and `history` are not supported inside a transaction and raise `TxnUnsupportedOpError`. Server caps: 256 ops per transaction, 1 MiB total payload.
+`scan`, `mget`, `json_get`, `json_set`, `json_del`, and `history` are not supported inside a transaction and raise `TxnUnsupportedOpError`. Server caps: 32 ops and 256 KiB of keys and values per transaction, unless the operator [sets them higher or lower](/getting-started/configuration#kv) (at most 256 ops and 1 MiB).
 
 ## Queue Operations
 
