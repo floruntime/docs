@@ -198,8 +198,8 @@ holds the largest value a plain set takes, under the longest key.
 
 A committed transaction is one log entry, and the shard does nothing else while
 it applies one, so raising these costs latency for every tenant on the shard,
-not correctness. Apply times, built as a release is, on a shared Apple-silicon
-Mac under load, range over five runs:
+not correctness. Apply times, built ReleaseSafe as releases are, on a shared
+Apple-silicon Mac under load, range over five runs (your hardware will differ):
 
 | Transaction | Apply |
 |---|---|
