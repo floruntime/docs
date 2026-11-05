@@ -189,21 +189,25 @@ the only keys `[cluster]` reads. See [Clustering](/deployment/clustering).
 ```
 
 A value outside its range is refused at start. `--max-txn-ops` and
-`--max-txn-bytes` set them too, and beat the file. Past either limit, a put into
-the transaction is refused with `txn_too_large`. The default bytes hold the
-largest value a plain set takes.
+`--max-txn-bytes` set them too, and beat the file. Past either limit, any op
+added to the transaction is refused with `txn_too_large`.
+
+`max_txn_bytes` counts each key with its namespace prefix: in namespace `tenant`
+at a limit of 100, a 1-byte key takes a value of at most 92 bytes. The default
+holds the largest value a plain set takes, under the longest key.
 
 A committed transaction is one log entry, and the shard does nothing else while
 it applies one, so raising these costs latency for every tenant on the shard,
-not correctness. Measured apply times against a target of 66 µs:
+not correctness. Apply times, from `bench-contract` in ReleaseFast on a shared
+Apple-silicon Mac under load, range over five runs:
 
 | Transaction | Apply |
 |---|---|
-| 32 small ops | about 45 µs |
-| About 38 small ops | about 66 µs, the target |
-| 32 ops, 256 KiB (both defaults, full) | about 80 µs |
-| 32 ops, 1 MiB | about 200 µs |
-| 256 small ops | about 460 µs |
+| 32 small ops | 47-49 µs |
+| 64 small ops | 104-109 µs |
+| 256 small ops | 400-540 µs |
+| 32 ops, 256 KiB (full at both defaults) | 84-95 µs |
+| 32 ops, 1 MiB | 214-284 µs |
 
 Set the same values on every node. A mismatch is safe, since replicas apply
 whatever a leader committed, but the leader's values decide, so the same
