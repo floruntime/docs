@@ -425,7 +425,7 @@ Per-shard transactions buffer multiple writes on a single pinned partition and c
 | `kv txn commit <txn-id>` | `0x111` | Apply all buffered ops atomically. Returns the op count and the `commit_index`. |
 | `kv txn rollback <txn-id>` | `0x112` | Discard buffered ops. A transaction that isn't open (already committed, rolled back or dropped as idle) is refused with `no_such_transaction`. |
 
-Inside a transaction, `set`, `get`, `delete`, `incr`, `expire` and `exists` accept a `--txn <id>` flag; writes are buffered until commit. **Reads inside the transaction see the buffered writes.** `scan`, `mget`, `history` and the JSON ops take no transaction.
+Inside a transaction, `set`, `get`, `delete`, `incr`, `expire` and `exists` accept a `--txn <id>` flag; writes are buffered until commit. **Reads inside the transaction see the buffered writes**, a conditional one too: it reads as written until the commit decides it. `scan`, `mget`, `history` and the JSON ops take no transaction.
 
 **Server caps**: 256 ops per transaction, 1 MiB total payload, 1024 open transactions per shard (past that, `txn begin` is refused with `too_many_transactions`).
 
@@ -853,4 +853,4 @@ The KV store is implemented as a **KV Projection** — a hash table with MVCC ve
 
 **TTL enforcement**: Lazy — expired keys are detected at read time rather than proactively swept. This avoids background I/O for expiry.
 
-**Tombstones**: Deletes write a tombstone entry to the UAL. Prior versions remain in the version history and are queryable via `history`. A tombstone and its history stay in memory until the key is removed; nothing purges them sooner.
+**Tombstones**: A delete of a live key writes a tombstone entry to the UAL. A delete of a key that isn't live goes through the log and changes nothing. Prior versions remain in the version history and are queryable via `history`. A tombstone and its history stay in memory until the key is removed; nothing purges them sooner.
