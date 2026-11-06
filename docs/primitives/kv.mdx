@@ -1,9 +1,9 @@
 ---
 title: KV
-lede: Strongly consistent, versioned key-value storage with CAS, TTL, blocking gets, and namespace isolation.
+lede: Versioned key-value storage with CAS, TTL, blocking gets and namespace isolation; writes are replicated before they're acknowledged.
 ---
 
-Flo's KV store provides strongly consistent key-value storage backed by the Unified Append Log. Every write is Raft-replicated across the cluster before being acknowledged. Reads go directly to the local projection — no Raft round-trip, no cross-node hops for single-key lookups.
+Flo's KV store is versioned key-value storage backed by the Unified Append Log. Every write is Raft-replicated across the cluster before being acknowledged. Reads go directly to the local projection, with no Raft round-trip, so what one reflects depends on the node that answers: a leader's read reflects what it has committed, a follower can lag, and a deposed leader can answer stale until it finds out. A conditional write's check runs on the leader. See [what a read reflects](/deployment/clustering#writes-and-reads).
 
 ## Core Concepts
 
@@ -270,7 +270,7 @@ If another writer updated the key between your read and write, the CAS fails wit
 
 ## Atomicity model
 
-Flo's KV store is built around **per-key linearizable writes** rather than multi-key transactions. Every mutation goes through Raft as a single committed entry, so each individual operation is atomic and durable on its own — the same model used by etcd, Consul, and FoundationDB single-key paths.
+Flo's KV store is built around **single-key writes in one log order** rather than multi-key transactions. Every mutation goes through Raft as a single committed entry, so each operation applies whole, and every node applies a key's writes in the same order. How durable an acknowledged write is depends on [the durability mode](/deployment/clustering#durability-and-the-diverged-state). Conditions are checked on the leader when the write arrives, not in log order: see CAS above.
 
 ### Conditional & atomic writes
 
@@ -465,7 +465,7 @@ In a multi-node cluster:
 - **Reads** are served from the local shard's projection — no Raft round-trip needed.
 - **Data replicates** to all nodes. A key written on node 1 is readable from node 2 and node 3 after replication.
 - **Node failures** are tolerated as long as a majority (quorum) of nodes remain healthy. A 3-node cluster survives 1 node failure.
-- **CAS and conditional writes** are consistent across the cluster — the version check happens at the leader during Raft proposal.
+- **CAS and conditional writes** are checked on the leader, against what it has applied, when the write arrives.
 
 ### Reads from a halted shard
 
