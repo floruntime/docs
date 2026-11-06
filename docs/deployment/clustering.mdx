@@ -214,6 +214,36 @@ depends on the write:
 Reads are local. On the node a client wrote to, the write is visible when the
 response arrives; on other members within about a heartbeat.
 
+What a read reflects depends on the node that answers it, and a read doesn't
+check with the rest of the group:
+
+- **A leader** refuses a read with `unavailable: the leader is still applying
+  what earlier leaders committed; retry` until it has applied everything in its
+  log from earlier terms, so that what was committed before it was elected is all
+  there. A leader that has already applied its whole log is ready as soon as it's
+  elected. Entries it doesn't yet know are committed need a majority, because they
+  commit with the no-op it writes when elected. It usually lasts well under a
+  second, and longer with a long backlog to apply. A leader whose only surviving
+  peer is far behind refuses until that peer catches up, and one that can't commit
+  its no-op keeps refusing until it can or it steps down. `/ready` keeps answering
+  200 meanwhile, on purpose: a 503 for a few milliseconds would make load balancers
+  flap. The SDKs retry
+  this on their own a few times, over a few hundred milliseconds; the CLI reports
+  it.
+
+  A read already waiting on a key (`kv get --wait`) isn't refused: it answers
+  when that key's entry applies, with the key's state at that entry, even
+  mid-backlog. One whose wait runs out in that time can answer not found.
+- **A follower** can lag: it may not yet have what the leader has committed.
+- **A deposed leader** that hasn't heard yet can answer stale. It stays leader
+  until it hears a newer term or goes an election timeout without contact from
+  a majority, and a write acknowledged by its successor in that window isn't in
+  what it answers.
+
+So a read isn't linearizable. With `async_flush`, what a leader has committed
+can still be lost if a majority crashes
+([below](#durability-and-the-diverged-state)).
+
 ## Failure Handling
 
 ### Failover
