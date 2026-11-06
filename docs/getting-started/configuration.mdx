@@ -184,7 +184,7 @@ the only keys `[cluster]` reads. See [Clustering](/deployment/clustering).
 
 ```toml
 [kv]
-# max_txn_ops = 32          # most ops one transaction may hold, 1 to 256
+# max_txn_ops = 64          # most ops one transaction may hold, 1 to 256
 # max_txn_bytes = 262144    # most key and value bytes it may hold, up to 1048576 (1 MiB)
 ```
 
@@ -203,12 +203,11 @@ Apple-silicon Mac under load, range over five runs (your hardware will differ):
 
 | Transaction | Apply |
 |---|---|
-| 32 small ops | 37-39 µs |
-| 64 small ops | 83-88 µs |
-| 256 small ops | 311-344 µs |
-| 32 ops, 256 KiB (full at both defaults) | 80-89 µs |
-| 32 ops, 1 MiB | 217-234 µs |
-| 256 ops, 1 MiB (both maximums) | 518-536 µs |
+| 64 small ops | 85-89 µs |
+| 256 small ops | 323-375 µs |
+| 64 ops, 256 KiB (full at both defaults) | 125-144 µs |
+| 64 ops, 1 MiB | 265-311 µs |
+| 256 ops, 1 MiB (both maximums) | 524-674 µs |
 
 Set the same values on every node. A mismatch is safe, since replicas apply
 whatever a leader committed, but the leader's values decide, so the same

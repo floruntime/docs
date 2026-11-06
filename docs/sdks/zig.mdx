@@ -146,7 +146,7 @@ std.debug.print("committed {d} ops at index {d}\n", .{ result.op_count, result.c
 // On error, call `txn.rollback()` instead — idempotent.
 ```
 
-`scan`, `mget`, `jsonGet`, `jsonSet`, `jsonDel`, and `history` are not supported inside a transaction and return `FloError.TxnUnsupportedOp`. Server caps: 32 ops and 256 KiB of keys and values per transaction, unless the operator [sets them higher or lower](/getting-started/configuration#kv) (at most 256 ops and 1 MiB).
+`scan`, `mget`, `jsonGet`, `jsonSet`, `jsonDel`, and `history` are not supported inside a transaction and return `FloError.TxnUnsupportedOp`. Server caps: 64 ops and 256 KiB of keys and values per transaction, unless the operator [sets them higher or lower](/getting-started/configuration#kv) (at most 256 ops and 1 MiB).
 
 ## Queue Operations
 

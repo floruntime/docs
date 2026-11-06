@@ -421,7 +421,7 @@ Per-shard transactions buffer multiple writes on a single pinned partition and c
 
 Inside a transaction, `set`, `get`, `delete`, `incr`, `expire` and `exists` accept a `--txn <id>` flag; writes are buffered until commit. **Reads inside the transaction see the buffered writes.** `scan`, `mget`, `history` and the JSON ops take no transaction.
 
-**Server caps**: 32 ops and 256 KiB of keys and values per transaction, unless the operator [sets them higher or lower](/getting-started/configuration#kv) (at most 256 ops and 1 MiB), 1024 open transactions per shard (past that, `txn begin` is refused with `too_many_transactions`).
+**Server caps**: 64 ops and 256 KiB of keys and values per transaction, unless the operator [sets them higher or lower](/getting-started/configuration#kv) (at most 256 ops and 1 MiB), 1024 open transactions per shard (past that, `txn begin` is refused with `too_many_transactions`).
 
 **A commit applies whole or not at all.** If one of its ops can't apply when the commit does (an `incr` on a value that isn't a counter, or one that would overflow; an `expire` of a key that's gone or past its TTL by then), the whole commit is refused with that op's reason and position, as in `the transaction's op 2: not found; nothing in the transaction applied`, and none of its writes apply. The status is that op's: `bad_request` (exit 3) for an `incr`, `not_found` (exit 1) for an `expire`.
 
