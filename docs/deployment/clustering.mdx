@@ -214,6 +214,26 @@ depends on the write:
 Reads are local. On the node a client wrote to, the write is visible when the
 response arrives; on other members within about a heartbeat.
 
+What a read reflects depends on the node that answers it, and a read doesn't
+check with the rest of the group:
+
+- **A leader** answers once it has applied everything in its log from earlier
+  terms, so what it committed before it was elected is all there. Until then it
+  refuses reads with `unavailable: the leader is still applying what earlier
+  leaders committed; retry`. That usually lasts well under a second after an
+  election, and longer if it has a long backlog to apply. The SDKs retry this
+  on their own a few times, over a few hundred milliseconds; the CLI reports it.
+- **A follower** can lag: it may not yet have what the leader has committed.
+- **A deposed leader** that hasn't heard yet can answer stale. It stays leader
+  until it hears a newer term or goes an election timeout without contact from
+  a majority, and a write acknowledged by its successor in that window isn't in
+  what it answers.
+
+So a read isn't linearizable. A conditional write is the way to act on current
+state: its check runs on the leader, in log order. With `async_flush`, what a
+leader has committed can still be lost if a majority crashes
+([below](#durability-and-the-diverged-state)).
+
 ## Failure Handling
 
 ### Failover
