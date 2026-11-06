@@ -220,11 +220,13 @@ check with the rest of the group:
 - **A leader** refuses a read with `unavailable: the leader is still applying
   what earlier leaders committed; retry` until it has applied everything in its
   log from earlier terms, so that what was committed before it was elected is all
-  there. That needs a majority, because it waits on the no-op the leader writes
-  when elected. It usually lasts well under a second, and longer with a long
-  backlog to apply. A leader whose only surviving peer is far behind refuses until
-  that peer catches up, and one that can't commit its no-op keeps refusing until
-  it can or it steps down. `/ready` keeps answering 200 meanwhile. The SDKs retry
+  there. A leader that has already applied its whole log is ready as soon as it's
+  elected. Entries it doesn't yet know are committed need a majority, because they
+  commit with the no-op it writes when elected. It usually lasts well under a
+  second, and longer with a long backlog to apply. A leader whose only surviving
+  peer is far behind refuses until that peer catches up, and one that can't commit
+  its no-op keeps refusing until it can or it steps down. `/ready` keeps answering
+  200 meanwhile. The SDKs retry
   this on their own a few times, over a few hundred milliseconds; the CLI reports
   it.
 

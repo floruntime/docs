@@ -3,7 +3,7 @@ title: KV
 lede: Versioned key-value storage with CAS, TTL, blocking gets and namespace isolation; writes are replicated before they're acknowledged.
 ---
 
-Flo's KV store is versioned key-value storage backed by the Unified Append Log. Every write is Raft-replicated across the cluster before being acknowledged. Reads go directly to the local projection, with no Raft round-trip, so what one reflects depends on the node that answers: a leader's read reflects what it has committed, a follower can lag, and a deposed leader can answer stale until it finds out. A conditional write's check runs on the leader. See [what a read reflects](/deployment/clustering#writes-and-reads).
+Flo's KV store is versioned key-value storage backed by the Unified Append Log. Every write is Raft-replicated across the cluster before being acknowledged. Reads go directly to the local projection, with no Raft round-trip, so what one reflects depends on the node that answers: a leader's read reflects what it has committed, a follower can lag, and a deposed leader can answer stale until it finds out. See [what a read reflects](/deployment/clustering#writes-and-reads).
 
 ## Core Concepts
 
@@ -270,7 +270,7 @@ If another writer updated the key between your read and write, the CAS fails wit
 
 ## Atomicity model
 
-Flo's KV store is built around **single-key writes in one log order** rather than multi-key transactions. Every mutation goes through Raft as a single committed entry, so each operation applies whole, and every node applies a key's writes in the same order. How durable an acknowledged write is depends on [the durability mode](/deployment/clustering#durability-and-the-diverged-state). Conditions are checked on the leader when the write arrives, not in log order: see CAS above.
+Flo's KV store is built around **single-key writes in one log order** rather than multi-key transactions. Every mutation goes through Raft as a single committed entry, so each operation applies whole, and every node applies a key's writes in the same order. How durable an acknowledged write is depends on [the durability mode](/deployment/clustering#durability-and-the-diverged-state).
 
 ### Conditional & atomic writes
 
