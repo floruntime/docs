@@ -232,7 +232,7 @@ check with the rest of the group:
 So a read isn't linearizable. A conditional write's check runs on the leader,
 against what it has applied when the write arrives, and a deposed leader's write
 doesn't commit; two conditional writes that arrive before either has committed
-can both pass ([CAS](/primitives/kv#atomicity-model)). With `async_flush`, what a
+can both pass ([CAS](/primitives/kv#compare-and-swap-cas)). With `async_flush`, what a
 leader has committed can still be lost if a majority crashes
 ([below](#durability-and-the-diverged-state)).
 

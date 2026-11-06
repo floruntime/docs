@@ -843,7 +843,7 @@ The KV store is implemented as a **KV Projection** — a hash table with MVCC ve
 
 **Read path**: `kv_get` → KV projection lookup → response. No Raft involvement.
 
-**Recovery**: On server restart, the projection is rebuilt by replaying UAL entries from the last snapshot. Read-after-write consistency is immediate after recovery — there is no warm-up period.
+**Recovery**: On server restart, the projection is rebuilt by replaying the log. A node serves reads once that's done; a cluster member with `async_flush`, or a new leader, [refuses them for a retry](/deployment/clustering#writes-and-reads) until it has caught up.
 
 **TTL enforcement**: Lazy — expired keys are detected at read time rather than proactively swept. This avoids background I/O for expiry.
 
