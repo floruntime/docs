@@ -203,11 +203,11 @@ Apple-silicon Mac under load, range over five runs (your hardware will differ):
 
 | Transaction | Apply |
 |---|---|
-| 64 small ops | 85-89 µs |
-| 256 small ops | 323-375 µs |
-| 64 ops, 256 KiB (full at both defaults) | 125-144 µs |
-| 64 ops, 1 MiB | 265-311 µs |
-| 256 ops, 1 MiB (both maximums) | 524-674 µs |
+| 64 small ops | 85-88 µs |
+| 256 small ops | 324-336 µs |
+| 64 ops, 256 KiB (full at both defaults) | 126-139 µs |
+| 64 ops, 1 MiB | 270-330 µs |
+| 256 ops, 1 MiB (both maximums) | 529-577 µs |
 
 Set the same values on every node. A mismatch is safe, since replicas apply
 whatever a leader committed, but the leader's values decide, so the same
