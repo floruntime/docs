@@ -465,7 +465,7 @@ In a multi-node cluster:
 - **Reads** are served from the local shard's projection — no Raft round-trip needed.
 - **Data replicates** to all nodes. A key written on node 1 is readable from node 2 and node 3 after replication.
 - **Node failures** are tolerated as long as a majority (quorum) of nodes remain healthy. A 3-node cluster survives 1 node failure.
-- **CAS and conditional writes** are checked on the leader, against what it has applied, when the write arrives.
+- **CAS and conditional writes** are consistent across the cluster — the version check happens at the leader during Raft proposal.
 
 ### Reads from a halted shard
 
