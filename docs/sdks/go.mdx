@@ -183,7 +183,7 @@ if err != nil {
 fmt.Printf("committed %d ops at index %d\n", result.OpCount, result.CommitIndex)
 ```
 
-`scan`, `mget`, `JsonGet`, `JsonSet`, `JsonDel`, and `History` are not supported inside a transaction and return `ErrTxnUnsupportedOp`. Server caps: 256 ops per transaction, 1 MiB total payload.
+`scan`, `mget`, `JsonGet`, `JsonSet`, `JsonDel`, and `History` are not supported inside a transaction and return `ErrTxnUnsupportedOp`. Server caps: 64 ops and 256 KiB of keys and values per transaction, unless the operator [sets them higher or lower](/getting-started/configuration#kv) (at most 256 ops and 1 MiB).
 
 ### Scan
 
