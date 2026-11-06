@@ -226,7 +226,8 @@ check with the rest of the group:
   second, and longer with a long backlog to apply. A leader whose only surviving
   peer is far behind refuses until that peer catches up, and one that can't commit
   its no-op keeps refusing until it can or it steps down. `/ready` keeps answering
-  200 meanwhile. The SDKs retry
+  200 meanwhile, on purpose: a 503 for a few milliseconds would make load balancers
+  flap. The SDKs retry
   this on their own a few times, over a few hundred milliseconds; the CLI reports
   it.
 
