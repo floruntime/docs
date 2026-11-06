@@ -278,7 +278,7 @@ Use the conditional flags on `kv set`/`KV.Put` to express "do this only if X". E
 
 A condition is decided when its entry applies, not when the write arrives, so racing writers can't both pass, and a new leader's answer counts everything committed before it. That has three effects:
 
-- **A failed condition still costs a replicated commit.** The write goes through the log like one that passes, then changes nothing: no version, no history. So does a delete or an `expire` of a key that isn't there.
+- **A failed condition still costs a replicated commit.** The write goes through the log like one that passes, then changes nothing: no version, no history. So does a delete or an `expire` of a key that isn't there, and an `incr` that's refused.
 - **A key whose TTL has run out by the entry's timestamp is absent**: `if_absent` writes over it, and `if_present` is refused.
 - **In a [transaction](#transactions), a conflict appears at commit, not at the op**, and a condition sees that transaction's own earlier writes.
 
