@@ -175,7 +175,7 @@ The status says whether to retry; the reason says what happened; `ran` says whet
 | `2` | `malformed` | The frame or a field isn't what it declares. |
 | `3` | `field_too_long` | A field or the request is longer than its bound. |
 | `4` | `out_of_range` | A number is outside its range, such as a wait past 5 minutes. |
-| `5` | `leader_unknown` | The write found no leader. |
+| `5` | `leader_unknown` | The write found no leader, or a leader still applying earlier terms that refuses it; or the read found a node not yet caught up with what its group committed: such a leader, or a member restarting. Retry. |
 | `6` | `shard_busy` | The shard that owns the request is too busy to take it. |
 | `7` | `table_mismatch` | The client was built from another op table or protocol version. |
 | `8` | `unknown_flag` | A header flag bit is set; none is defined. |

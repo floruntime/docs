@@ -1,9 +1,9 @@
 ---
 title: KV
-lede: Strongly consistent, versioned key-value storage with CAS, TTL, blocking gets, and namespace isolation.
+lede: Versioned key-value storage with CAS, TTL, blocking gets and namespace isolation; writes are replicated before they're acknowledged.
 ---
 
-Flo's KV store provides strongly consistent key-value storage backed by the Unified Append Log. Every write is Raft-replicated across the cluster before being acknowledged. Reads go directly to the local projection — no Raft round-trip, no cross-node hops for single-key lookups.
+Flo's KV store is versioned key-value storage backed by the Unified Append Log. Every write is Raft-replicated across the cluster before being acknowledged. Reads go directly to the local projection, with no Raft round-trip, so what one reflects depends on the node that answers: a leader's read reflects what it has committed, a follower can lag, and a deposed leader can answer stale until it finds out. See [what a read reflects](/deployment/clustering#writes-and-reads).
 
 ## Core Concepts
 
@@ -270,7 +270,7 @@ If another writer updated the key between your read and write, the CAS fails wit
 
 ## Atomicity model
 
-Flo's KV store is built around **per-key linearizable writes** rather than multi-key transactions. Every mutation goes through Raft as a single committed entry, so each individual operation is atomic and durable on its own — the same model used by etcd, Consul, and FoundationDB single-key paths.
+Flo's KV store is built around **single-key writes in one log order** rather than multi-key transactions. Every mutation goes through Raft as a single committed entry, so each operation applies whole, and every node applies a key's writes in the same order. How durable an acknowledged write is depends on [the durability mode](/deployment/clustering#durability-and-the-diverged-state).
 
 ### Conditional & atomic writes
 
@@ -843,7 +843,7 @@ The KV store is implemented as a **KV Projection** — a hash table with MVCC ve
 
 **Read path**: `kv_get` → KV projection lookup → response. No Raft involvement.
 
-**Recovery**: On server restart, the projection is rebuilt by replaying UAL entries from the last snapshot. Read-after-write consistency is immediate after recovery — there is no warm-up period.
+**Recovery**: On server restart, the projection is rebuilt by replaying the log. A node serves reads once that's done; a cluster member with `async_flush`, or a new leader, [refuses them for a retry](/deployment/clustering#writes-and-reads) until it has caught up.
 
 **TTL enforcement**: Lazy — expired keys are detected at read time rather than proactively swept. This avoids background I/O for expiry.
 
