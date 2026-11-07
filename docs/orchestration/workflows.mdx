@@ -19,9 +19,8 @@ Client ──start──▸ validate ──success──▸ charge ──success
 
 | Concern | Without Flo Workflows | With Flo Workflows |
 |---------|----------------------|-------------------|
-| **State** | Your app manages a state machine in an external DB, guarding against crashes | Flo persists every state transition to the UAL. Recovery replays the log. |
+| **State** | Your app manages a state machine in an external DB, guarding against crashes | Flo keeps the run's state and logs each run's start and its final result. See [Restarts and failover](#restarts-and-failover). |
 | **Retries** | Hand-written retry loops with ad-hoc backoff | Declarative `retry:` block with exponential, linear, constant, or jittered backoff |
-| **Failover** | If the orchestrating process dies, work stalls | Another node picks up from the last committed state |
 | **Routing** | Manual circuit breaking, health scoring, fallback chains | Inline **plans** with health-weighted selection, circuit breakers, and fallback values |
 | **Human-in-the-loop** | Polling, webhooks, custom queues | `wait_for_signal` with typed signals, timeouts, and approval flows |
 | **Scheduling** | External cron daemon | Embedded `schedule:` block with 5-field cron or interval |
@@ -180,11 +179,21 @@ Each step produces an **outcome** string that maps to a transition target.
 
 | Outcome | Meaning |
 |---------|---------|
-| `target_not_found` | The action or plan doesn't exist |
+| `target_not_found` | The plan doesn't exist, or the action [wasn't registered in time](#a-step-whose-action-isnt-registered) |
 | `target_disabled` | The action is disabled |
 | `execution_failure` | Internal error during dispatch |
 
 Execution-level outcomes **cascade through a fallback chain**: the engine tries `target_not_found` → `execution_failure` → `failure` in order, using the first transition that matches. Business outcomes match exactly — no fallback.
+
+#### A step whose action isn't registered
+
+Workers often register after a workflow is deployed, so a step waits for its action. The run shows `waiting`, and its history gets an `action_not_registered` event. When the action registers, the step invokes it.
+
+If the action still isn't registered after 10 minutes, the step takes the `target_not_found` outcome, and the run's history gets an `action_not_found` event: `action charge is not registered in namespace default; waited 600000 ms`. Set the wait with `missing_action_wait_ms` in [`[workflows]`](/getting-started/configuration#workflows). `0` fails the step at once.
+
+- **Plans:** an executor whose action isn't registered is passed over at once while the plan has another to try. Only the last executor waits.
+- **Cancelling** the run drops the wait, so nothing starts when the action registers later.
+- **Limits:** the wait is held in memory on the leader of the action's shard, so a restart or a failover loses it. Each shard holds up to 1,024 waiting steps; past that, a step takes `target_not_found` at once.
 
 ### Transitions
 
@@ -509,6 +518,8 @@ When the signal arrives:
 2. If the run is `waiting` for this signal type, the engine resumes and follows the `success` transition
 3. If the run is not waiting, the signal is stored for future matching
 
+Flo answers ok before a signal is durable: the signal itself is kept in the leader's memory and is not written to the log. A signal stored for a run not yet waiting for it is lost if the node restarts or leadership moves, even though it was acknowledged. See [Restarts and failover](#restarts-and-failover). If losing a signal matters, check the run's status and send it again.
+
 ### Signal Timeout Behavior
 
 If `timeout_ms` is set and the timeout expires:
@@ -516,6 +527,16 @@ If `timeout_ms` is set and the timeout expires:
 - If `on_timeout` is not set → the run transitions to `timed_out` status
 
 The engine periodically checks waiting runs for timeouts and resumes them automatically.
+
+### Restarts and failover
+
+Flo logs a run's start, each action it invokes, and its final result. The rest of a run in progress is in the leader's memory: its current step, step outputs, retries, signals and timers. When the node restarts or leadership moves:
+
+- A finished run keeps its result.
+- A run in progress stays at its start with status `running`, even one that was `waiting`, and doesn't advance. It doesn't resume when its action completes, and a matching signal answers ok and does nothing.
+- Actions a run invoked still run, and their workers finish them.
+
+So a workflow run past its first step doesn't survive a failover. To recover, cancel the run and start it again.
 
 ---
 
@@ -866,7 +887,8 @@ Every significant state change is recorded as a history event:
 | `signal_received` | Signal type |
 | `signal_matched` | Signal type |
 | `signal_timeout` | Timeout target |
-| `action_not_found` | Action name |
+| `action_not_registered` | Action name |
+| `action_not_found` | Why, with the action's name |
 | `action_disabled` | Action name |
 | `awaiting_action` | Action name |
 | `action_completed` | Outcome |

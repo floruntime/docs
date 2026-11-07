@@ -195,6 +195,15 @@ interval: a worker with heartbeats turned off (for example the JavaScript SDK's
 A heartbeat or a fresh registration makes an unhealthy worker active again.
 See [Workers](/orchestration/workers#health-monitoring).
 
+### `[workflows]`
+
+```toml
+[workflows]
+# missing_action_wait_ms = 600000   # how long a step waits for its action to be registered; 0 fails it at once
+```
+
+A step past this wait takes its `target_not_found` outcome. The node leading the action's shard applies the setting, so set the same value on every node. See [Workflows](/orchestration/workflows#a-step-whose-action-isnt-registered).
+
 ### Removed settings
 
 These are refused at start, with the reason. Remove them from `flo.toml`.
