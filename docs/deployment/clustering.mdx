@@ -191,6 +191,7 @@ A client never needs to know which node leads. What it can see:
 | `unavailable: lost leadership before commit — write may still apply` | the leader changed while the write waited | see below |
 | `unavailable: lost the link to the leader — write may still apply` | the link the write went over dropped before an answer came | see below |
 | `unavailable: leader changed, write not applied — retry` | the entry was overwritten by a new leader | retry |
+| `unavailable: the leader is still applying what earlier leaders committed; retry` | a new leader hasn't applied earlier terms yet, and the request didn't run ([below](#writes-and-reads)) | retry |
 | `too many writes waiting for the leader` | 1024 forwarded writes are already held on this node | back off |
 | `overloaded: too many writes waiting for commit — back off and retry` | 1024 writes are already waiting for a commit on the leader | back off |
 | `internal error: could not hold the request until commit — write may still apply` | the leader proposed the write but could not keep the request to answer it | see below |
@@ -225,13 +226,21 @@ check with the rest of the group:
   commit with the no-op it writes when elected. It usually lasts well under a
   second, and longer with a long backlog to apply. A leader whose only surviving
   peer is far behind refuses until that peer catches up, and one that can't commit
-  its no-op keeps refusing until it can or it steps down. `/ready` keeps answering
-  200 meanwhile, on purpose: a 503 for a few milliseconds would make load balancers
-  flap. It refuses most writes the same way, having run nothing, so a retry is
-  safe; KV's writes and membership changes go ahead, and a worker's await gets no
-  task. The SDKs retry
-  this on their own a few times, over a few hundred milliseconds; the CLI reports
-  it.
+  its no-op keeps refusing until it can or it steps down.
+
+  It refuses most writes the same way, having run nothing, so a retry is safe.
+  Stream appends, queue pushes, time-series writes and workflow ops are among
+  them, so clients can see this during a failover. KV's writes go ahead, since
+  they're decided as they apply. So do worker registrations and heartbeats, and a
+  worker's await gets no task. A membership change waits for the leader's first
+  commit, as [above](#promoting-and-removing-members) says, and needn't wait for the apply
+  after that.
+
+  `/ready` keeps answering 200 meanwhile, on purpose: a 503 for a few milliseconds
+  would make load balancers flap. The exception is a member's first catch-up after
+  an `async_flush` restart, leading or not, which answers 503 `catching_up`. The
+  SDKs retry this refusal on their own a few times, over a few hundred
+  milliseconds; the CLI reports it.
 
   A read already waiting on a key (`kv get --wait`) isn't refused: it answers
   when that key's entry applies, with the key's state at that entry, even
@@ -427,6 +436,8 @@ On the same port, `GET /health` answers `ok` while the process is up,
 can't serve is a `503` naming it ([the states, in order](/reference/rest-api#get-ready)), and
 `GET /status` gives each shard's state, role, applied and commit index as JSON.
 A load balancer should route on `/ready`. See [REST API](/reference/rest-api#get-ready).
+A new leader applying earlier terms is the one brief exception: it stays `200`
+while it [refuses reads and most writes](#writes-and-reads), so clients retry.
 
 :::note
 **The metrics port binds to `127.0.0.1` by default.** `/metrics` and `/health`
