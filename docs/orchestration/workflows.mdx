@@ -1,9 +1,9 @@
 ---
 title: Workflows
-lede: Durable multi-step orchestration — compose actions via YAML, with signals, retries, inline plans, circuit breakers, health-weighted routing, cron schedules, stream triggers, JSONPath data flow, and idempotency.
+lede: Multi-step orchestration — compose actions via YAML, with signals, retries, inline plans, circuit breakers, health-weighted routing, cron schedules, stream triggers, JSONPath data flow, and idempotency.
 ---
 
-Workflows are Flo's **durable orchestration layer**. They compose [Actions](/orchestration/actions/) into multi-step business processes defined in YAML, with built-in resilience: retries, circuit breakers, health-weighted routing, signal handling, timeouts, polling, cron scheduling, stream triggers, and idempotency.
+Workflows are Flo's **orchestration layer**. They compose [Actions](/orchestration/actions/) into multi-step business processes defined in YAML, with built-in resilience: retries, circuit breakers, health-weighted routing, signal handling, timeouts, polling, cron scheduling, stream triggers, and idempotency.
 
 A workflow definition is a directed graph of **steps**. Each step either runs a target (an action, an inline plan, or a child workflow) or waits for an external signal. Every step declares **transitions** that map outcomes to the next step or to a **terminal state**. The engine walks the graph from the start step until it reaches a terminal.
 
@@ -179,9 +179,8 @@ Each step produces an **outcome** string that maps to a transition target.
 
 | Outcome | Meaning |
 |---------|---------|
-| `target_not_found` | The plan doesn't exist, or the action [wasn't registered in time](#a-step-whose-action-isnt-registered) |
-| `target_disabled` | The action is disabled |
-| `execution_failure` | Internal error during dispatch |
+| `target_not_found` | The child workflow doesn't exist, or the action [wasn't registered in time](#a-step-whose-action-isnt-registered) |
+| `execution_failure` | Internal error during dispatch, or the plan doesn't exist |
 
 Execution-level outcomes **cascade through a fallback chain**: the engine tries `target_not_found` → `execution_failure` → `failure` in order, using the first transition that matches. Business outcomes match exactly — no fallback.
 
@@ -191,9 +190,12 @@ Workers often register after a workflow is deployed, so a step waits for its act
 
 If the action still isn't registered after 10 minutes, the step takes the `target_not_found` outcome, and the run's history gets an `action_not_found` event: `action charge is not registered in namespace default; waited 600000 ms`. Set the wait with `missing_action_wait_ms` in [`[workflows]`](/getting-started/configuration#workflows). `0` fails the step at once.
 
-- **Plans:** an executor whose action isn't registered is passed over at once while the plan has another to try. Only the last executor waits.
+- **Plans:** an executor whose action isn't registered is passed over at once while the plan has another it can try. Only the last that can run waits; an executor whose breaker is open doesn't count.
 - **Cancelling** the run drops the wait, so nothing starts when the action registers later.
-- **Limits:** the wait is held in memory on the leader of the action's shard, so a restart or a failover loses it. Each shard holds up to 1,024 waiting steps; past that, a step takes `target_not_found` at once.
+- **An action deleted** after a step's invoke was proposed fails that step at once, with `target_not_found`.
+- **The wait is memory.** It's held on the leader of the action's shard, so a restart or a failover loses it. A step whose wait is lost while its run's own leader carries on fails, rather than wait for ever.
+- **The limit is shared.** Each shard holds up to 1,024 waiting steps across all namespaces. When that's full, a step whose action isn't registered takes `target_not_found` at once.
+- **Too large:** a step whose input is too long to log fails with `execution_failure` rather than wait.
 
 ### Transitions
 
@@ -889,7 +891,6 @@ Every significant state change is recorded as a history event:
 | `signal_timeout` | Timeout target |
 | `action_not_registered` | Action name |
 | `action_not_found` | Why, with the action's name |
-| `action_disabled` | Action name |
 | `awaiting_action` | Action name |
 | `action_completed` | Outcome |
 | `workflow_completed` | Terminal name |
@@ -899,12 +900,13 @@ Every significant state change is recorded as a history event:
 
 ### Persistence
 
-Workflow definitions and run state are persisted to the Unified Append Log (UAL). On node restart, the engine replays persisted entries to rebuild in-memory state:
+Workflow definitions, each run's start and each run's final result are logged to the Unified Append Log (UAL). On node restart, the engine replays them to rebuild in-memory state:
 
 - `workflow_create` entries restore the definition registry
 - `workflow_start` entries restore the run registry
+- `workflow_complete` entries restore each finished run's result
 
-This ensures workflows survive node restarts without external databases.
+Definitions and finished runs survive a restart. A run in progress doesn't resume: see [Restarts and failover](#restarts-and-failover).
 
 ---
 
