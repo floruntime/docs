@@ -125,7 +125,8 @@ The server refuses a `secret_file` that its group or others can read or write.
 ### `flo server inspect`
 
 Show a stopped node's cluster log: its hard state, last index and term, what
-is committed, the latest member list, and whether its lost-log guard is on.
+is committed, the latest member list, the cluster's id and generation, and
+whether its lost-log guard is on. Every member of one cluster shows the same id.
 Writes nothing. Refuses while a
 server holds the data directory, and refuses a directory that does not exist.
 
@@ -142,8 +143,8 @@ flo server inspect --data-dir /var/lib/flo
 
 Make a stopped node the cluster's only voter, for when a majority has lost its
 data. Without `--yes` it prints what it would change and stops. With `--yes`
-it writes a member list naming only this node and retires its cluster secret;
-restart it with a new one. See [Clustering](/deployment/clustering#when-a-majority-lost-its-data).
+it writes a member list naming only this node, in the same cluster at its next
+generation, and retires its cluster secret; restart it with a new one. See [Clustering](/deployment/clustering#when-a-majority-lost-its-data).
 
 ```bash
 flo server force-members --data-dir /var/lib/flo --yes
