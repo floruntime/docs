@@ -5,7 +5,7 @@ lede: Long-running processes that execute actions and consume streams — with a
 
 Workers are **long-running processes** that connect to Flo and execute tasks. There are two kinds:
 
-- **Action workers** — pull action tasks from a queue (long-polling), execute a handler, and report results. Used for durable task processing with retries, timeouts, and dead-letter routing.
+- **Action workers** — take [action](/orchestration/actions/) tasks (long-polling), execute a handler, and report results. Used for durable task processing with retries and leases.
 - **Stream workers** — consume records from a [stream](/primitives/streams/) via consumer groups, process each record, and auto-ack or nack. Used for continuous event processing.
 
 Both worker types register themselves in the **worker registry**, send periodic heartbeats, report load metrics, and support graceful drain. The server marks a worker silent for 90 seconds unhealthy, and removes one silent for 10 minutes.
@@ -67,7 +67,7 @@ If the worker's shard is [halted](/deployment/clustering#a-halted-shard), its re
 
 ### 3. Process
 
-**Action workers** long-poll with `action_await`, receive a `TaskAssignment` (task ID, action name, payload, attempt number), execute the registered handler, then call `complete` (with result bytes) or `fail` (with error message + optional retry flag).
+**Action workers** long-poll with `action_await` and receive a task: one delivery of a run, leased to the worker (run id, delivery, action name, input, attempt number, lease). They execute the registered handler, touching the task if it runs long, then call `complete` (with result bytes) or `fail` (with an error message and a retry flag), naming the delivery. A report for a delivery the run has moved on from is refused as [stale](/orchestration/actions#stale-reports).
 
 **Stream workers** call `group_read` on a consumer group, receive a batch of records, process each one through the handler, and auto-ack on success or auto-nack on error.
 
@@ -125,11 +125,11 @@ package main
 
 import (
     "context"
-    "fmt"
+    "log"
     "os/signal"
     "syscall"
 
-    flo "github.com/razorbill/flo-go"
+    flo "github.com/floruntime/flo-go"
 )
 
 func main() {
@@ -137,25 +137,32 @@ func main() {
     defer stop()
 
     client := flo.NewClient("localhost:9000", flo.WithNamespace("myapp"))
-    client.Connect()
+    if err := client.Connect(); err != nil {
+        log.Fatal(err)
+    }
     defer client.Close()
 
-    w, _ := client.NewActionWorker(flo.ActionWorkerOptions{
+    w, err := client.NewActionWorker(flo.ActionWorkerOptions{
         Concurrency: 10,
     })
+    if err != nil {
+        log.Fatal(err)
+    }
     defer w.Close()
 
-    w.MustRegisterAction("process-order", func(actx *flo.ActionContext) ([]byte, error) {
+    w.MustRegisterAction("process-order", func(actx *flo.ActionContext) (interface{}, error) {
         var order map[string]interface{}
-        actx.Into(&order)
+        if err := actx.Into(&order); err != nil {
+            return nil, err
+        }
         // Process the order...
-        return actx.Bytes(map[string]string{"status": "done"})
-    })
+        return map[string]string{"status": "done"}, nil
+    }, nil)
 
-    w.MustRegisterAction("send-email", func(actx *flo.ActionContext) ([]byte, error) {
+    w.MustRegisterAction("send-email", func(actx *flo.ActionContext) (interface{}, error) {
         // Send the email...
-        return nil, nil
-    })
+        return []byte(`{"status":"sent"}`), nil
+    }, nil)
 
     // Blocks until context is cancelled or drain completes
     w.Start(ctx)
@@ -238,20 +245,20 @@ await worker.close();
 const std = @import("std");
 const flo = @import("flo");
 
-fn processOrder(ctx: *flo.ActionContext) ![]const u8 {
+fn processOrder(ctx: *flo.ActionContext) anyerror!flo.ActionHandlerResult {
     const parsed = try ctx.json(struct { order_id: []const u8, amount: f64 });
     defer parsed.deinit();
     // Process the order...
-    return ctx.toBytes(.{ .status = "done", .order_id = parsed.value.order_id });
+    return .{ .bytes = try ctx.toBytes(.{ .status = "done", .order_id = parsed.value.order_id }) };
 }
 
-fn sendEmail(ctx: *flo.ActionContext) ![]const u8 {
+fn sendEmail(ctx: *flo.ActionContext) anyerror!flo.ActionHandlerResult {
     // Send the email...
-    return ctx.toBytes(.{ .status = "sent" });
+    return .{ .bytes = try ctx.toBytes(.{ .status = "sent" }) };
 }
 
 pub fn main() !void {
-    var gpa: std.heap.GeneralPurposeAllocator(.{}) = .init;
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -262,14 +269,16 @@ pub fn main() !void {
     });
     defer worker.deinit();
 
-    try worker.registerAction("process-order", processOrder);
-    try worker.registerAction("send-email", sendEmail);
+    try worker.registerAction("process-order", processOrder, .{});
+    try worker.registerAction("send-email", sendEmail, .{});
 
     try worker.start();
 }
 ```
 </Tab>
 </Tabs>
+
+Each SDK's register call also takes the action's options (its lease and attempts), and registers the action with the server: Go and Zig at once, JavaScript and Python when the worker starts. Registering replaces the action's settings, so the last registration wins. See [Actions](/orchestration/actions#action).
 
 ### ActionContext
 
@@ -279,29 +288,31 @@ Every action handler receives an `ActionContext` with helpers for parsing input 
 |--------|-------------|
 | `json()` / `Into()` | Deserialise the input payload from JSON |
 | `toBytes()` / `Bytes()` | Serialise a result value to JSON bytes |
-| `touch(extendMs)` | Extend the task lease (prevents timeout during long work) |
-| `taskId` / `task_id` | Unique task identifier |
-| `actionName` / `action_name` | The action that was invoked |
-| `attempt` | Attempt number (starts at 1, increments on retry) |
-| `createdAt` / `created_at` | Timestamp when the task was created |
+| `result(outcome, value)` / `Result()` | Complete with a [named outcome](#named-outcomes) |
+| `touch()` / `Touch()` | Keep the task's lease (see below); returns when the lease runs out, in Unix ms |
+| `taskId` / `task_id` / `TaskID()` | The task's id, `run:deliveries:term:index:action` (not in Zig) |
+| `runId` / `run_id` / `RunID()` | The run's id |
+| `actionName` / `action_name` / `ActionName()` | The action that was invoked |
+| `attempt` / `Attempt()` | The run's failures so far, plus one |
+
+The full list per SDK is on the [Actions](/orchestration/actions#actioncontext) page.
 
 ### Lease Extension
 
-For long-running tasks, periodically call `touch()` to extend the lease and prevent the server from reassigning the task to another worker:
+A task is leased to its worker for the action's timeout. A handler that runs longer must touch it, or the run is taken back and run again elsewhere. A touch takes no length: with half the lease or less left, the lease runs a full lease from now; with more left, nothing changes. So touch at least every half lease. A touch for a run that has moved on fails as a [stale report](/orchestration/actions#stale-reports).
 
 <Tabs>
 <Tab title="Go">
 ```go
-w.MustRegisterAction("generate-report", func(actx *flo.ActionContext) ([]byte, error) {
-    // For long tasks, extend the lease periodically
+w.MustRegisterAction("generate-report", func(actx *flo.ActionContext) (interface{}, error) {
     for i := 0; i < totalSteps; i++ {
         processStep(i)
-        if (i+1)%3 == 0 {
-            actx.Touch(30000) // extend by 30s
+        if _, err := actx.Touch(); err != nil {
+            return nil, err // the run moved on, or the touch was lost
         }
     }
-    return actx.Bytes(result)
-})
+    return result, nil
+}, nil)
 ```
 </Tab>
 <Tab title="Python">
@@ -309,8 +320,7 @@ w.MustRegisterAction("generate-report", func(actx *flo.ActionContext) ([]byte, e
 async def generate_report(ctx: ActionContext) -> bytes:
     for step in range(total_steps):
         await process_step(step)
-        if (step + 1) % 3 == 0:
-            await ctx.touch(30000)  # extend by 30s
+        await ctx.touch()
     return ctx.to_bytes(result)
 ```
 </Tab>
@@ -319,9 +329,7 @@ async def generate_report(ctx: ActionContext) -> bytes:
 worker.action("generate-report", async (ctx) => {
   for (let i = 0; i < totalSteps; i++) {
     await processStep(i);
-    if ((i + 1) % 3 === 0) {
-      await ctx.touch(30000); // extend by 30s
-    }
+    await ctx.touch();
   }
   return ctx.toBytes(result);
 });
@@ -329,35 +337,37 @@ worker.action("generate-report", async (ctx) => {
 </Tab>
 <Tab title="Zig">
 ```zig
-fn generateReport(ctx: *flo.ActionContext) ![]const u8 {
+fn generateReport(ctx: *flo.ActionContext) anyerror!flo.ActionHandlerResult {
     for (0..total_steps) |i| {
         processStep(i);
-        if ((i + 1) % 3 == 0) {
-            try ctx.touch(30000); // extend by 30s
-        }
+        _ = try ctx.touch();
     }
-    return ctx.toBytes(result);
+    return .{ .bytes = try ctx.toBytes(result) };
 }
 ```
 </Tab>
 </Tabs>
 
+Touching often is cheap: a touch with more than half the lease left writes nothing. Or turn on auto-touch (`AutoTouch` in Go, `autoTouch` in JavaScript, `auto_touch` in Python and Zig), and the worker touches each task on a timer while its handler runs: every sixth of the lease in Go, every quarter in JavaScript and Python, every third in Zig. It is off by default.
+
 ### Error Handling and Retries
 
-When a handler returns an error, the SDK automatically reports a failure with `retry: true`. The server re-queues the task for another attempt (up to the action's max retry count). Specific error types change the behaviour:
+When a handler returns an error, the SDK fails the task with `retry: true`. While the run has attempts left (the action's `max_attempts`, the first included), it is ready again at once for another attempt; on its last attempt it fails for good. Specific errors change the behaviour:
 
-| Condition | Retry | Notes |
-|-----------|-------|-------|
-| Handler returns error | Yes | Auto-retry with exponential backoff |
-| Handler panics / throws | Yes | SDK catches panics, reports failure |
-| `NonRetryableError` / `NewNonRetryableErrorf` | **No** | Immediately failed — no retries, no DLQ |
-| Context deadline exceeded | **No** | Task is permanently failed |
-| Context cancelled (shutdown) | **No** | Task is permanently failed |
-| Explicit `fail(..., retry: false)` | No | Moves to dead-letter queue |
+| Condition | Report | Notes |
+|-----------|--------|-------|
+| Handler returns or throws an error | Fail, retry | The run is ready again at once while attempts are left |
+| `NonRetryableError` / `NewNonRetryableErrorf` / `error.NonRetryable` (Zig) | Fail, no retry | The run fails now |
+| Handler panics (Go) | Fail, no retry | The SDK recovers the panic |
+| Handler runs past the worker's handler time limit | Fail, no retry | `ActionTimeout` (Go), `actionTimeoutMs` (JavaScript), `action_timeout` (Python), 5 minutes by default; Zig has none |
+| Worker stops while the handler runs (Go: its context is cancelled; Python: it is cancelled) | Handed back | No failure is counted; the run is ready again for another worker |
+| Handler runs past its lease without touching | None | The lease runs out: a failed attempt, and the run is delivered again. The late report is refused as stale |
+
+On stop, the JavaScript, Python and Zig workers let running handlers finish and send their results; Go's `Stop` cancels the handlers' context.
 
 ### NonRetryableError
 
-Use `NonRetryableError` when the task has definitively failed and retrying would be pointless (invalid input, business rule violations, permanent service rejections). The task is immediately marked `failed` — no retry delay, no backoff, no dead-letter queue.
+Use `NonRetryableError` when the task has definitively failed and retrying would be pointless (invalid input, business rule violations, permanent service rejections). The run is marked `failed` at once, whatever attempts it has left. In Zig, return `error.NonRetryable`.
 
 <Tabs>
 <Tab title="JavaScript">
@@ -393,7 +403,7 @@ w.MustRegisterAction("validate-order", func(actx *flo.ActionContext) (interface{
         return nil, flo.NewNonRetryableErrorf("order amount $%.0f exceeds $2000 limit", data.Amount)
     }
     return map[string]interface{}{"valid": true, "orderId": data.OrderID}, nil
-})
+}, nil)
 ```
 </Tab>
 <Tab title="Python">
@@ -460,7 +470,7 @@ w.MustRegisterAction("review-order", func(actx *flo.ActionContext) (interface{},
     return actx.Result("needs_review", map[string]interface{}{
         "orderId": data.OrderID, "note": "manual review required",
     })
-})
+}, nil)
 ```
 </Tab>
 <Tab title="Python">

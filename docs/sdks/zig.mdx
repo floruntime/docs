@@ -292,14 +292,14 @@ The `ActionWorker` is a high-level worker that manages connection, registration,
 ```zig
 const flo = @import("flo");
 
-fn processOrder(ctx: *flo.ActionContext) ![]const u8 {
+fn processOrder(ctx: *flo.ActionContext) anyerror!flo.ActionHandlerResult {
     const input = try ctx.json(OrderRequest);
     defer input.deinit();
 
-    // For long tasks, extend the lease
-    try ctx.touch(30000);
+    // For long tasks, keep the lease: touch at least every half lease
+    _ = try ctx.touch();
 
-    return ctx.toBytes(.{ .status = "completed" });
+    return .{ .bytes = try ctx.toBytes(.{ .status = "completed" }) };
 }
 
 pub fn main() !void {
@@ -314,7 +314,8 @@ pub fn main() !void {
     });
     defer worker.deinit();
 
-    try worker.registerAction("process-order", processOrder);
+    // The last argument is the action's options: .{} is a 30 s lease and 3 attempts.
+    try worker.registerAction("process-order", processOrder, .{});
     try worker.start();
 }
 ```
@@ -326,7 +327,7 @@ var actions = flo.Actions.init(&client);
 
 // Register an action type
 try actions.registerAction("send-email", .user, .{
-    .timeout_ms = 30000, .max_retries = 3,
+    .timeout_ms = 30000, .max_retries = 3, // max_retries counts attempts in all
 });
 
 // Invoke an action; .labels routes it to workers registered with those labels
