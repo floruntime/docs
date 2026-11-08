@@ -582,22 +582,24 @@ flo queue nack <queue> <seq>
 
 ### `flo queue peek`
 
-Peek at messages without leasing.
+The next ready messages of a queue, in dequeue order, without taking them. Each shows up to 4 KiB of its payload.
 
 ```bash
-flo queue peek <queue> [--count <n>]
+flo queue peek <queue> [--limit <n>]
 ```
+
+`--limit` is 1 to 100, 20 by default.
 
 ### `flo queue dlq`
 
 Manage dead-letter queue.
 
 ```bash
-flo queue dlq list <queue>
+flo queue dlq list <queue> [--limit <n>] [--after <seq>]
 flo queue dlq requeue <queue> <sequence...>
 ```
 
-`dlq list` shows the queue's dead-letter count; listing the messages and `dlq requeue` aren't supported yet.
+`dlq list` lists the queue's dead letters, oldest first, at most 100 a page (`--limit`, 100 by default), with the queue's total. When more follow it prints the `--after` value for the next page. `dlq requeue` isn't served yet: the server refuses it.
 
 ## Time-Series
 
