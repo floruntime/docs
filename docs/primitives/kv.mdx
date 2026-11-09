@@ -831,7 +831,7 @@ The KV store is implemented as a **KV Projection** — a hash table with MVCC ve
 
 | Property | Value |
 |----------|-------|
-| Max key size | ~3.9 KB |
+| Max key size | 4096 bytes, in any namespace |
 | Key bytes | Any except NUL (`0x00`), which is refused |
 | Max value size | ~256 KB |
 | Max namespace length | 63 bytes |
