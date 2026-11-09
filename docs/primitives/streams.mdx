@@ -509,16 +509,23 @@ try stream.groupAck("events", "processors", group_records.ids(), .{
 
 ## Tiered Storage
 
-Stream data flows through a tiered storage hierarchy automatically:
+A record's payload is served from wherever it still is, newest first:
 
-| Tier | Location | Purpose |
-|------|----------|---------|
-| **Hot** | In-memory ring buffer | Recent writes, lowest latency |
-| **Warm** | On-disk segments | Overflowed from hot tier, still fast |
+| Tier | Code | Where | Purpose |
+|------|-----:|-------|---------|
+| **Hot** | `0` | In-memory ring buffer | Recent writes, lowest latency |
+| **Warm** | `1` | In-memory copies of payloads past the ring (the newest 32 MB per shard) | Recent history, no disk read |
+| **Disk** | `2` | The log's sealed segments on disk | All the rest of the stream's history |
 
-When you read with `--json`, each record includes a `"tier"` field indicating where it was served from. Reads are transparent — the server merges results across tiers automatically.
+When you read with `--json`, each record includes a `"tier"` field saying where it was served from. The codes are the same in every SDK and in the wire protocol's tier byte.
 
-The thresholds for spilling between tiers are configurable per server (hot buffer capacity, max hot entries).
+Reads are transparent: the server merges results across tiers. A record served from disk is read off the request path, so a read that needs one waits for it:
+
+- A plain read waits up to its `block_ms`, and at most 2 seconds. A local disk read takes milliseconds; the bound is for a failing disk. If the records aren't back in time, the read is refused `unavailable` with `ran` = no, never answered short. The SDKs retry it.
+- A consumer group read that needs a record from disk is refused `unavailable` with `ran` = no at once, before anything is delivered or claimed, and its retry is served from a cache. Resending it is always safe.
+- A read that can't be made right now (a resource or IO failure) is refused the same way.
+
+The hot ring's size is configurable per server (hot buffer capacity, max hot entries).
 
 ## Durability
 

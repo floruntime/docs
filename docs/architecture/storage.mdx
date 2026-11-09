@@ -37,6 +37,8 @@ The CRC covers the header and payload together. Payload layout varies by entry t
 
 When entries age out of the hot ring, they're flushed to warm segments. A warm store hash map keeps payload copies in memory (default 32 MB) for the stream read path, which fetches record payloads by index, so those reads don't have to go to disk immediately. KV entries are never copied there: the KV projection holds the value, and nothing reads a KV payload from the log.
 
+A stream record past both is read back from its sealed segment, or from the segment writer's buffer if it hasn't been flushed yet. The segment read runs on the node's bulk I/O thread, never on a shard's thread. Each entry is checked against the log's terms before it's used, and recent results are kept in a small per-shard cache (8 MB). The read that needed it waits for it; see [Tiered Storage](/primitives/streams#tiered-storage) for what a client sees.
+
 ### Segment Format
 
 Each sealed segment is a `.flseg` file:
