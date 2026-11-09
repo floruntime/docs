@@ -130,15 +130,14 @@ seq = await client.queue.enqueue("tasks", payload,
 result = await client.queue.dequeue("tasks", 10,
     DequeueOptions(block_ms=30000))
 
-# A dequeue consumes its messages (queues are currently at-most-once)
+# A dequeue leases its messages: complete each within its lease, or it is delivered again
 for msg in result.messages:
     process(msg.payload)
 
-# DLQ operations
-result = await client.queue.dlq_list("tasks")
-await client.queue.dlq_requeue("tasks", [msg.seq for msg in result.messages])
+# Dead letters: up to 100, oldest first; pass after=page.last_seq for the next page
+page = await client.queue.dlq_list("tasks", DlqListOptions(limit=100))
 
-# Peek without consuming
+# Peek: the next ready messages, without taking them
 result = await client.queue.peek("tasks", 5)
 ```
 

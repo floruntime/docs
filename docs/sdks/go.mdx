@@ -232,20 +232,23 @@ for _, msg := range result.Messages {
 }
 ```
 
-A dequeue consumes its messages: queues are currently at-most-once, so
-`Ack` and `Nack` have no effect on a dequeued message.
+A dequeue leases its messages: complete each one within its lease, or it is
+delivered again. Failing one hands it back, and after its last attempt it
+moves to the dead-letter queue.
 
 ### DLQ
 
 ```go
-result, _ := client.Queue.DLQList("tasks", nil)
-client.Queue.DLQRequeue("tasks", seqs, nil)
+// Up to 100 dead letters, oldest first; pass After: &page.LastSeq for the next page
+page, _ := client.Queue.DLQList("tasks", &flo.DLQListOptions{Limit: 100})
 ```
+
+Requeueing dead letters isn't served yet: the server refuses `DLQRequeue`.
 
 ### Peek
 
 ```go
-result, _ := client.Queue.Peek("tasks", 10, nil) // without consuming
+result, _ := client.Queue.Peek("tasks", 10, nil) // the next ready messages, without taking them
 ```
 
 ## Stream Operations

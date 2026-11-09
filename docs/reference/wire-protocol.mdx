@@ -298,22 +298,27 @@ A `cluster_promote` value is the node id, u32 little-endian (4 bytes). A `cluste
 | `stream_group_touch` | `0x15A` |
 | `stream_group_info` | `0x15B` |
 | `stream_group_delete` | `0x15C` |
+| `stream_group_list` | `0x15D` |
+| `stream_group_members` | `0x15E` |
 
 ### Queues (0x170 – 0x19F)
 
 | OpCode | Value |
 |--------|-------|
 | `queue_enqueue` | `0x170` |
-| `queue_dequeue` | `0x171` |
-| `queue_complete` | `0x172` |
-| `queue_fail` | `0x174` |
 | `queue_dlq_list` | `0x176` |
 | `queue_dlq_delete` | `0x177` |
 | `queue_dlq_requeue` | `0x178` |
 | `queue_stats` | `0x17B` |
-| `queue_peek` | `0x17C` |
 | `queue_purge` | `0x17F` |
+| `queue_peek` | `0x180` |
+| `queue_dequeue` | `0x181` |
+| `queue_complete` | `0x182` |
+| `queue_fail` | `0x183` |
+| `queue_touch` | `0x184` |
 | `queue_list` | `0x198` |
+
+A `queue_dlq_list` value is `[limit:u32][after_seq:u64]`, both optional: up to `limit` dead letters (1 to 100; 100 when absent) after the one whose seq is `after_seq` (from the oldest when absent). The answer is `[count:u32]([seq:u64][size:u32][len:u32][payload][enqueued_at_ms:i64][deliveries:u32][priority:u8][moved_at_ms:i64])*[total:u64][has_more:u8][last_seq:u64]`, oldest first; `payload` is at most 4 KiB of the message's `size` bytes. To read the next page, send the answer's `last_seq` as `after_seq`.
 
 ### Time-Series (0x1A0 – 0x1BF)
 
@@ -326,6 +331,7 @@ A `cluster_promote` value is the node id, u32 little-endian (4 bytes). A `cluste
 | `ts_list` | `0x1A4` |
 | `ts_delete` | `0x1A5` |
 | `ts_retention` | `0x1A6` |
+| `ts_info` | `0x1A7` |
 
 A `ts_write` value is exactly one finite f64, 8 bytes little-endian; any other length, NaN or infinity is refused with `bad_request`.
 
@@ -339,10 +345,12 @@ A `ts_write` value is exactly one finite f64, 8 bytes little-endian; any other l
 | `action_list` | `0x303` |
 | `action_list_runs` | `0x304` |
 | `action_delete` | `0x305` |
-| `action_await` | `0x306` |
-| `action_complete` | `0x307` |
-| `action_fail` | `0x308` |
-| `action_touch` | `0x309` |
+| `action_await` | `0x30A` |
+| `action_complete` | `0x30B` |
+| `action_fail` | `0x30C` |
+| `action_touch` | `0x30D` |
+| `action_deliver` | `0x30E` (between shards only) |
+| `action_info` | `0x30F` |
 
 An `action_invoke` value is `[has_labels:u8]([labels_len:u16][labels])?[input]`: `has_labels` is 0 and the input follows, or 1 and the required worker labels, a JSON object, come first. An empty value, `has_labels` other than 0 or 1, labels that run past the value, or labels that aren't a JSON object are refused with `bad_request`.
 

@@ -149,9 +149,11 @@ const result = await client.queue.dequeue("tasks", 10, {
   blockMs: 30000,
 });
 
-// DLQ
-const dlq = await client.queue.dlqList("tasks");
-await client.queue.dlqRequeue("tasks", seqs);
+// Dead letters: up to 100, oldest first; pass after: page.lastSeq for the next page
+const page = await client.queue.dlqList("tasks", { limit: 100 });
+
+// Peek: the next ready messages, without taking them
+const peeked = await client.queue.peek("tasks", 5);
 ```
 
 ## Stream Operations
@@ -409,8 +411,9 @@ See [examples/workflow.ts](https://github.com/floruntime/flo-js/blob/dev/example
 | `dequeue` | `dequeue(queue, count, opts?) → Promise<DequeueResult>` | Fetch messages |
 | `ack` | `ack(queue, seqs, opts?) → Promise<void>` | Acknowledge |
 | `nack` | `nack(queue, seqs, opts?) → Promise<void>` | Nack (retry/DLQ) |
-| `dlqList` | `dlqList(queue, opts?) → Promise<DequeueResult>` | List DLQ |
-| `dlqRequeue` | `dlqRequeue(queue, seqs, opts?) → Promise<void>` | Requeue DLQ |
+| `peek` | `peek(queue, limit?, opts?) → Promise<PeekResult>` | The next ready messages, without taking them (`limit` 1 to 100, default 20) |
+| `dlqList` | `dlqList(queue, { limit?, after? }?) → Promise<DLQListResult>` | A page of dead letters, oldest first: `{ messages, total, hasMore, lastSeq }` |
+| `dlqRequeue` | `dlqRequeue(queue, seqs, opts?) → Promise<void>` | Not served yet: the server refuses it |
 
 ### Stream Methods
 
