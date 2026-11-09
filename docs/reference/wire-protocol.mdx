@@ -306,18 +306,19 @@ A `cluster_promote` value is the node id, u32 little-endian (4 bytes). A `cluste
 | OpCode | Value |
 |--------|-------|
 | `queue_enqueue` | `0x170` |
-| `queue_dequeue` | `0x171` |
-| `queue_complete` | `0x172` |
-| `queue_fail` | `0x174` |
 | `queue_dlq_list` | `0x176` |
 | `queue_dlq_delete` | `0x177` |
 | `queue_dlq_requeue` | `0x178` |
 | `queue_stats` | `0x17B` |
-| `queue_peek` | `0x180` |
 | `queue_purge` | `0x17F` |
+| `queue_peek` | `0x180` |
+| `queue_dequeue` | `0x181` |
+| `queue_complete` | `0x182` |
+| `queue_fail` | `0x183` |
+| `queue_touch` | `0x184` |
 | `queue_list` | `0x198` |
 
-A `queue_dlq_list` value is `[limit:u32][after_seq:u64]`, both optional: up to `limit` dead letters (1 to 100; 100 when absent) after the one whose seq is `after_seq` (from the oldest when absent). The answer is `[count:u32]([seq:u64][size:u32][len:u32][payload][enqueued_at_ms:i64][attempts:u32][priority:u8][moved_at_ms:i64])*[total:u64][has_more:u8][last_seq:u64]`, oldest first; `payload` is at most 4 KiB of the message's `size` bytes. To read the next page, send the answer's `last_seq` as `after_seq`.
+A `queue_dlq_list` value is `[limit:u32][after_seq:u64]`, both optional: up to `limit` dead letters (1 to 100; 100 when absent) after the one whose seq is `after_seq` (from the oldest when absent). The answer is `[count:u32]([seq:u64][size:u32][len:u32][payload][enqueued_at_ms:i64][deliveries:u32][priority:u8][moved_at_ms:i64])*[total:u64][has_more:u8][last_seq:u64]`, oldest first; `payload` is at most 4 KiB of the message's `size` bytes. To read the next page, send the answer's `last_seq` as `after_seq`.
 
 ### Time-Series (0x1A0 – 0x1BF)
 
