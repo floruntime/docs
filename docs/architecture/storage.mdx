@@ -9,7 +9,7 @@ Most databases maintain two copies of every write: a write-ahead log (WAL) for d
 
 The Unified Append Log captures every mutation — KV puts, queue enqueues, stream appends, time-series writes — as a sequenced, typed entry. The Raft consensus log and the storage log are the same thing. There is no separate WAL.
 
-Everything else — the KV hash table, the queue's priority heap, the time-series columnar buffers — is a **projection**: a derived view rebuilt deterministically from the log. If you deleted every projection and replayed the log from the beginning, you'd get back to exactly the same state.
+Everything else — the KV and queue families, the time-series columnar buffers — is derived state, rebuilt deterministically from the log. If you deleted it all and replayed the log from the beginning, you'd get back to exactly the same state.
 
 ## Unified Append Log (UAL)
 
@@ -69,15 +69,9 @@ Projections are specialized data structures that consume UAL entries and maintai
 - Reads are O(1) hash table lookups — no Raft round-trip needed
 - Historical lookups walk the version chain
 
-### Queue Projection
+### Queues
 
-The old system stored each message as 8 separate KV entries (~1.5 KB overhead per message). The new design uses native structures:
-
-- **Ready heap** — min-heap ordered by priority, 16 bytes per node
-- **Lease tracker** — maps sequences to lease expiry timestamps. Unused today: a dequeue acks each message as it hands it out, so queues are at-most-once
-- **DLQ state** — tracks retry counts, moves failures to dead-letter queue
-
-Per-message overhead: **~64 bytes** (23× reduction from the old design).
+Queues are a state machine on the log, not a projection: every enqueue, dequeue, complete, fail, touch and lease expiry is an entry every replica applies alike. Each shard keeps a queue's messages, its ready keys ordered by (priority, due time, seq), every lease's deadline, and its dead letters (oldest first, 10,000 per queue). A dequeue logs a deliver that leases the first due ready messages; the leader's expire duty ends leases past their deadline. A ready message costs its payload plus about 340 bytes of memory.
 
 ### Stream Projection
 
@@ -104,7 +98,7 @@ The projection router owns the three in-memory projections:
 | Entry Types | Destination |
 |-------------|-------------|
 | `kv_put`, `kv_delete`, `kv_incr`, `kv_expire`, `kv_batch` | KV Projection |
-| `queue_enqueue`, `queue_ack`, `queue_nack`, `queue_lease`, `queue_purge` | Queue Projection |
+| `queue_enqueue`, `queue_deliver`, `queue_settle`, `queue_release`, `queue_extend`, `queue_expire`, `queue_purge` | The queue machine |
 | `ts_write`, `ts_write_batch` | TS Projection |
 
 Every other type — stream appends, trims and deletes, consumer-group commits, namespaces, actions, workflows, processing jobs — has one registered applier in its subsystem, and an entry type may have one or the other, never both; the server refuses to start otherwise. Raft's own control entries (`raft_noop`, `raft_config`, `raft_snapshot`) belong to the consensus layer and have no applier. Blocking reads wake on the apply, not on the request that caused it.

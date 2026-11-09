@@ -1,23 +1,33 @@
 ---
 title: Queues
-lede: Priority queues with competing consumers, DLQ and blocking dequeue. Delivery is currently at-most-once.
+lede: Priority queues with competing consumers, leases, dead letters and blocking dequeue. Delivery is at-least-once.
 ---
 
-Flo queues distribute tasks to competing consumers with priority ordering and dead-letter handling. Every enqueue is Raft-replicated before it is acknowledged.
-
-:::note
-Queues are currently **at-most-once**. A dequeue consumes the message: the server acknowledges it as it hands it out, so in normal operation it is not redelivered, even if the consumer crashes before processing it. There is no visibility timeout, `ack` and `nack` have no effect on a dequeued message, and so the DLQ is not reached in normal use. Leases with redelivery are planned (tracked in [#179](https://github.com/floruntime/flo/issues/179)).
-:::
+Flo queues distribute tasks to competing consumers with priority ordering and dead-letter handling. Every change to a queue — an enqueue, a dequeue, a complete, a fail, a lease running out — is a Raft-replicated log entry, so every replica, a restarted node and a new leader hold the same messages and leases.
 
 ## Core Concepts
 
+### Leases and Deliveries
+
+A dequeue **leases** its messages to the consumer that took them; it doesn't remove them. The consumer then, within the lease:
+
+- **completes** (acks) them: they leave the queue;
+- **fails** (nacks) them: they're ready again, after an optional delay, or dead once their attempts are spent;
+- **touches** them: their lease runs on.
+
+A lease that runs out makes its messages ready again, and the next dequeue takes them as their next delivery. Delivery is **at-least-once**: a consumer that crashes before completing gets its messages handed to another consumer once the lease runs out.
+
+Each dequeue is one **delivery**, named by the term and log index it was made at. Every message in it is named back by its seq and its delivery count. The CLI prints a message's delivery as `term.index.seq.deliveries`, which `ack`, `nack` and `touch` take. A report naming an older delivery — one whose lease ran out and whose messages went to someone else — applies nothing, and is refused message by message with a reason.
+
+The default lease is 30 seconds; a dequeue may name its own, from 5 seconds to 12 hours. A touch with half the lease or less left runs a full lease from then, up to 12 hours from the dequeue.
+
 ### Sequence Numbers
 
-Every message is assigned a monotonically increasing **sequence number** on enqueue. The sequence is returned by the enqueue operation and used to reference the message in ack and nack operations.
+Every message is assigned a monotonically increasing **sequence number** in its queue on enqueue. The enqueue answers it.
 
 ### Priority Ordering
 
-Messages are dequeued in priority order. Lower numeric values are higher priority (0 is highest). Messages with equal priority are dequeued in FIFO order.
+Messages are dequeued in priority order. Lower numeric values are higher priority (0 is highest). Within a priority, messages go in the order they became ready, then by sequence: one failed with a delay goes behind those ready before it. A priority whose next message isn't due yet doesn't hold back the next priority's ready messages.
 
 ```bash
 flo queue enqueue tasks '{"urgent":true}' --priority 1
@@ -54,25 +64,40 @@ flo queue enqueue tasks '{"task":"send-email","to":"alice@example.com"}'
 # With priority (lower = higher priority, default: 0)
 flo queue enqueue tasks '{"urgent":true}' --priority 1
 
+# Ready in a minute, not now (at most a day)
+flo queue enqueue reminders 'ping' --delay 60000
 ```
 
-The response returns the assigned sequence number. A message takes at most 64 KiB.
+The response returns the assigned sequence number. A message takes at most 64 KiB. A deduplication key is refused: a queue keeps no deduplication window.
 
 ### Dequeue
 
 ```bash
-# Pop one message (default count: 1)
+# Take one message (default count: 1), leased for 30 s
 flo queue dequeue tasks
 
-# Batch dequeue — up to 10 messages at once (max: 100)
-flo queue dequeue tasks --count 10
+# Up to 10 at once (max: 100), leased for 2 minutes, by a named consumer
+flo queue dequeue tasks --count 10 --lease 120000 --consumer worker-1
+
+# Take them for good: completed as they're taken, payloads only
+flo queue dequeue tasks --ack
 ```
 
-Dequeued messages are consumed immediately — they are removed from the queue and won't be delivered to other consumers. The sequence number and payload are returned for each message.
+Each line is a message's delivery, then its payload:
+
+```
+3.42.7.1 {"task":"send-email","to":"alice@example.com"}
+```
+
+`-o json` prints the delivery's term, index and lease expiry, and each message with its delivery. `-o raw` prints payloads only, so it is refused without `--ack`: nothing could ack what it printed.
+
+With `--ack`, the dequeue is answered once its complete applies. If that can't be confirmed — the leader changes in between — its messages are answered as an ordinary dequeue's, leased with their delivery: they're never lost, and acking them later answers `gone` (already done) if the complete landed, or completes them if not.
+
+A consumer named with `--consumer` must name itself the same in `ack`, `nack` and `touch`. Without one, consumers share the empty name; the delivery's term and index alone then decide whose report applies, which is enough, since no two deliveries share them.
 
 ### Blocking Dequeue
 
-If the queue is empty, a blocking dequeue waits for new messages instead of returning immediately.
+If the queue has nothing ready, a blocking dequeue waits for a message instead of returning at once.
 
 ```bash
 # Block up to 30 seconds for new messages
@@ -83,50 +108,71 @@ flo queue dequeue tasks --block 30000
 flo queue dequeue tasks --block 300000
 ```
 
-When a new message is enqueued, all blocking dequeue waiters on that queue are notified. If the timeout expires with no messages, an empty (but successful) result is returned.
+An enqueue wakes one waiting dequeue per message it makes ready; the rest keep waiting. If the wait runs out with no messages, an empty (but successful) result is returned. A wait on a queue holding only delayed messages is woken within about a second of the first coming due.
 
-### Acknowledge
-
-Mark a message as processed. A dequeued message is already consumed, so this
-currently has no effect (see the note above):
+### Complete (Ack)
 
 ```bash
-flo queue ack tasks <seq>
+flo queue ack tasks 3.42.7.1
 
-# Ack multiple sequences
-flo queue ack tasks 42 43 44
+# Several messages of the same dequeue
+flo queue ack tasks 3.42.7.1 3.42.8.1
 ```
 
-### Negative Acknowledge (Nack)
+Each message applies or is refused on its own. A refused one is printed with its reason, and the command exits non-zero:
 
-Meant to return a message for redelivery, or send it to the DLQ. A dequeued message is already consumed, so this currently has no effect:
+| Reason | Means |
+|--------|-------|
+| `gone` | No such message in this queue. For a complete, this means done: a resent ack whose first applied finds its messages gone. |
+| `delivered_again` | Its lease ran out or it was failed, and it was dequeued again: this delivery is over. |
+| `other_holder` | Another consumer holds this delivery. |
+| `expired` | Its lease ran out; it is ready again, or dead. |
+| `released` | It was failed; it is ready again, or dead. |
+| `not_held` | It isn't leased. |
+
+### Fail (Nack)
 
 ```bash
-# Nack — message goes back to the ready queue
-flo queue nack tasks <seq>
+# Ready again at once
+flo queue nack tasks 3.42.7.1
 
+# Ready again in 10 seconds, with a reason kept on the message
+flo queue nack tasks 3.42.7.1 --delay 10000 --error "upstream timed out"
+
+# Dead now, whatever attempts are left
+flo queue nack tasks 3.42.7.1 --dlq
 ```
+
+A message failed, or whose lease ran out, 5 times is dead.
+
+### Touch
+
+```bash
+flo queue touch tasks 3.42.7.1
+```
+
+Keeps a long job's messages: with half their lease or less left, it runs a full lease from now; with more left, nothing changes. Touch at least every half lease.
 
 ### Peek
 
-Inspect messages at the front of the queue without consuming them:
+Inspect the next ready messages, in the order a dequeue takes them, without taking them:
 
 ```bash
-flo queue peek tasks --count 5
+flo queue peek tasks --limit 5
 ```
 
 ### List Queues
 
 ```bash
 flo queue ls
-flo queue list --limit 50 --json
+flo queue list --limit 50 -o json
 ```
 
-Returns queue metadata: name, namespace, pending count, available count, total enqueued, total dequeued, and DLQ count.
+Returns each queue's name, namespace, ready and leased counts, total enqueued, total delivered, and dead count.
 
 ### Watch
 
-Continuously poll and display messages as they arrive:
+Continuously take and print messages as they arrive, completing each:
 
 ```bash
 flo queue watch tasks
@@ -134,18 +180,15 @@ flo queue watch tasks
 
 ## Dead Letter Queue
 
-Messages that exceed the retry limit (default: 5 attempts) are moved to the DLQ. The DLQ is a bounded FIFO buffer (10,000 entries by default) — when full, the oldest DLQ entries are evicted.
+A message failed or expired 5 times, or failed with `--dlq`, is dead. A queue keeps its 10,000 most recent dead letters; past that, the oldest goes.
 
 ```bash
-# List DLQ messages
+# List DLQ messages, oldest first
 flo queue dlq list tasks
 flo queue dlq list tasks --limit 50
-
-# Requeue DLQ messages back to the main queue
-flo queue dlq requeue tasks <seq> <seq> ...
 ```
 
-Each DLQ entry records the sequence number, delivery attempt count, and the timestamp when it was moved to the DLQ.
+Each DLQ entry records the sequence number, its delivery count, and when it died. Requeueing and deleting dead letters aren't supported yet.
 
 ## SDK Examples
 
@@ -165,7 +208,7 @@ result, _ := client.Queue.Dequeue("tasks", 10, &flo.DequeueOptions{
     BlockMS: ptr(uint32(30000)),
 })
 
-// A dequeue consumes its messages (at-most-once)
+// Leased: complete each within its lease, or it is delivered again
 for _, msg := range result.Messages {
     process(msg.Payload)
 }
@@ -189,7 +232,7 @@ async with FloClient("localhost:9000") as client:
     result = await client.queue.dequeue("tasks", 10,
         DequeueOptions(block_ms=30000))
 
-    # A dequeue consumes its messages (at-most-once)
+    # Leased: complete each within its lease, or it is delivered again
     for msg in result.messages:
         process(msg.payload)
 
@@ -215,7 +258,7 @@ const result = await client.queue.dequeue("tasks", 10, {
   blockMs: 30000,
 });
 
-// A dequeue consumes its messages (at-most-once)
+// Leased: complete each within its lease, or it is delivered again
 for (const msg of result.messages) {
   process(decode(msg.payload));
 }
@@ -245,7 +288,7 @@ const seq = try queue.enqueue("tasks", "{\"task\":\"process\"}", .{
 var result = try queue.dequeue("tasks", 10, .{ .block_ms = 30000 });
 defer result.deinit();
 
-// A dequeue consumes its messages (at-most-once)
+// Leased: complete each within its lease, or it is delivered again
 for (result.messages) |msg| {
     process(msg.payload);
 }
@@ -261,33 +304,34 @@ defer dlq.deinit();
 </Tab>
 </Tabs>
 
-## Dequeue Message Fields
+## Dequeue Answer
 
-Each dequeued message includes:
+A dequeue answers the delivery's `term` and `index`, `expires_at_ms` (when the lease runs out; 0 when nothing was taken, or with ack), and each message:
 
 | Field | Description |
 |-------|-------------|
-| `seq` | Sequence number (monotonically increasing per queue) |
+| `seq` | Sequence number, increasing per queue |
 | `payload` | The message body (bytes) |
 | `priority` | Priority value (0–255, lower = higher priority) |
-| `enqueued_at` | Timestamp when the message was enqueued |
-| `delivery_count` | Number of delivery attempts |
+| `enqueued_at_ms` | When the message was enqueued |
+| `deliveries` | Its deliveries, this one included |
 
 ## Durability
 
-- All enqueues are Raft-replicated before the response is sent
-- Dequeued messages are persisted as acked — they don't reappear after restart
-- Un-consumed messages survive server restarts with sync durability
-- Queue metadata (names, statistics) is rebuilt from the UAL on recovery
+- Every enqueue, dequeue, complete, fail, touch and lease expiry is a Raft-replicated log entry, applied alike on every replica.
+- A leader that fails mid-lease leaves the lease to the next one, which gives it a grace of up to 30 seconds past its deadline before ending it, so a consumer that touched the old leader in time isn't cut off.
+- A dequeue whose client is gone when it's answered leaves its messages leased until the lease runs out.
+- Unconsumed messages and leases survive restarts, rebuilt from the log.
 
 ## How It Works
 
-The Queue Projection uses purpose-built data structures:
+A queue is kept as a few ordered families in each shard's state:
 
-- **Ready heap** — Min-heap ordered by `(priority, sequence)`. Lower priority values and lower sequences are dequeued first.
-- **DLQ ring** — Bounded FIFO buffer (default: 10,000 entries). Messages exceeding the max attempt count (default: 5) are moved here.
-- **Message map** — `HashMap(seq → Message)` holding the full message state (~128 bytes fixed overhead per message plus payload).
+- **Messages** — each message's payload, priority, status (ready, leased or dead), delivery count and current lease. A ready message costs its payload plus about 340 bytes of memory.
+- **Ready keys** — ordered by `(priority, due time, seq)`, so the next message is the first key.
+- **Deadlines** — every lease's expiry, earliest first, which the leader's expire duty reads every second.
+- **Dead letters** — oldest first, capped at 10,000 per queue.
 
-Blocking dequeue uses the same waiter pool as blocking stream reads — enqueue operations notify all registered waiters on that queue.
+A dequeue logs a deliver; every replica applies it by leasing the first due ready messages, so they all lease the same ones.
 
 See [Storage Internals](/architecture/storage/) for details.
