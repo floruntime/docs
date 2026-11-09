@@ -109,13 +109,11 @@ flo queue nack tasks <seq>
 
 ### Peek
 
-See the next ready messages, in the order a dequeue would take them, without taking them:
+Inspect messages at the front of the queue without consuming them:
 
 ```bash
-flo queue peek tasks --limit 5
+flo queue peek tasks --count 5
 ```
-
-`--limit` is 1 to 100, 20 by default. Each message shows its sequence number, priority, attempts, enqueue time, whole size and up to 4 KiB of its payload. The answer says when more may follow.
 
 ### List Queues
 
@@ -136,20 +134,18 @@ flo queue watch tasks
 
 ## Dead Letter Queue
 
-A nacked message that has used its attempts (default: 5) moves to the DLQ. While queues are at-most-once, a dequeue consumes its messages and nack has no effect, so nothing reaches the DLQ yet. The DLQ is a bounded FIFO buffer (10,000 entries by default): when it is full, its oldest entry is evicted.
+Messages that exceed the retry limit (default: 5 attempts) are moved to the DLQ. The DLQ is a bounded FIFO buffer (10,000 entries by default) — when full, the oldest DLQ entries are evicted.
 
 ```bash
-# List dead letters, oldest first, up to 100 a page
+# List DLQ messages
 flo queue dlq list tasks
 flo queue dlq list tasks --limit 50
 
-# The next page: start after the last seq the previous page listed
-flo queue dlq list tasks --limit 50 --after <seq>
+# Requeue DLQ messages back to the main queue
+flo queue dlq requeue tasks <seq> <seq> ...
 ```
 
-A page holds at most 100 dead letters. Each shows its sequence number, attempts, priority, enqueue time, when it was moved, its whole size and up to 4 KiB of its payload. The answer also carries the queue's total, whether more follow and the page's last seq.
-
-Requeueing and deleting dead letters aren't served yet: the server refuses both.
+Each DLQ entry records the sequence number, delivery attempt count, and the timestamp when it was moved to the DLQ.
 
 ## SDK Examples
 
@@ -174,15 +170,12 @@ for _, msg := range result.Messages {
     process(msg.Payload)
 }
 
-// Peek without consuming: up to 5 of the next ready messages
+// Peek without consuming
 peeked, _ := client.Queue.Peek("tasks", 5, nil)
 
-// Dead letters, a page at a time
-page, _ := client.Queue.DLQList("tasks", &flo.DLQListOptions{Limit: 50})
-for page.HasMore {
-    after := page.LastSeq
-    page, _ = client.Queue.DLQList("tasks", &flo.DLQListOptions{Limit: 50, After: &after})
-}
+// DLQ operations
+dlq, _ := client.Queue.DLQList("tasks", nil)
+client.Queue.DLQRequeue("tasks", []uint64{dlq.Messages[0].Seq}, nil)
 ```
 </Tab>
 <Tab title="Python">
@@ -200,14 +193,12 @@ async with FloClient("localhost:9000") as client:
     for msg in result.messages:
         process(msg.payload)
 
-    # Peek without consuming: up to 5 of the next ready messages
+    # Peek without consuming
     peeked = await client.queue.peek("tasks", 5)
 
-    # Dead letters, a page at a time
-    page = await client.queue.dlq_list("tasks", DlqListOptions(limit=50))
-    while page.has_more:
-        page = await client.queue.dlq_list(
-            "tasks", DlqListOptions(limit=50, after=page.last_seq))
+    # DLQ operations
+    dlq = await client.queue.dlq_list("tasks")
+    await client.queue.dlq_requeue("tasks", [m.seq for m in dlq.messages])
 ```
 </Tab>
 <Tab title="JavaScript">
@@ -229,14 +220,12 @@ for (const msg of result.messages) {
   process(decode(msg.payload));
 }
 
-// Peek without consuming: up to 5 of the next ready messages
+// Peek without consuming
 const peeked = await client.queue.peek("tasks", 5);
 
-// Dead letters, a page at a time
-let page = await client.queue.dlqList("tasks", { limit: 50 });
-while (page.hasMore) {
-  page = await client.queue.dlqList("tasks", { limit: 50, after: page.lastSeq });
-}
+// DLQ operations
+const dlq = await client.queue.dlqList("tasks");
+await client.queue.dlqRequeue("tasks", dlq.messages.map(m => m.seq));
 ```
 </Tab>
 <Tab title="Zig">
@@ -261,13 +250,13 @@ for (result.messages) |msg| {
     process(msg.payload);
 }
 
-// Peek without consuming: up to 5 of the next ready messages
+// Peek without consuming
 var peeked = try queue.peek("tasks", 5, .{});
 defer peeked.deinit();
 
-// Dead letters: the first page of up to 50; pass .after = page.last_seq for the next
-var page = try queue.dlqList("tasks", .{ .limit = 50 });
-defer page.deinit();
+// DLQ operations
+var dlq = try queue.dlqList("tasks", .{});
+defer dlq.deinit();
 ```
 </Tab>
 </Tabs>
@@ -296,7 +285,7 @@ Each dequeued message includes:
 The Queue Projection uses purpose-built data structures:
 
 - **Ready heap** — Min-heap ordered by `(priority, sequence)`. Lower priority values and lower sequences are dequeued first.
-- **DLQ ring** — Bounded FIFO buffer (default: 10,000 entries). A nacked message that has used its attempts (default: 5) moves here.
+- **DLQ ring** — Bounded FIFO buffer (default: 10,000 entries). Messages exceeding the max attempt count (default: 5) are moved here.
 - **Message map** — `HashMap(seq → Message)` holding the full message state (~128 bytes fixed overhead per message plus payload).
 
 Blocking dequeue uses the same waiter pool as blocking stream reads — enqueue operations notify all registered waiters on that queue.
