@@ -181,6 +181,10 @@ flo stream create events --partitions 4      # 4 partitions
 flo stream create events --retention 72      # 72-hour retention
 ```
 
+A stream's partition count and retention are logged when it's created, so every node has them, and they survive a restart and a leader change.
+
+Creating a stream that already exists answers ok if it asks for the same settings, as a retry does. If it asks for others, it's refused: `conflict: the stream exists with other settings; change them with stream alter`. A stream that exists only because something was appended to it has no settings yet, so a create sets them. Change retention with `flo stream alter`; altering a stream that has no settings is `not_found`. A stream's partition count is fixed when it's created.
+
 ### Info
 
 ```bash

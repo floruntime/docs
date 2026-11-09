@@ -798,6 +798,8 @@ When disabled:
 - Manual starts via `flo workflow start` are blocked
 - **Existing running instances are not affected**
 
+Disabling and enabling are logged, so every node has the setting, and it survives a restart and a leader change. Each answers once it applies. Either one for a workflow that doesn't exist is `not_found`. A definition created again under the same name keeps the setting it had.
+
 To re-enable:
 
 ```bash
