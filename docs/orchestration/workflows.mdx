@@ -689,7 +689,8 @@ Examples:
 - When both day-of-month and day-of-week are given (neither is `*`), a day matching either one fires, as in standard cron.
 - Each slot starts one run, across restarts and leader changes.
 - If slots are missed while no node can lead (an outage, say), the latest one fires once when a leader is back. Earlier missed slots don't fire.
-- A leader whose clock runs ahead fires early by as much.
+- At `max_concurrent`, a due slot waits and fires when a run finishes. If a later slot comes due first, only the later one fires.
+- A leader whose clock is ahead or behind fires early or late by as much.
 - An expression that can never fire, such as `0 0 30 2 *` (Feb 30), is refused when the workflow is created.
 
 Disabling a workflow (`flo workflow disable`) pauses the schedule. Re-enabling resumes it, counting slots from the enable: slots that passed while it was disabled don't fire, and an interval schedule fires at once.
