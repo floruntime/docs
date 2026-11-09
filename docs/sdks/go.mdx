@@ -232,8 +232,9 @@ for _, msg := range result.Messages {
 }
 ```
 
-A dequeue consumes its messages: queues are currently at-most-once, so
-`Ack` and `Nack` have no effect on a dequeued message.
+A dequeue leases its messages: complete each one within its lease, or it is
+delivered again. Failing one hands it back, and after its last attempt it
+moves to the dead-letter queue.
 
 ### DLQ
 
