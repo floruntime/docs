@@ -695,6 +695,10 @@ Examples:
 
 Disabling a workflow (`flo workflow disable`) pauses the schedule. Re-enabling resumes it, counting slots from the enable: slots that passed while it was disabled don't fire, and an interval schedule fires at once.
 
+:::note
+A run started just as its leader node is killed can be left `running` without its first step ever being taken: the new leader doesn't take it. `flo workflow status` shows the run with no step started, and it doesn't move. Cancel it with `flo workflow cancel` and start it again. A run whose first step began isn't affected.
+:::
+
 ---
 
 ## Stream Triggers
