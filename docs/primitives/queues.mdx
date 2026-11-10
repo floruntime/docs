@@ -180,7 +180,7 @@ flo queue watch tasks
 
 ## Dead Letter Queue
 
-A message failed or expired 5 times, or failed with `--dlq`, is dead. A queue keeps its 10,000 most recent dead letters; past that, the oldest goes.
+A message failed or expired 5 times, or failed with `--dlq`, is dead. Dead letters are kept until the queue is purged, and count towards what the queue holds.
 
 ```bash
 # List DLQ messages, oldest first
@@ -189,6 +189,16 @@ flo queue dlq list tasks --limit 50
 ```
 
 Each DLQ entry records the sequence number, its delivery count, and when it died. Requeueing and deleting dead letters aren't supported yet.
+
+## Limits
+
+A queue holds at most 100,000 messages and 256 MiB of payloads, ready, leased and dead together, and all of a shard's queues together 1 GiB. Past either, an enqueue is refused `overloaded`:
+
+```text
+overloaded: queue 'tasks' is full: it holds 100000 messages (at most 100000) and 52428800 payload bytes (at most 268435456), ready, leased and dead; consume or purge it
+```
+
+Nothing already held is dropped. Consume messages, or purge the queue, to make room. The caps are [`[queues]` settings](/getting-started/configuration/#queues).
 
 ## SDK Examples
 
@@ -330,7 +340,7 @@ A queue is kept as a few ordered families in each shard's state:
 - **Messages** — each message's payload, priority, status (ready, leased or dead), delivery count and current lease. A ready message costs its payload plus about 340 bytes of memory.
 - **Ready keys** — ordered by `(priority, due time, seq)`, so the next message is the first key.
 - **Deadlines** — every lease's expiry, earliest first, which the leader's expire duty reads every second.
-- **Dead letters** — oldest first, capped at 10,000 per queue.
+- **Dead letters** — oldest first, kept until the queue is purged.
 
 A dequeue logs a deliver; every replica applies it by leasing the first due ready messages, so they all lease the same ones.
 
