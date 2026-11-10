@@ -509,16 +509,25 @@ try stream.groupAck("events", "processors", group_records.ids(), .{
 
 ## Tiered Storage
 
-Stream data flows through a tiered storage hierarchy automatically:
+A record's payload is served from wherever it still is:
 
-| Tier | Location | Purpose |
-|------|----------|---------|
-| **Hot** | In-memory ring buffer | Recent writes, lowest latency |
-| **Warm** | On-disk segments | Overflowed from hot tier, still fast |
+| Tier | Code | Where | Purpose |
+|------|-----:|-------|---------|
+| **Hot** | `0` | The in-memory ring buffer of recent appends | Recent writes, lowest latency |
+| **Warm** | `1` | In-memory copies of recent payloads (the newest 32 MB per shard) | A record whose payload wraps the ring's end, or history when the ring is smaller than this store |
+| **Disk** | `2` | The log on disk: its sealed segments, or the buffer of the segment being written | All the rest of the stream's history |
 
-When you read with `--json`, each record includes a `"tier"` field indicating where it was served from. Reads are transparent — the server merges results across tiers automatically.
+When you read with `--json`, each record includes a `"tier"` field saying where it was served from. The codes are the same in every SDK and in the wire protocol's tier byte.
 
-The thresholds for spilling between tiers are configurable per server (hot buffer capacity, max hot entries).
+Reads are transparent: the server merges results across tiers. A record read from disk is read off the request path, so a read answers with the records it already holds, in order, up to the first one still being read:
+
+- **A plain read** answers at once with what it holds. One that holds none of its window waits up to its `block_ms`, and at most 2 seconds; a local disk read takes milliseconds, and the bound is for a failing disk. If the records aren't back in time, it is refused `unavailable` with `ran` = no, never answered short. The SDKs retry it.
+- **A consumer group read**, and a claim, delivers or claims only the records its reply carries; the rest stay where they were. One that holds none of its window is refused `unavailable` with `ran` = no at once, with nothing delivered or claimed, and its retry finds the records read. Resending it is always safe.
+- **A read that can't be made right now** (a resource shortage, or an IO error) is refused `unavailable` with `ran` = no at once, saying why.
+
+If the log on disk turns out to be damaged (a sealed segment that's corrupt, or that doesn't hold a committed record), that's damage to the shard, as when the server starts or applies: a lone node takes the shard offline, and a cluster member stops taking part in its group. It shows in `/status`, and reads held on the shard are refused with it. An IO error that lasts five minutes is treated the same way; a permission error says so. See [Durability and the diverged state](/deployment/clustering#durability-and-the-diverged-state) for what an operator does next.
+
+The hot ring's size is configurable per server (hot buffer capacity, max hot entries).
 
 ## Durability
 
