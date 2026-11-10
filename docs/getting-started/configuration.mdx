@@ -195,6 +195,21 @@ interval: a worker with heartbeats turned off (for example the JavaScript SDK's
 A heartbeat or a fresh registration makes an unhealthy worker active again.
 See [Workers](/orchestration/workers#health-monitoring).
 
+### `[queues]`
+
+```toml
+[queues]
+max_messages = 100000        # Messages one queue may hold, ready, leased and dead (1 to 16777216)
+max_bytes = 268435456        # Held bytes one queue may hold, likewise (64 KiB to 1 GiB)
+shard_held_bytes = 1073741824 # Held bytes all of a shard's queues may hold (64 KiB to 64 GiB)
+```
+
+Every replica holds every queued message in memory, so these bound what a runaway producer can make a node hold. A message holds its payload, its error text and 512 bytes besides, so empty messages fill a queue too. Past a cap, an enqueue is refused `overloaded`, with a message naming the cap; nothing already held is dropped. Consume, or purge, to make room. Dead letters count until the queue is purged.
+
+:::note
+**Set the same caps on every node.** The leader's caps decide, for every replica, whatever a replica's own settings say. A node that applies an enqueue under caps other than its own counts it in `flo_queue_cap_mismatch_total` and logs a warning naming both.
+:::
+
 ### Removed settings
 
 These are refused at start, with the reason. Remove them from `flo.toml`.

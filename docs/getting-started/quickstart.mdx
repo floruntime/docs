@@ -44,8 +44,12 @@ flo stream read events --limit 10
 # Enqueue a job
 flo queue enqueue jobs '{"task": "send-welcome-email", "to": "alice"}'
 
-# Take the next job (a dequeue consumes it)
+# Take the next job: it is leased to you, and printed with its delivery
 flo queue dequeue jobs
+# 3.42.1.1 {"task": "send-welcome-email", "to": "alice"}
+
+# Done with it: complete it, or it is delivered again after 30 s
+flo queue ack jobs 3.42.1.1
 ```
 
 ## Time-Series

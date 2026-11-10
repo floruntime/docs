@@ -539,6 +539,8 @@ flo stream group delete <stream> --group <name>
 
 ## Queues
 
+A dequeue leases its messages until they're acked (completed), nacked (failed) or their lease runs out; see [Queues](/primitives/queues/). Each message's **delivery** prints as `term.index.seq.deliveries`, which `ack`, `nack` and `touch` take.
+
 ### `flo queue enqueue`
 
 Add a message to a queue.
@@ -549,11 +551,12 @@ flo queue enqueue <queue> <data> [options]
 
 | Flag | Description |
 |------|-------------|
-| `--priority <n>` | Message priority, 0–255; lower is taken first, and unset is 0 |
+| `--priority <n>` | Message priority, 0–255; lower is taken first, and unset is 0. Past 255 is refused |
+| `--delay <ms>` | Ready after this long, not now (at most 86400000, a day) |
 
 ### `flo queue dequeue`
 
-Dequeue messages.
+Take a queue's next ready messages, leased.
 
 ```bash
 flo queue dequeue <queue> [options]
@@ -561,31 +564,53 @@ flo queue dequeue <queue> [options]
 
 | Flag | Description |
 |------|-------------|
-| `--count <n>` | Number of messages (default: 1) |
+| `--count <n>` | Most messages to take, 1–100 (default: 1) |
 | `--block <ms>` | Wait for messages (at most 300000 ms, 5 minutes; 0 does not wait; a longer wait is refused) |
+| `--lease <ms>` | How long they're held without a touch, 5000–43200000 (default: 30000) |
+| `--consumer <id>` | Who takes them; `ack`, `nack` and `touch` must name the same |
+| `--ack` | Complete them as they're taken: payloads only, nothing comes back |
+
+Each line is a delivery and its payload. `-o json` prints the delivery's term, index and lease expiry and each message; `-o raw` prints payloads only and is refused without `--ack`. A count or lease out of range is refused, naming the range.
 
 ### `flo queue ack`
 
-Acknowledge one processed message.
+Complete messages of one dequeue: they leave the queue.
 
 ```bash
-flo queue ack <queue> <seq>
+flo queue ack <queue> <delivery>... [--consumer <id>]
 ```
+
+Prints `OK: <n>` for those it completed, and each one it didn't with its reason (`gone`, `delivered_again`, `other_holder`, `expired`, `released`, `not_held`), exiting non-zero. For an ack, `gone` means done already.
 
 ### `flo queue nack`
 
-Negative acknowledge. Queues are at-most-once today, so a nack doesn't redeliver (tracked in [#179](https://github.com/floruntime/flo/issues/179)).
+Fail messages of one dequeue: ready again, or dead once their attempts are spent.
 
 ```bash
-flo queue nack <queue> <seq>
+flo queue nack <queue> <delivery>... [options]
+```
+
+| Flag | Description |
+|------|-------------|
+| `--delay <ms>` | Ready again after this long (default: at once) |
+| `--dlq` | Dead now, whatever attempts are left |
+| `--error <text>` | Why they failed, kept on the message |
+| `--consumer <id>` | The consumer that dequeued them |
+
+### `flo queue touch`
+
+Keep messages of one dequeue: with half their lease or less left, it runs a full lease from now. Prints when the lease now runs out.
+
+```bash
+flo queue touch <queue> <delivery>... [--consumer <id>]
 ```
 
 ### `flo queue peek`
 
-Peek at messages without leasing.
+The next ready messages, in dequeue order, without taking them.
 
 ```bash
-flo queue peek <queue> [--count <n>]
+flo queue peek <queue> [--limit <n>]
 ```
 
 ### `flo queue dlq`
@@ -593,11 +618,18 @@ flo queue peek <queue> [--count <n>]
 Manage dead-letter queue.
 
 ```bash
-flo queue dlq list <queue>
-flo queue dlq requeue <queue> <sequence...>
+flo queue dlq list <queue> [--limit <n>] [--after <seq>]
 ```
 
-`dlq list` shows the queue's dead-letter count; listing the messages and `dlq requeue` aren't supported yet.
+`dlq list` pages a queue's dead letters, oldest first. `dlq requeue` and `dlq delete` aren't supported yet.
+
+### `flo queue purge`
+
+Remove every message from a queue, ready, leased and dead, and print how many went. A consumer holding a purged message finds it gone when it acks.
+
+```bash
+flo queue purge <queue>
+```
 
 ## Time-Series
 
