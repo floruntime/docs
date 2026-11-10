@@ -71,7 +71,7 @@ Projections are specialized data structures that consume UAL entries and maintai
 
 ### Queues
 
-Queues are a state machine on the log, not a projection: every enqueue, dequeue, complete, fail, touch and lease expiry is an entry every replica applies alike. Each shard keeps a queue's messages, its ready keys ordered by (priority, due time, seq), every lease's deadline, and its dead letters (oldest first, 10,000 per queue). A dequeue logs a deliver that leases the first due ready messages; the leader's expire duty ends leases past their deadline. A ready message costs its payload plus about 340 bytes of memory.
+Queues are a state machine on the log, not a projection: every enqueue, dequeue, complete, fail, touch and lease expiry is an entry every replica applies alike. Each shard keeps a queue's messages, its ready keys ordered by (priority, due time, seq), every lease's deadline, and its dead letters (oldest first, kept until the queue is purged). A dequeue logs a deliver that leases the first due ready messages; the leader's expire duty ends leases past their deadline. A ready message costs its payload plus about 340 bytes of memory.
 
 ### Stream Projection
 

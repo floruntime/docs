@@ -192,10 +192,10 @@ Each DLQ entry records the sequence number, its delivery count, and when it died
 
 ## Limits
 
-A queue holds at most 100,000 messages and 256 MiB of payloads, ready, leased and dead together, and all of a shard's queues together 1 GiB. Past either, an enqueue is refused `overloaded`:
+A queue holds at most 100,000 messages and 256 MiB, ready, leased and dead together, and all of a shard's queues together 1 GiB. A message holds its payload, its error text and 512 bytes besides, so empty messages count too. Past either, an enqueue is refused `overloaded`:
 
 ```text
-overloaded: queue 'tasks' is full: it holds 100000 messages (at most 100000) and 52428800 payload bytes (at most 268435456), ready, leased and dead; consume or purge it
+overloaded: queue 'tasks' is full: it holds 100000 messages (at most 100000) and 52428800 held bytes (at most 268435456), ready, leased and dead; consume or purge it
 ```
 
 Nothing already held is dropped. Consume messages, or purge the queue, to make room. The caps are [`[queues]` settings](/getting-started/configuration/#queues).
