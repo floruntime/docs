@@ -682,7 +682,22 @@ Examples:
 | `input` | `"{}"` | Input JSON override for scheduled runs |
 | `paused` | `false` | Whether the schedule starts paused |
 
-Disabling a workflow (`flo workflow disable`) pauses the schedule. Re-enabling resumes it.
+### When a Schedule Fires
+
+- An interval schedule fires when the workflow is created, then every `interval` milliseconds from then.
+- A cron schedule fires at its first matching minute after the workflow is created. Cron times are **UTC**.
+- When both day-of-month and day-of-week are given (neither is `*`), a day matching either one fires, as in standard cron.
+- Each slot starts one run, across restarts and leader changes.
+- If slots are missed while no node can lead (an outage, say), the latest one fires once when a leader is back. Earlier missed slots don't fire.
+- At `max_concurrent`, a due slot waits and fires when a run finishes. If a later slot comes due first, only the later one fires.
+- A leader whose clock is ahead or behind fires early or late by as much.
+- An expression that can never fire, such as `0 0 30 2 *` (Feb 30), is refused when the workflow is created.
+
+Disabling a workflow (`flo workflow disable`) pauses the schedule. Re-enabling resumes it, counting slots from the enable: slots that passed while it was disabled don't fire, and an interval schedule fires at once.
+
+:::note
+A run started just as its leader node is killed can be left `running` without its first step ever being taken: the new leader doesn't take it. `flo workflow status` shows the run with no step started, and it doesn't move. Cancel it with `flo workflow cancel` and start it again. A run whose first step began isn't affected.
+:::
 
 ---
 
