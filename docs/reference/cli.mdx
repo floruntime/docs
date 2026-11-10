@@ -623,6 +623,14 @@ flo queue dlq list <queue> [--limit <n>] [--after <seq>]
 
 `dlq list` pages a queue's dead letters, oldest first. `dlq requeue` and `dlq delete` aren't supported yet.
 
+### `flo queue purge`
+
+Remove every message from a queue, ready, leased and dead, and print how many went. A consumer holding a purged message finds it gone when it acks.
+
+```bash
+flo queue purge <queue>
+```
+
 ## Time-Series
 
 ### `flo ts write`
