@@ -258,7 +258,7 @@ flo stream group create events --group processors --ack-timeout 60000 --max-deli
 flo stream group read events --group processors --consumer worker-1 --limit 10
 ```
 
-A read takes the group's **ready** records first (nacked, or whose lease ran out), oldest first, then the stream's records past the group's cursor, **one record at a time**: a read may take part of a multi-record append. A read takes at most 100 records. It prints each record with its **delivery**, `term.index.id.deliveries`:
+A read takes the group's **ready** records first (nacked, or whose lease ran out), oldest first, then the stream's records past the group's cursor, **one record at a time**: a read may take part of a multi-record append. A read takes at most 100 records; a larger `--limit` reads 100. It prints each record with its **delivery**, `term.index.id.deliveries`:
 
 ```text
 3.42.1703350800000-0.1 {"type":"login","user":"ada"}
@@ -288,6 +288,8 @@ Acking one record of an append acks only that record. A report naming a delivery
 - **Lease** (`--ack-timeout`, default 30 s, 5 s to 12 h): a record not acked or touched that long goes to the group's next read, its deliveries counted. A new leader gives the leases its predecessor granted a grace of up to 30 s before ending them.
 - **Attempts** (`--max-deliver`, default 5, 1 to 255): a record nacked or expired that many times is **dead**: it is kept, counted in `info`, and not delivered again.
 
+Both are set when the group is created. Creating it again with the same settings says it exists; with others, it is refused, naming the group's own.
+
 ### Inspecting a group
 
 ```bash
@@ -302,7 +304,7 @@ A group's members are the consumers holding its records now; there is no join or
 
 ### Trims and deletes
 
-A record a trim removes is never delivered again; the group stops counting it shortly after (`info`'s `trimmed_pending` counts those not yet cleaned up). Deleting a stream deletes its groups, and `flo stream group delete` deletes one: either is gone at once, and the group's records are cleaned up in the background. Until they are, creating or reading a group of that name answers *still being removed; retry*.
+A record a trim removes is never delivered again; `info` counts it in `trimmed_pending` alone until cleanup takes it, shortly after, so ready, leased, dead and `trimmed_pending` add up to what the group holds. Deleting a stream deletes its groups, and `flo stream group delete` deletes one: either is gone at once, and the group's records are cleaned up in the background. Until they are, creating or reading a group of that name answers *still being removed; retry*.
 
 ### Limits
 
