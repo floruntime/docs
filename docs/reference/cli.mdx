@@ -522,20 +522,25 @@ Deleting a missing stream is a no-op (idempotent). A non-empty stream is refused
 
 ### `flo stream group`
 
-Manage consumer groups. A group is scoped to a single stream — every subcommand takes the `<stream>` it operates on, and wildcard/fan-in reads (`events.*`) are not supported.
+Manage consumer groups. A group is scoped to a single stream: every subcommand takes the `<stream>` it operates on, and wildcard reads (`events.*`) are refused.
 
 ```bash
-flo stream group create <stream> --group <name> [--ack-timeout <ms>] [--max-deliver <n>]
-flo stream group read   <stream> --group <name> --consumer <id> [--limit <n>] [--block <ms>]
-flo stream group ack    <stream> --group <name> --ids <id,...> [--consumer <id>]
-flo stream group nack   <stream> --group <name> --ids <id,...> [--consumer <id>]
-flo stream group touch  <stream> --group <name> --consumer <id> --ids <id,...>
+flo stream group create  <stream> --group <name> [--ack-timeout <ms>] [--max-deliver <n>]
+flo stream group read    <stream> --group <name> --consumer <id> [--limit <n>] [--block <ms>]
+flo stream group ack     <stream> --group <name> --consumer <id> --ids <delivery,...>
+flo stream group nack    <stream> --group <name> --consumer <id> --ids <delivery,...> [--delay <ms>] [--dlq] [--error <text>]
+flo stream group touch   <stream> --group <name> --consumer <id> --ids <delivery,...>
 flo stream group pending <stream> --group <name> [--consumer <id>]
-flo stream group info   <stream> --group <name>
-flo stream group join   <stream> <group> <consumer>
-flo stream group leave  <stream> --group <name> --consumer <id>
-flo stream group delete <stream> --group <name>
+flo stream group info    <stream> --group <name>
+flo stream group list    <stream>
+flo stream group members <stream> <group>
+flo stream group delete  <stream> --group <name>
 ```
+
+- `read` prints each record with its delivery, `term.index.id.deliveries`, which `ack`, `nack` and `touch` take in `--ids`. A read takes at most 100 records.
+- `--ack-timeout` is the lease, 5000 to 43200000 ms (default 30000). `--max-deliver` is the attempts, 1 to 255 (default 5): a record nacked or expired that many times is dead.
+- `ack`, `nack` and `touch` say which records they didn't apply to, and why, and then exit non-zero.
+- `join`, `leave` and `claim` are gone: members are the consumers holding records, and a read takes expired and nacked records first.
 
 ## Queues
 

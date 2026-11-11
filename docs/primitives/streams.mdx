@@ -237,104 +237,78 @@ Deleting a stream that does not exist is a no-op (idempotent), and the name can 
 
 ## Consumer Groups
 
-Consumer groups allow multiple consumers to process a stream cooperatively. Each record is delivered to **exactly one** consumer in the group. The server tracks a **Pending Entry List (PEL)** — records that have been delivered but not yet acknowledged.
+A consumer group lets several consumers share a stream: each record goes to **one** of them, leased to it until it acks. Delivery is **at-least-once**. A record whose lease runs out, or that is nacked, goes to the group's next read; one nacked or expired too often is dead. Every delivery, ack and lease is a log entry, so a restart or a new leader keeps them.
 
-A group read delivers whole appends, like a plain read. The PEL currently holds
-one entry per append, not per record: acknowledging an append's first record
-acknowledges the whole append, and acknowledging its other records has no
-effect. Acknowledge the first record of an append only once all of its records
-are processed.
-
-A consumer group is **scoped to a single stream**: its identity is the `(stream, group)` pair, and its cursor and PEL belong to that one stream. The same group name used on two different streams gives two fully independent groups (separate cursors, separate PELs). A group read targets exactly one stream — **wildcard / fan-in reads are not supported**:
+A group is **scoped to a single stream**: its identity is the `(stream, group)` pair. The same group name on two streams is two independent groups. A group read targets exactly one stream; **wildcard reads are refused**:
 
 ```bash
-# ✗ rejected — a group cannot span multiple streams
+# ✗ refused — a group reads a single stream
 flo stream group read "events.*" --group g --consumer w1
 ```
 
-To process events of many types through one group, write them to a **single stream** with a type discriminator in the payload (e.g. a JSON `"type"` field) and branch with [stream processing](/orchestration/processing/) — rather than spreading them across `events.login`, `events.logout`, … and trying to subscribe with a wildcard.
+To process events of many types through one group, write them to a **single stream** with a type discriminator in the payload (e.g. a JSON `"type"` field) and branch with [stream processing](/orchestration/processing/).
 
-### Lifecycle
+### Reading
 
 ```bash
-# Create a group explicitly (optional — group read auto-creates)
-flo stream group create events --group processors
+# Create a group (optional: the first read creates one at the defaults)
+flo stream group create events --group processors --ack-timeout 60000 --max-deliver 5
 
-# Join a consumer to the group
-flo stream group join events processors worker-1
-
-# Read records (auto-creates group and joins consumer if needed)
+# Read up to 10 records
 flo stream group read events --group processors --consumer worker-1 --limit 10
-
-# Acknowledge processed records
-flo stream group ack events --group processors --consumer worker-1 \
-  --ids 1703350800000-0,1703350800000-1
-
-# Leave the group
-flo stream group leave events --group processors --consumer worker-1
-
-# Delete the entire group
-flo stream group delete events --group processors
 ```
 
-### Acknowledgment
+A read takes the group's **ready** records first (nacked, or whose lease ran out), oldest first, then the stream's records past the group's cursor, **one record at a time**: a read may take part of a multi-record append. A read takes at most 100 records; a larger `--limit` reads 100. It prints each record with its **delivery**, `term.index.id.deliveries`:
 
-Records delivered via `group read` are placed in the PEL. They must be acknowledged to advance the cursor. Unacknowledged records will be redelivered.
-
-```bash
-# Ack specific IDs (comma-separated)
-flo stream group ack events --group processors --consumer worker-1 \
-  --ids 1703350800000-0,1703350800000-1
-
+```text
+3.42.1703350800000-0.1 {"type":"login","user":"ada"}
 ```
 
-### Redelivery and Nack
+With `--block <ms>` a read waits for a record, up to 5 minutes.
 
-If processing fails, you can explicitly nack records to put them back in the delivery pool:
+### Ack, nack and touch
+
+Each takes the deliveries a read printed:
 
 ```bash
-# Nack — make records available for redelivery immediately
-flo stream group nack events --group processors --consumer worker-1 \
-  --ids 1703350800000-0
+# Done with them: they leave the group
+flo stream group ack events --group processors --consumer worker-1   --ids 3.42.1703350800000-0.1,3.42.1703350800000-1.1
 
+# Failed: ready again after --delay, or dead now with --dlq
+flo stream group nack events --group processors --consumer worker-1   --ids 3.42.1703350800000-0.1 --delay 10000 --error "upstream timed out"
+
+# Still working: with half the lease or less left, a full lease from now
+flo stream group touch events --group processors --consumer worker-1   --ids 3.42.1703350800000-0.1
 ```
 
-The group can also auto-redeliver if the consumer doesn't ack within a deadline:
+Acking one record of an append acks only that record. A report naming a delivery that has moved on applies nothing to that record and says why: acked already (`gone`), delivered again since, held by another consumer, or its lease ran out. Retrying an ack whose answer was lost is safe: the record answers `gone`.
+
+### Leases and attempts
+
+- **Lease** (`--ack-timeout`, default 30 s, 5 s to 12 h): a record not acked or touched that long goes to the group's next read, its deliveries counted. A new leader gives the leases its predecessor granted a grace of up to 30 s before ending them.
+- **Attempts** (`--max-deliver`, default 5, 1 to 255): a record nacked or expired that many times is **dead**: it is kept, counted in `info`, and not delivered again.
+
+Both are set when the group is created. Creating it again with the same settings says it exists; with others, it is refused, naming the group's own.
+
+### Inspecting a group
 
 ```bash
-# Auto-redeliver after 30 seconds of no ack
-flo stream group create events --group processors --ack-timeout 30000
+# Records out to consumers now, oldest first
+flo stream group pending events --group processors [--consumer worker-1]
 
-# Give up after 5 delivery attempts (records go to DLQ)
-flo stream group create events --group processors --max-deliver 5
-```
-
-### Extending Delivery Deadlines
-
-If a consumer needs more time to process a record, it can restart the record's ack deadline (one ack timeout from now):
-
-```bash
-flo stream group touch events --group processors --consumer worker-1 \
-  --ids 1703350800000-0
-```
-
-### Inspecting Pending State
-
-```bash
-# List all pending (delivered but unacked) records for a group
-flo stream group pending events --group processors
-
-# Filter to a single consumer's pending entries
-flo stream group pending events --group processors --consumer worker-1
-
-# Group metadata (consumer count, PEL size, last delivered ID)
+# Ready, leased and dead counts, and the consumers holding records
 flo stream group info events --group processors
 ```
 
-### Delivery
+A group's members are the consumers holding its records now; there is no join or leave.
 
-Every group delivers each record to one of its consumers: they compete for
-records. There are no other delivery modes.
+### Trims and deletes
+
+A record a trim removes is never delivered again; `info` counts it in `trimmed_pending` alone until cleanup takes it, shortly after, so ready, leased, dead and `trimmed_pending` add up to what the group holds. Deleting a stream deletes its groups, and `flo stream group delete` deletes one: either is gone at once, and the group's records are cleaned up in the background. Until they are, creating or reading a group of that name answers *still being removed; retry*.
+
+### Limits
+
+A group's records count against the [`[queues]` caps](/getting-started/configuration/#queues): a group holds at most 100,000 records out (ready, leased and dead) unless the caps say otherwise, and each counts 512 bytes and its error text toward the shard's total. Past a cap, a read takes no new records; with none ready to go again, it is refused `overloaded`, naming the cap. Ack or nack records to make room.
 
 ## SDK Examples
 
