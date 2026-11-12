@@ -698,8 +698,6 @@ version: "1.0.0"
 trigger:
   stream: orders                     # source stream name
   namespace: prod                    # source namespace (optional)
-  consumer_group: wf-orders          # consumer group (optional, auto-generated)
-  mode: shared                       # shared | exclusive | key_shared
   batch_size: 1                      # events per run (1 = single, >1 = array)
   batch_timeout_ms: 5000             # fallback poll interval / partial-batch flush (default 5000)
 
@@ -710,14 +708,12 @@ start:
     failure: flo.Failed
 ```
 
-The event payload becomes `$.input` inside the workflow and is accessible via JSONPath.
+The trigger reads its stream with its own cursor: each event once, in order. The event payload becomes `$.input` inside the workflow and is accessible via JSONPath.
 
 | Field | Default | Description |
 |-------|---------|-------------|
 | `stream` | — | Source stream name (required) |
 | `namespace` | workflow's namespace | Source stream namespace |
-| `consumer_group` | `wf-{workflow_name}` | Consumer group name |
-| `mode` | `shared` | `shared` (competing consumers), `exclusive` (single consumer), `key_shared` (partition-key affinity) |
 | `batch_size` | `1` | Events per workflow run (`>1` delivers a JSON array) |
 | `batch_timeout_ms` | `5000` | Fallback poll interval (ms), and the time to wait before flushing a partial batch |
 
