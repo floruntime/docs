@@ -194,6 +194,8 @@ sinks:
 
 Sinks define where the pipeline writes results. Four sink kinds are supported.
 
+A sink writes each record **at least once**. When a sink's target is full (a queue at its caps, or a shard whose log can take no more writes), the pipeline holds at that record and goes on once there's room. A write refused for room after it was sent makes the pipeline read that record again, so it and the records after it can reach a stream, a KV key or a queue twice. A write refused for any other reason is counted as dropped (`flo_processing_records_dropped_total`) and logged; it isn't retried.
+
 ### Stream Sink
 
 Appends records to a Flo stream:
