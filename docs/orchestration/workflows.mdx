@@ -862,6 +862,7 @@ Every significant state change is recorded as a history event:
 | `step_started` | Step name |
 | `step_completed` | Step name |
 | `step_retry` | Step name |
+| `step_waiting_for_room` | Step name: the log was too full to take the step's start, so the run waits and tries it again; once per wait |
 | `waiting_for_signal` | Signal type |
 | `signal_received` | Signal type |
 | `signal_matched` | Signal type |
