@@ -277,16 +277,21 @@ flo stream group ack events --group processors --consumer worker-1   --ids 3.42.
 # Failed: ready again after --delay, or dead now with --dlq
 flo stream group nack events --group processors --consumer worker-1   --ids 3.42.1703350800000-0.1 --delay 10000 --error "upstream timed out"
 
+# Never started, or a stop cut them short: ready again at once, no attempt spent
+flo stream group nack events --group processors --consumer worker-1   --ids 3.42.1703350800000-0.1 --abandon
+
 # Still working: with half the lease or less left, a full lease from now
 flo stream group touch events --group processors --consumer worker-1   --ids 3.42.1703350800000-0.1
 ```
 
-Acking one record of an append acks only that record. A report naming a delivery that has moved on applies nothing to that record and says why: acked already (`gone`), delivered again since, held by another consumer, or its lease ran out. Retrying an ack whose answer was lost is safe: the record answers `gone`.
+A nack's `--error` is kept on the record, up to 1024 bytes. `--abandon` hands records back unstarted, as a worker does with what it read but never began, or what a stop cut short: they're ready again at once, the delivery counted but no attempt spent. It takes no `--delay`, `--dlq` or `--error`, and it never dead-letters, so a worker that abandons on every error passes a poison record around for ever; nack those instead.
+
+Acking one record of an append acks only that record. A report naming a delivery that has moved on applies nothing to that record and says why: acked already (`gone`), delivered again since, held by another consumer, or its lease ran out. Retrying an ack whose answer was lost is safe: the record answers `gone`. An ack, nack or touch to a group that isn't there is refused `not_found` as a whole.
 
 ### Leases and attempts
 
 - **Lease** (`--ack-timeout`, default 30 s, 5 s to 12 h): a record not acked or touched that long goes to the group's next read, its deliveries counted. A new leader gives the leases its predecessor granted a grace of up to 30 s before ending them.
-- **Attempts** (`--max-deliver`, default 5, 1 to 255): a record nacked or expired that many times is **dead**: it is kept, counted in `info`, and not delivered again.
+- **Attempts** (`--max-deliver`, default 5, 1 to 255): a record nacked or expired that many times is **dead**: it is kept, counted in `info`, and not delivered again. A dead record leaves only when its group is deleted or a stream trim passes it.
 
 Both are set when the group is created. Creating it again with the same settings says it exists; with others, it is refused, naming the group's own.
 
@@ -308,7 +313,13 @@ A record a trim removes is never delivered again; `info` counts it in `trimmed_p
 
 ### Limits
 
-A group's records count against the [`[queues]` caps](/getting-started/configuration/#queues): a group holds at most 100,000 records out (ready, leased and dead) unless the caps say otherwise, and each counts 512 bytes and its error text toward the shard's total. Past a cap, a read takes no new records; with none ready to go again, it is refused `overloaded`, naming the cap. Ack or nack records to make room.
+A group's records count against the [`[queues]` caps](/getting-started/configuration/#queues): a group holds at most 100,000 records (ready, leased and dead) unless the caps say otherwise, and each counts 512 bytes and its error text toward the shard's total, which its queues and groups share. Past a cap, a read takes no new records; with none ready to go again, it is refused `overloaded` with reason `group_held_full`, naming the cap, and the CLI exits 4:
+
+```text
+Error: overloaded: group 'processors' on stream 'events' is full: it holds 100000 records (at most 100000) and 51200000 held bytes (at most 268435456), leased, ready and dead; ack or nack the leased ones, and delete the group or trim the stream to clear dead ones [overloaded/group_held_full]
+```
+
+Reading again won't help until room is made: leased records leave as consumers ack or nack them, dead ones only when the group is deleted or a trim passes them, and the shard's total clears as its other groups and queues drain. So a consumer seeing `group_held_full` acks what it holds rather than retrying the read.
 
 ## SDK Examples
 
