@@ -33,8 +33,8 @@ Dedicated thread running a TCP accept loop. On each new connection:
 
 1. Accept the socket
 2. Peek at the first bytes to detect the protocol (binary or HTTP)
-3. Parse the routing key from the first request
-4. Hash the routing key → partition → shard
+3. Read the namespace and key from the first request
+4. Hash them → slot → shard
 5. Hand off the file descriptor to the target shard via a pipe
 
 Connections have **shard affinity** — once assigned, a connection stays on its shard to avoid cross-core cache thrashing.
@@ -48,7 +48,7 @@ Each shard is a dedicated OS thread pinned to a CPU core that owns:
 | **Reactor** | Single kqueue/io_uring event loop handling all I/O, timers, and inbox draining |
 | **Dispatcher** | Opcode→handler table for request routing |
 | **ConnectionPool** | All connections assigned to this shard |
-| **Partitions** | Raft groups with UAL + Projections (`partition_id % shard_count = shard_id`) |
+| **Partition** | The shard's Raft group: its UAL and projections |
 | **Inbox** | MPSC ring buffer for receiving cross-shard messages |
 | **Slab allocator** | For cross-shard payload lifetimes |
 
@@ -70,12 +70,14 @@ Table-driven routing with a flat 256-slot handler array. Each subsystem (KV, Str
 
 ### Router
 
-Hash-based partition assignment:
+Hash-based slot assignment:
 
 ```
-hash(key) → partition_id
-partition_id % shard_count → shard_id
+hash(namespace, key's {tag} or whole key) → slot   (one of 4096)
+slot % shard_count → shard_id
 ```
+
+The slot count is fixed for every node and cluster, so a key's slot never changes; there is no partition count to configure. A key's `{tag}`, the text between its first `{` and the next `}`, is what routes, so keys sharing one live together. A request that names no key runs on shard 0.
 
 If a request lands on the wrong shard, the handler detects the mismatch and forwards via the Inbox.
 
@@ -131,11 +133,12 @@ A request that waits 3 s is refused with `overloaded … was not run`; one
 that goes is answered within about 3 s (at most 4) of when it first waited,
 or told it has no answer yet.
 
-A request that takes something — a dequeue, a group read or claim, a
-worker's await — is the exception: its answer carries what it took, so the
-node waits for that answer, up to 320 s. An SDK client times out first. A
-group read's records return when their ack timeout ends; a dequeued message
-is consumed (queues are currently at-most-once).
+A request that takes something — a dequeue, a group read, a worker's
+await — is the exception: its answer carries what it took, so the node
+waits for that answer, up to 320 s. An SDK client times out first. What it
+took is leased: if the answer never reaches the client, a group read's
+records and a dequeued message are delivered again when their lease runs
+out.
 
 A client that closes its connection, or shuts down its sending side, while
 its request waits is treated as gone, and the request is not run. When it
@@ -150,7 +153,7 @@ connection, so they never reach the 64 or 8 limits below.
 | `overloaded: 64 requests on this connection are still waiting on other shards (the oldest on shard N); this request was not run — back off and retry` | for 3 s, none of this connection's 64 unanswered requests was answered | back off and retry |
 | `overloaded: this connection has 8 blocking reads waiting already; this request was not run — retry once one returns` | for 3 s, none of this connection's 8 blocking reads returned | retry once one returns, or read on another connection |
 | `unavailable: shard N did not answer in T s — retry` | shard N did not answer a read within about 3 s (at most 4) of when it first waited — a blocking read, its block time later | retry |
-| `unavailable: shard N did not answer in T s — the request may still apply` | shard N did not answer a write in that time, or a request that takes something in 320 s; shard N has the request and may still run it | read back before resending a write that is not idempotent; a group read's records return when their ack timeout ends, and a dequeued message is consumed |
+| `unavailable: shard N did not answer in T s — the request may still apply` | shard N did not answer a write in that time, or a request that takes something in 320 s; shard N has the request and may still run it | read back before resending a write that is not idempotent; a group read's records and a dequeued message are delivered again when their lease runs out |
 
 Each shard keeps up to 4096 blocking reads and parked workers waiting
 (about 1.5 MB, allocated at start). On a node of several shards, 1024 of
@@ -177,8 +180,6 @@ The per-shard series for this traffic:
 |-----------|---------|
 | **Raft group** | One log per cluster; the leader replicates every write to a majority before acknowledging it, and membership is a config entry in that log |
 | **Peer link** | One authenticated TCP link per node pair, carrying the Raft RPCs and writes forwarded to the leader |
-| **Controller Raft** | Runs on Shard 0, manages partition table |
-| **Partition Table** | Maps partition → node, updated on membership changes (not yet used for routing) |
 
 ## Ports
 

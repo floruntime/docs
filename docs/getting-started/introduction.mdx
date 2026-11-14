@@ -5,7 +5,7 @@ lede: The Universal Distributed Runtime — Streams, KV, Queues, Time-Series, Ac
 
 Flo is a single binary that unifies the data and orchestration primitives most systems stitch together from a half-dozen separate services. Instead of running Kafka for streams, Redis for KV, a queue broker, a time-series database, and a workflow engine — each with its own cluster, client, and operational surface — you run **one** process that speaks to all of them over a single wire protocol.
 
-Everything in Flo is backed by the same **Raft-replicated Unified Append Log**. Writes are replicated and committed before they're acknowledged; reads are served from local projections with no cross-node round-trip. The runtime is **thread-per-shard**: each partition is owned by exactly one core, which gives predictable tail latency and lock-free hot paths.
+Everything in Flo is backed by the same **Raft-replicated Unified Append Log**. Writes are replicated and committed before they're acknowledged; reads are served from local projections with no cross-node round-trip. The runtime is **thread-per-shard**: each shard is owned by exactly one core, which gives predictable tail latency and lock-free hot paths.
 
 ## Primitives
 
@@ -26,7 +26,7 @@ On top of the data layer, Flo runs durable execution and pipelines — no separa
   <Card title="Actions & Workers" href="/orchestration/actions">Durable execution of external logic with automatic retries, timeouts, and dead-letter handling; workers poll for invocations and report results.</Card>
   <Card title="Workflows" href="/orchestration/workflows">Multi-step orchestration defined in YAML — signals, timers, circuit breakers, and full state replay.</Card>
   <Card title="Stream Processing" href="/orchestration/processing">Continuous pipelines that filter, reshape, aggregate, enrich and route records with built-in operators.</Card>
-  <Card title="Architecture" href="/architecture/overview">Thread-per-shard, a single Raft log per partition, and hot and warm storage tiers.</Card>
+  <Card title="Architecture" href="/architecture/overview">Thread-per-shard, a single Raft log per shard, and hot and warm storage tiers.</Card>
 </CardGroup>
 
 ## Next steps
