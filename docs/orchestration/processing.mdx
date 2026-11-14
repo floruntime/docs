@@ -145,7 +145,7 @@ Leave `partitions:` out: a stream source reads every partition, and `all` is the
 
 ### Time-Series Source
 
-Polls a TS measurement at a configurable interval, up to 256 points per poll, emitting data points as JSON records:
+Polls a TS measurement at a configurable interval, up to 512 points per poll (fewer when its sinks have less room), emitting data points as JSON records:
 
 ```yaml
 sources:
@@ -168,7 +168,7 @@ Each emitted record looks like:
 `tags` names one series exactly: all of its tags, not a subset.
 
 :::note
-A time-series source reads only the measurements stored on the shard that runs the job. On a server with more than one shard, a measurement stored on another shard reads nothing.
+A time-series source reads points in time order. A point written with a timestamp behind what the source has already read (a late write, or one from a writer whose clock lags) is not read by it. If you need such points, write each measurement in time order, or read them with `flo ts read` or `flo ts query` rather than a processing source.
 :::
 
 ### Multi-Source Merge
