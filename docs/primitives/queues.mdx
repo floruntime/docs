@@ -155,7 +155,7 @@ Keeps a long job's messages: with half their lease or less left, it runs a full 
 
 ### Peek
 
-Inspect the next ready messages, in the order a dequeue takes them, without taking them:
+Inspect the next ready messages, in the order a dequeue takes them, without taking them. Each shows its `deliveries`, how many times it has been delivered:
 
 ```bash
 flo queue peek tasks --limit 5
@@ -188,15 +188,18 @@ flo queue dlq list tasks
 flo queue dlq list tasks --limit 50
 ```
 
-Each DLQ entry records the sequence number, its delivery count, and when it died. Requeueing and deleting dead letters aren't supported yet.
+Each DLQ entry records the sequence number, its `deliveries` (how many times it was delivered), and when it died. Requeueing and deleting dead letters aren't supported yet.
 
 ## Limits
 
-A queue holds at most 100,000 messages and 256 MiB, ready, leased and dead together, and all of a shard's queues together 1 GiB. A message holds its payload, its error text and 512 bytes besides, so empty messages count too. Past either, an enqueue is refused `overloaded`:
+A queue holds at most 100,000 messages and 256 MiB, ready, leased and dead together, and all of a shard's queues and consumer groups together 1 GiB. A message holds its payload, its error text and 512 bytes besides, so empty messages count too. Past either, an enqueue is refused `overloaded` with reason `queue_full`, and the CLI exits 4:
 
 ```text
-overloaded: queue 'tasks' is full: it holds 100000 messages (at most 100000) and 52428800 held bytes (at most 268435456), ready, leased and dead; consume or purge it
+Error: overloaded: queue 'tasks' is full: it holds 100000 messages (at most 100000) and 52428800 held bytes (at most 268435456), ready, leased and dead; consume or purge it [overloaded/queue_full]
+Error: overloaded: this shard's queues and groups hold 1073741824 held bytes, at most 1073741824; consume or purge some [overloaded/queue_full]
 ```
+
+A full queue drains as its messages are acked, so a producer backs off and sends again rather than giving up. The shard's total clears as any of its queues and groups drain.
 
 Nothing already held is dropped. Consume messages, or purge the queue, to make room. The caps are [`[queues]` settings](/getting-started/configuration/#queues).
 
