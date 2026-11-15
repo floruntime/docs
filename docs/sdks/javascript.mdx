@@ -134,7 +134,7 @@ try {
 }
 ```
 
-`scan`, `mget`, `jsonGet`, `jsonSet`, `jsonDel`, and `history` are not supported inside a transaction and throw `TxnUnsupportedOpError`. Server caps: 256 ops per transaction, 1 MiB total payload.
+`scan`, `mget`, `jsonGet`, `jsonSet`, `jsonDel`, and `history` are not supported inside a transaction and throw `TxnUnsupportedOpError`. Server caps: 64 ops and 256 KiB of keys and values per transaction, unless the operator [sets them higher or lower](/getting-started/configuration#kv) (at most 256 ops and 1 MiB).
 
 ## Queue Operations
 
@@ -256,7 +256,7 @@ import { ActionType } from "@floruntime/node";
 
 // Register and invoke
 await client.action.register("process-image", ActionType.User, {
-  timeoutMs: 60000, maxRetries: 3,
+  timeoutMs: 60000, maxRetries: 3, // the lease, and attempts in all
 });
 const result = await client.action.invoke("process-image", payload);
 ```
