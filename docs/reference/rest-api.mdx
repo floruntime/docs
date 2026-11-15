@@ -157,6 +157,12 @@ could take that traffic, and its other shards serve. Alert on
 `flo_shard_offline` and `flo_shard_silent_loss_total` instead. In a cluster, the
 same damage makes the member `diverged`, which is a `503`.
 
+A new leader still applying what earlier leaders committed stays `200` while it
+refuses reads and most writes with a retryable `unavailable`: a `503` lasting a
+few milliseconds would make load balancers flap. A member catching up after an
+`async_flush` restart is different: it answers `503 catching_up`, leading or not.
+See [Clustering](/deployment/clustering#writes-and-reads).
+
 ### Startup
 
 Both HTTP servers start before the shards replay. Until the shards are wired,
