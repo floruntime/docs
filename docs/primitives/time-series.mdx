@@ -107,13 +107,13 @@ flo ts read cpu --tags host=web-01 --from -1h -o json
 
 The `--from` and `--to` flags accept relative durations (`-1h`, `-30m`, `-7d`) or absolute epoch-millisecond timestamps.
 
-A read returns the earliest matching points, at most 4,096 of them. When more match and there's no `--limit` (or one above 4,096), it's refused rather than cut short:
+A read returns the earliest matching points in its range, at most 4,096 of them. `--limit` defaults to 4,096, so a read of a busy series returns its earliest 4,096 points from `--from` on: pass a later `--from` for recent ones. A limit above 4,096 (or `--limit 0`, for every point) is refused when more than 4,096 points match, rather than cut short:
 
 ```text
 Error: bad request: more than 4096 points match; pass --limit (at most 4096) or narrow the range [bad_request]
 ```
 
-To summarise more points than that, use `flo ts query`, which aggregates every point in its range.
+To summarise more points than that, use `flo ts query`, which aggregates every point in its range, up to 1,048,576 points per query. Past that, narrow the range or the tags.
 
 ### Filtering by Tag
 
@@ -265,6 +265,8 @@ A typical query chains `window()` → aggregation → optional post-processing:
 ```
 cpu{host=web-01}[1h] | window(5m) | avg() | where(value > 80) | round(2)
 ```
+
+A FloQL query reads at most 131,072 points to run its stages over, and answers at most 4,096 raw points. Past either, it's refused: narrow the range or the tags, or aggregate.
 
 ## Managing Data
 
