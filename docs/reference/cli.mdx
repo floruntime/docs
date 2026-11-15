@@ -50,7 +50,11 @@ Shard 0 owns the namespaces: it gives each one its id and records it in its
 log, and every other shard learns of it from there. `flo ns create` answers
 once the namespace is on disk, so it is usable on every shard by then; if it
 can't be written within 5 seconds it answers `unavailable` and creates nothing
-you can use yet. A first write to a new namespace waits the same way.
+you can use yet. A first write to a new namespace creates it. On the shard
+that owns namespaces (the only one on a cluster member) the create and the
+write go into one log, so the write doesn't wait. On a node of several shards,
+a first write whose key lands on another shard waits for the create to reach
+disk first: about one commit, a few hundred microseconds, once per namespace.
 
 ```bash
 flo ns create <name>
@@ -68,6 +72,11 @@ blocking read: reads and writes on one connection aren't ordered while a read
 is held, so a write sent after the read may be one it sees. On one node, a
 read through a shard other than the namespaces' owner waits a moment the same
 way while that shard checks with the owner.
+
+A blocking wait (`queue dequeue --block`, a blocking stream or group read) in
+a namespace that was never created is refused `no_namespace` at once, rather
+than left waiting: the write that would create the namespace couldn't wake it.
+Create the namespace, or write to it, first.
 
 `flo ns info` prints when the namespace was created, and exits 1 if there is
 none. `flo ns ls` lists every name in name order.
