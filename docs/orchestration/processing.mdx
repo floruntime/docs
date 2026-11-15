@@ -170,11 +170,11 @@ Each emitted record looks like:
 
 #### Late points
 
-A time-series source reads points in time order, and it reads only up to `lateness_ms` behind the newest point its field has, across all of the field's series. A point that arrives up to that late, from a host whose clock lags or that sends in batches, is still ahead of the source and gets read. Once the field has had no write for `lateness_ms`, the source reads everything up to the newest point.
+A time-series source reads points in time order, and it reads only up to `lateness_ms` behind the newest point its field has, across all of the field's series. A point that arrives up to that late, from a host whose clock lags or that sends in batches, is still ahead of the source and gets read. Once the field has had no write at all, late or not, for `lateness_ms`, the source reads everything up to the newest point.
 
 The window adds latency: a record reaches the source's sinks up to `lateness_ms` after its point was written, while the field keeps being written. Size it to how late your writers' points arrive, which is your send interval plus the clock skew between hosts. For example, a collector that sends every 10 s from hosts within 1 s of each other needs about 11 s. `lateness_ms: 0` reads up to the newest point at once, and misses any point that arrives behind it.
 
-A point that arrives more than the window behind is not read by a source that has passed it. Every point that arrives behind its field's newest is counted at each of these edges it trails by: `0s`, `1s`, `5s`, `15s`, `30s`, `1m`, `5m` and `1h`. The count shows as `flo_ts_late_points_total{behind="30s"}` per shard. A source with a window between two edges is covered by the next edge up, so a window on an edge, like the default 30 s, reads its count exactly. The count is the field's, across every writer, not only what one source skipped. It falls when a measurement's series are deleted or trimmed away.
+A point that arrives more than the window behind is not read by a source that has passed it. Every point that arrives behind its field's newest is counted at each of these edges it trails by: `0s`, `1s`, `5s`, `15s`, `30s`, `1m`, `5m` and `1h`. The counter `flo_ts_late_points_total{behind="30s"}` counts them per shard, since the server started. A source with a window between two edges is covered by the next edge up, so a window on an edge, like the default 30 s, reads its count exactly. The count covers every field and every writer on the shard, not only what one source skipped.
 
 To read every point regardless of when it arrives, use `flo ts read` or `flo ts query` rather than a processing source.
 
