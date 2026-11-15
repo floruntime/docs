@@ -14,7 +14,7 @@ Each data point consists of four components:
 - **Fields** — The actual metric values. A single value uses the default field name `value`; multi-field writes name each field explicitly (e.g., `user=72.5,system=7.4`)
 - **Timestamp** — Millisecond precision. When omitted, a single `--value` write takes the server's time; `--fields` and batch lines without one take the CLI's time, once for all their fields.
 
-A **series** is the unique combination of measurement + tag set + field name. Each series maintains its own write buffer and block chain.
+A **series** is the unique combination of measurement + tag set + field name. A series keeps every point written to it until a delete or a retention trim removes it.
 
 Tag sets are **order-independent**: `host=a,env=b` and `env=b,host=a` are the
 same series. Tags are stored alongside the series, so they survive a restart and
@@ -106,6 +106,14 @@ flo ts read cpu --tags host=web-01 --from -1h -o json
 ```
 
 The `--from` and `--to` flags accept relative durations (`-1h`, `-30m`, `-7d`) or absolute epoch-millisecond timestamps.
+
+A read returns the earliest matching points in its range, at most 4,096 of them. `--limit` defaults to 4,096, so a read of a busy series returns its earliest 4,096 points from `--from` on: pass a later `--from` for recent ones. A limit above 4,096 (or `--limit 0`, for every point) is refused when more than 4,096 points match, rather than cut short:
+
+```text
+Error: bad request: more than 4096 points match; pass --limit (at most 4096) or narrow the range [bad_request]
+```
+
+To summarise more points than that, use `flo ts query`, which aggregates every point in its range, up to 1,048,576 points per query. Past that, narrow the range or the tags.
 
 ### Filtering by Tag
 
@@ -258,6 +266,8 @@ A typical query chains `window()` → aggregation → optional post-processing:
 cpu{host=web-01}[1h] | window(5m) | avg() | where(value > 80) | round(2)
 ```
 
+A FloQL query reads at most 131,072 points to run its stages over, and answers at most 4,096 raw points. Past either, it's refused: narrow the range or the tags, or aggregate.
+
 ## Managing Data
 
 ### List Measurements
@@ -300,6 +310,12 @@ It is not a standing policy: points that age past the duration later stay
 until it is run again. Other measurements, and `cpu` in other namespaces, are
 untouched. Downsampling isn't supported (tracked in [#158](https://github.com/floruntime/flo/issues/158)).
 
+Points are kept until a delete or a retention trim removes them: there is no
+default retention, and every point takes memory on the shard that holds its
+series. Running `flo ts retention` is how you bound that today. The metrics
+`flo_shard_ts_points` and `flo_shard_ts_point_bytes` show how many points each
+shard holds and the bytes they take.
+
 ## Namespace Isolation
 
 Time-series data is isolated by namespace. The same measurement name in different namespaces contains independent data:
@@ -316,18 +332,13 @@ flo ts read cpu --tags host=web-01 --from -1h -n staging
 ## Durability
 
 - All writes are Raft-replicated before the response is sent
-- On recovery, the TS Projection replays committed UAL entries (`ts_write`, `ts_write_batch`) to rebuild in-memory state
-- Write buffers are rebuilt from the UAL — no separate WAL for time-series data
+- Each point is part of its shard's replicated state, applied from the committed log entry that wrote it, so every replica holds the same points
+- On restart, the shard rebuilds them from its log; no separate WAL for time-series data
 
 ## How It Works
 
-The TS Projection uses columnar storage optimized for time-series access patterns:
-
-- **Write buffers** — Per-series, per-field in-memory buffers (1,024 points capacity). When full, flushed to an immutable columnar block.
-- **Columnar blocks** — Store timestamps and values separately for compression and vectorized aggregation. Each block tracks its min/max timestamp and point count.
-- **Block index** — Maps `(series_hash, field_hash, time_range)` → `(block)` for fast range lookups.
-- **Series key** — Each series is identified by `namespace_hash + measurement + "\0" + field_name`. The 4-byte namespace prefix is what keeps the same measurement isolated across namespaces (see [Namespace Isolation](#namespace-isolation)); tag sets are hashed for routing.
-
-Queries scan both the active write buffer and flushed blocks. Aggregation functions (avg, sum, min, max, count) operate directly on the columnar layout.
+- **Points** — Each point is a record keyed by its series, then its time, then the log index of the write that made it, so a series' points sit in time order and no two share a key, even at the same time.
+- **Series** — Each series is a record of its tags, point count and oldest and newest times. Listing measurements and `ts info` read these, not the points.
+- **Reads** — A read seeks to the start of each matching series and merges them in time order, so reading one series costs only that series' points. Aggregations (avg, sum, min, max, count) take every point in the range.
 
 See [Storage Internals](/architecture/storage/) for details.
