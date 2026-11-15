@@ -1,9 +1,9 @@
 ---
 title: KV
-lede: Strongly consistent, versioned key-value storage with CAS, TTL, blocking gets, and namespace isolation.
+lede: Versioned key-value storage with CAS, TTL, blocking gets and namespace isolation; writes are replicated before they're acknowledged.
 ---
 
-Flo's KV store provides strongly consistent key-value storage backed by the Unified Append Log. Every write is Raft-replicated across the cluster before being acknowledged. Reads go directly to the local projection — no Raft round-trip, no cross-node hops for single-key lookups.
+Flo's KV store is versioned key-value storage backed by the Unified Append Log. Every write is Raft-replicated across the cluster before being acknowledged. Reads go directly to the local projection, with no Raft round-trip, so what one reflects depends on the node that answers: a leader's read reflects what it has committed, a follower can lag, and a deposed leader can answer stale until it finds out. See [what a read reflects](/deployment/clustering#writes-and-reads).
 
 ## Core Concepts
 
@@ -251,15 +251,21 @@ flo kv set counter "42" --cas-version 7
 
 If another writer updated the key between your read and write, the CAS fails with `[conflict/cas_mismatch]` (exit 3) and the original value is preserved.
 
-**CAS works across the cluster.** You can read the version on one node and CAS-update through another: every write goes to the leader, which checks the version against what it has applied when the write arrives. In a cluster, two writes carrying the same version that arrive before either has committed can both pass, so CAS guards against a stale read; it is not yet a lock between concurrent writers.
+**CAS works across the cluster.** You can read the version on one node and CAS-update through another. The version travels in the write's log entry and is checked as the entry applies, in log order, the same on every node: of two writes carrying one version, the first in the log wins and the other is refused. A stale read costs you a refused write, never an overwrite.
 
 ## Atomicity model
 
-Flo's KV store is built around **per-key linearizable writes** rather than multi-key transactions. Every mutation goes through Raft as a single committed entry, so each individual operation is atomic and durable on its own — the same model used by etcd, Consul, and FoundationDB single-key paths.
+Flo's KV store is built around **single-key writes in one log order** rather than multi-key transactions. Every mutation goes through Raft as a single committed entry, so each operation applies whole, and every node applies a key's writes in the same order. How durable an acknowledged write is depends on [the durability mode](/deployment/clustering#durability-and-the-diverged-state).
 
 ### Conditional & atomic writes
 
 Use the conditional flags on `kv set`/`KV.Put` to express "do this only if X". Each is a single Raft entry — no coordinator, no roundtrips, no rollback to worry about.
+
+A condition is decided when its entry applies, not when the write arrives, so racing writers can't both pass, and a new leader's answer counts everything committed before it. That has three effects:
+
+- **A failed condition still costs a replicated commit.** The write goes through the log like one that passes, then changes nothing: no version, no history. So does a delete or an `expire` of a key that isn't there, and an `incr` that's refused.
+- **A key whose TTL has run out by the entry's timestamp is absent**: `if_absent` writes over it, and `if_present` is refused.
+- **In a [transaction](#transactions), a conflict appears at commit, not at the op**, and a condition sees that transaction's own earlier writes.
 
 | Pattern | How |
 |---------|-----|
@@ -404,11 +410,11 @@ Per-shard transactions buffer multiple writes on one shard and commit them atomi
 | `kv txn commit <txn-id>` | `0x111` | Apply all buffered ops atomically. Returns the op count and the `commit_index`. |
 | `kv txn rollback <txn-id>` | `0x112` | Discard buffered ops. A transaction that isn't open (already committed, rolled back or dropped as idle) is refused with `no_such_transaction`. |
 
-Inside a transaction, `set`, `get`, `delete`, `incr`, `expire` and `exists` accept a `--txn <id>` flag; writes are buffered until commit. **Reads inside the transaction see the buffered writes.** `scan`, `mget`, `history` and the JSON ops take no transaction.
+Inside a transaction, `set`, `get`, `delete`, `incr`, `expire` and `exists` accept a `--txn <id>` flag; writes are buffered until commit. **Reads inside the transaction see the buffered writes**, a conditional one too: it reads as written until the commit decides it. `scan`, `mget`, `history` and the JSON ops take no transaction.
 
-**Server caps**: 256 ops per transaction, 1 MiB total payload, 1024 open transactions per shard (past that, `txn begin` is refused with `too_many_transactions`).
+**Server caps**: 64 ops and 256 KiB of keys and values per transaction, unless the operator [sets them higher or lower](/getting-started/configuration#kv) (at most 256 ops and 1 MiB), 1024 open transactions per shard (past that, `txn begin` is refused with `too_many_transactions`).
 
-**A commit applies whole or not at all.** If one of its ops can't apply when the commit does (an `incr` on a value that isn't a counter, or one that would overflow; an `expire` of a key that's gone or past its TTL by then), the whole commit is refused with that op's reason and position, as in `the transaction's op 2: not found; nothing in the transaction applied`, and none of its writes apply. The status is that op's: `bad_request` (exit 3) for an `incr`, `not_found` (exit 1) for an `expire`.
+**A commit applies whole or not at all.** If one of its ops can't apply when the commit does (a condition or `--cas-version` that doesn't hold; an `incr` on a value that isn't a counter, or one that would overflow; an `expire` of a key that's gone or past its TTL by then), the whole commit is refused with that op's reason and position, as in `the transaction's op 2: not found; nothing in the transaction applied`, and none of its writes apply. The status is that op's: `conflict` (exit 3) for a condition or `--cas-version`, `bad_request` (exit 3) for an `incr`, `not_found` (exit 1) for an `expire`.
 
 ```bash
 # Open (prints txn: <id> and pinned: <hash>), write, commit
@@ -450,7 +456,7 @@ In a multi-node cluster:
 - **Reads** are served from the local shard's projection — no Raft round-trip needed.
 - **Data replicates** to all nodes. A key written on node 1 is readable from node 2 and node 3 after replication.
 - **Node failures** are tolerated as long as a majority (quorum) of nodes remain healthy. A 3-node cluster survives 1 node failure.
-- **CAS and conditional writes** are consistent across the cluster — the version check happens at the leader during Raft proposal.
+- **CAS and conditional writes** are decided as their entries apply, in log order, so every node decides them alike.
 
 ### Reads from a halted shard
 
@@ -816,7 +822,7 @@ The KV store is implemented as a **KV Projection** — a hash table with MVCC ve
 
 | Property | Value |
 |----------|-------|
-| Max key size | ~3.9 KB |
+| Max key size | 4096 bytes, in any namespace |
 | Key bytes | Any except NUL (`0x00`), which is refused |
 | Max value size | ~256 KB |
 | Max namespace length | 63 bytes |
@@ -828,8 +834,8 @@ The KV store is implemented as a **KV Projection** — a hash table with MVCC ve
 
 **Read path**: `kv_get` → KV projection lookup → response. No Raft involvement.
 
-**Recovery**: On server restart, the projection is rebuilt by replaying UAL entries from the last snapshot. Read-after-write consistency is immediate after recovery — there is no warm-up period.
+**Recovery**: On server restart, the projection is rebuilt by replaying the log. A node serves reads once that's done; a cluster member with `async_flush`, or a new leader, [refuses them for a retry](/deployment/clustering#writes-and-reads) until it has caught up.
 
 **TTL enforcement**: Lazy — expired keys are detected at read time rather than proactively swept. This avoids background I/O for expiry.
 
-**Tombstones**: Deletes write a tombstone entry to the UAL. Prior versions remain in the version history and are queryable via `history`. A tombstone and its history stay in memory until the key is removed; nothing purges them sooner.
+**Tombstones**: A delete of a live key writes a tombstone entry to the UAL. A delete of a key that isn't live goes through the log and changes nothing. Prior versions remain in the version history and are queryable via `history`. A tombstone and its history stay in memory until the key is removed; nothing purges them sooner.

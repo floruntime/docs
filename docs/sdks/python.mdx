@@ -117,7 +117,7 @@ async with await client.kv.begin("{user:42}:last_seen") as txn:
     await txn.commit()
 ```
 
-`scan`, `mget`, `json_get`, `json_set`, `json_del`, and `history` are not supported inside a transaction and raise `TxnUnsupportedOpError`. Server caps: 256 ops per transaction, 1 MiB total payload.
+`scan`, `mget`, `json_get`, `json_set`, `json_del`, and `history` are not supported inside a transaction and raise `TxnUnsupportedOpError`. Server caps: 64 ops and 256 KiB of keys and values per transaction, unless the operator [sets them higher or lower](/getting-started/configuration#kv) (at most 256 ops and 1 MiB).
 
 ## Queue Operations
 
@@ -271,7 +271,7 @@ from flo import ActionType, ActionRegisterOptions
 
 # Register and invoke actions
 await client.action.register("process-image", ActionType.USER,
-    ActionRegisterOptions(timeout_ms=60000, max_retries=3))
+    ActionRegisterOptions(timeout_ms=60000, max_attempts=3))
 
 result = await client.action.invoke("process-image", payload)
 

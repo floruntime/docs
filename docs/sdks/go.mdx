@@ -184,7 +184,7 @@ if err != nil {
 fmt.Printf("committed %d ops at index %d\n", result.OpCount, result.CommitIndex)
 ```
 
-`scan`, `mget`, `JsonGet`, `JsonSet`, `JsonDel`, and `History` are not supported inside a transaction and return `ErrTxnUnsupportedOp`. Server caps: 256 ops per transaction, 1 MiB total payload.
+`scan`, `mget`, `JsonGet`, `JsonSet`, `JsonDel`, and `History` are not supported inside a transaction and return `ErrTxnUnsupportedOp`. Server caps: 64 ops and 256 KiB of keys and values per transaction, unless the operator [sets them higher or lower](/getting-started/configuration#kv) (at most 256 ops and 1 MiB).
 
 ### Scan
 
@@ -367,11 +367,16 @@ Records are **auto-acked** on handler success and **auto-nacked** on error. When
 w, _ := client.NewActionWorker(flo.ActionWorkerOptions{Concurrency: 10})
 defer w.Close()
 
-w.MustRegisterAction("process-order", func(actx *flo.ActionContext) ([]byte, error) {
+// The last argument is the action's options (*flo.ActionRegisterOptions); nil
+// takes the server's defaults.
+w.MustRegisterAction("process-order", func(actx *flo.ActionContext) (interface{}, error) {
     var input map[string]interface{}
-    actx.Into(&input)
-    return actx.Bytes(map[string]string{"status": "done"})
-})
+    if err := actx.Into(&input); err != nil {
+        return nil, err
+    }
+    actx.Touch() // keeps the lease in a long handler
+    return map[string]string{"status": "done"}, nil
+}, nil)
 
 w.Start(ctx)
 ```

@@ -50,7 +50,11 @@ Shard 0 owns the namespaces: it gives each one its id and records it in its
 log, and every other shard learns of it from there. `flo ns create` answers
 once the namespace is on disk, so it is usable on every shard by then; if it
 can't be written within 5 seconds it answers `unavailable` and creates nothing
-you can use yet. A first write to a new namespace waits the same way.
+you can use yet. A first write to a new namespace creates it. On the shard
+that owns namespaces (the only one on a cluster member) the create and the
+write go into one log, so the write doesn't wait. On a node of several shards,
+a first write whose key lands on another shard waits for the create to reach
+disk first: about one commit, a few hundred microseconds, once per namespace.
 
 ```bash
 flo ns create <name>
@@ -68,6 +72,11 @@ blocking read: reads and writes on one connection aren't ordered while a read
 is held, so a write sent after the read may be one it sees. On one node, a
 read through a shard other than the namespaces' owner waits a moment the same
 way while that shard checks with the owner.
+
+A blocking wait (`queue dequeue --block`, a blocking stream or group read) in
+a namespace that was never created is refused `no_namespace` at once, rather
+than left waiting: the write that would create the namespace couldn't wake it.
+Create the namespace, or write to it, first.
 
 `flo ns info` prints when the namespace was created, and exits 1 if there is
 none. `flo ns ls` lists every name in name order.
@@ -95,6 +104,8 @@ flo server start [options]
 | `-d, --data-dir <path>` | Data directory | `~/.flo/data` |
 | `--durability <mode>` | `sync` or `async_flush` | — |
 | `-s, --shards <n>` | Number of shard threads, at most 256; a cluster member runs 1 (the default resolves to it) | CPU count, less one on 4 or more cores |
+| `--max-txn-ops <n>` | Most ops one KV transaction may hold, 1 to 256 | `64` |
+| `--max-txn-bytes <n>` | Most key and value bytes one KV transaction may hold, 1 to 1048576 | `262144` |
 | `-l, --log-level <level>` | `debug`, `info`, `warn` or `error` | — |
 | `--log-format <format>` | `text` or `json` | — |
 | `--cluster` | Start as the first member of a cluster; leads alone until others join | — |
@@ -126,7 +137,8 @@ The server refuses a `secret_file` that its group or others can read or write.
 ### `flo server inspect`
 
 Show a stopped node's cluster log: its hard state, last index and term, what
-is committed, the latest member list, and whether its lost-log guard is on.
+is committed, the latest member list, the cluster's id and generation, and
+whether its lost-log guard is on. Every member of one cluster shows the same id.
 Writes nothing. Refuses while a
 server holds the data directory, and refuses a directory that does not exist.
 
@@ -143,8 +155,8 @@ flo server inspect --data-dir /var/lib/flo
 
 Make a stopped node the cluster's only voter, for when a majority has lost its
 data. Without `--yes` it prints what it would change and stops. With `--yes`
-it writes a member list naming only this node and retires its cluster secret;
-restart it with a new one. See [Clustering](/deployment/clustering#when-a-majority-lost-its-data).
+it writes a member list naming only this node, in the same cluster at its next
+generation, and retires its cluster secret; restart it with a new one. See [Clustering](/deployment/clustering#when-a-majority-lost-its-data).
 
 ```bash
 flo server force-members --data-dir /var/lib/flo --yes
@@ -437,7 +449,7 @@ flo kv txn commit "$TXN"
 
 The transaction id names its slot, so `commit` and `rollback` need nothing else. Every key in a transaction must share the `{tag}` it was begun with; a key that routes elsewhere is refused with `[bad_request/keys_not_colocated]` (exit 3). `scan`, `mget`, `history` and the JSON commands don't run inside transactions.
 
-**Server caps**: 256 ops per transaction, 1 MiB total payload, 1024 open transactions per shard (past that, `txn begin` is refused with `too_many_transactions`). Transactions outlive connections: they are owned by their id, not by the TCP connection. One that goes 30 seconds without a request is dropped, and later use is refused with `no_such_transaction`.
+**Server caps**: 64 ops and 256 KiB of keys and values per transaction, unless the operator [sets them higher or lower](/getting-started/configuration#kv) (at most 256 ops and 1 MiB), 1024 open transactions per shard (past that, `txn begin` is refused with `too_many_transactions`). Transactions outlive connections: they are owned by their id, not by the TCP connection. One that goes 30 seconds without a request is dropped, and later use is refused with `no_such_transaction`.
 
 ## Streams
 
@@ -513,22 +525,31 @@ Deleting a missing stream is a no-op (idempotent). A non-empty stream is refused
 
 ### `flo stream group`
 
-Manage consumer groups. A group is scoped to a single stream — every subcommand takes the `<stream>` it operates on, and wildcard/fan-in reads (`events.*`) are not supported.
+Manage consumer groups. A group is scoped to a single stream: every subcommand takes the `<stream>` it operates on, and wildcard reads (`events.*`) are refused.
 
 ```bash
-flo stream group create <stream> --group <name> [--ack-timeout <ms>] [--max-deliver <n>]
-flo stream group read   <stream> --group <name> --consumer <id> [--limit <n>] [--block <ms>]
-flo stream group ack    <stream> --group <name> --ids <id,...> [--consumer <id>]
-flo stream group nack   <stream> --group <name> --ids <id,...> [--consumer <id>]
-flo stream group touch  <stream> --group <name> --consumer <id> --ids <id,...>
+flo stream group create  <stream> --group <name> [--ack-timeout <ms>] [--max-deliver <n>]
+flo stream group read    <stream> --group <name> --consumer <id> [--limit <n>] [--block <ms>]
+flo stream group ack     <stream> --group <name> --consumer <id> --ids <delivery,...>
+flo stream group nack    <stream> --group <name> --consumer <id> --ids <delivery,...> [--delay <ms>] [--dlq] [--error <text>] [--abandon]
+flo stream group touch   <stream> --group <name> --consumer <id> --ids <delivery,...>
 flo stream group pending <stream> --group <name> [--consumer <id>]
-flo stream group info   <stream> --group <name>
-flo stream group join   <stream> <group> <consumer>
-flo stream group leave  <stream> --group <name> --consumer <id>
-flo stream group delete <stream> --group <name>
+flo stream group info    <stream> --group <name>
+flo stream group list    <stream>
+flo stream group members <stream> <group>
+flo stream group delete  <stream> --group <name>
 ```
 
+- `read` prints each record with its delivery, `term.index.id.deliveries`, which `ack`, `nack` and `touch` take in `--ids`. A read takes at most 100 records.
+- `--ack-timeout` is the lease, 5000 to 43200000 ms (default 30000). `--max-deliver` is the attempts, 1 to 255 (default 5): a record nacked or expired that many times is dead.
+- `nack --error` is kept on the record, up to 1024 bytes. `nack --abandon` hands records back unstarted: ready at once, no attempt spent, never dead-lettered; it takes no `--delay`, `--dlq` or `--error`.
+- A report to a group that isn't there is refused `not_found`; a read past the group's caps with nothing ready is refused `overloaded` with reason `group_held_full` (exit 4).
+- `ack`, `nack` and `touch` say which records they didn't apply to, and why, and then exit non-zero.
+- `join`, `leave` and `claim` are gone: members are the consumers holding records, and a read takes expired and nacked records first.
+
 ## Queues
+
+A dequeue leases its messages until they're acked (completed), nacked (failed) or their lease runs out; see [Queues](/primitives/queues/). Each message's **delivery** prints as `term.index.seq.deliveries`, which `ack`, `nack` and `touch` take.
 
 ### `flo queue enqueue`
 
@@ -540,11 +561,12 @@ flo queue enqueue <queue> <data> [options]
 
 | Flag | Description |
 |------|-------------|
-| `--priority <n>` | Message priority, 0–255; lower is taken first, and unset is 0 |
+| `--priority <n>` | Message priority, 0–255; lower is taken first, and unset is 0. Past 255 is refused |
+| `--delay <ms>` | Ready after this long, not now (at most 86400000, a day) |
 
 ### `flo queue dequeue`
 
-Dequeue messages.
+Take a queue's next ready messages, leased.
 
 ```bash
 flo queue dequeue <queue> [options]
@@ -552,31 +574,53 @@ flo queue dequeue <queue> [options]
 
 | Flag | Description |
 |------|-------------|
-| `--count <n>` | Number of messages (default: 1) |
+| `--count <n>` | Most messages to take, 1–100 (default: 1) |
 | `--block <ms>` | Wait for messages (at most 300000 ms, 5 minutes; 0 does not wait; a longer wait is refused) |
+| `--lease <ms>` | How long they're held without a touch, 5000–43200000 (default: 30000) |
+| `--consumer <id>` | Who takes them; `ack`, `nack` and `touch` must name the same |
+| `--ack` | Complete them as they're taken: payloads only, nothing comes back |
+
+Each line is a delivery and its payload. `-o json` prints the delivery's term, index and lease expiry and each message; `-o raw` prints payloads only and is refused without `--ack`. A count or lease out of range is refused, naming the range.
 
 ### `flo queue ack`
 
-Acknowledge one processed message.
+Complete messages of one dequeue: they leave the queue.
 
 ```bash
-flo queue ack <queue> <seq>
+flo queue ack <queue> <delivery>... [--consumer <id>]
 ```
+
+Prints `OK: <n>` for those it completed, and each one it didn't with its reason (`gone`, `delivered_again`, `other_holder`, `expired`, `released`, `not_held`), exiting non-zero. For an ack, `gone` means done already.
 
 ### `flo queue nack`
 
-Negative acknowledge. Queues are at-most-once today, so a nack doesn't redeliver (tracked in [#179](https://github.com/floruntime/flo/issues/179)).
+Fail messages of one dequeue: ready again, or dead once their attempts are spent.
 
 ```bash
-flo queue nack <queue> <seq>
+flo queue nack <queue> <delivery>... [options]
+```
+
+| Flag | Description |
+|------|-------------|
+| `--delay <ms>` | Ready again after this long (default: at once) |
+| `--dlq` | Dead now, whatever attempts are left |
+| `--error <text>` | Why they failed, kept on the message |
+| `--consumer <id>` | The consumer that dequeued them |
+
+### `flo queue touch`
+
+Keep messages of one dequeue: with half their lease or less left, it runs a full lease from now. Prints when the lease now runs out.
+
+```bash
+flo queue touch <queue> <delivery>... [--consumer <id>]
 ```
 
 ### `flo queue peek`
 
-Peek at messages without leasing.
+The next ready messages, in dequeue order, without taking them.
 
 ```bash
-flo queue peek <queue> [--count <n>]
+flo queue peek <queue> [--limit <n>]
 ```
 
 ### `flo queue dlq`
@@ -584,11 +628,18 @@ flo queue peek <queue> [--count <n>]
 Manage dead-letter queue.
 
 ```bash
-flo queue dlq list <queue>
-flo queue dlq requeue <queue> <sequence...>
+flo queue dlq list <queue> [--limit <n>] [--after <seq>]
 ```
 
-`dlq list` shows the queue's dead-letter count; listing the messages and `dlq requeue` aren't supported yet.
+`dlq list` pages a queue's dead letters, oldest first. `dlq requeue` and `dlq delete` aren't supported yet.
+
+### `flo queue purge`
+
+Remove every message from a queue, ready, leased and dead, and print how many went. A consumer holding a purged message finds it gone when it acks.
+
+```bash
+flo queue purge <queue>
+```
 
 ## Time-Series
 
@@ -741,6 +792,14 @@ Stop a running job.
 
 ```bash
 flo processing stop <job-id>
+```
+
+### `flo processing remove`
+
+Remove a stopped, cancelled or failed job, freeing its slot. A running job is refused: stop or cancel it first.
+
+```bash
+flo processing remove <job-id>
 ```
 
 ## Cluster
