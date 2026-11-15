@@ -47,7 +47,7 @@ profile does not allow the `io_uring_setup`, `io_uring_enter` and
 `io_uring_register` syscalls, so under that profile Flo cannot start:
 
 ```
-INF topology manifest created: shards=1 partitions=0 path=/data
+INF topology manifest created: shards=1 path=/data
 ERR io_uring is unavailable (PermissionDenied). ...
 Error starting runtime: error.PermissionDenied
 ```
@@ -245,7 +245,7 @@ The data directory structure:
 /data/flo/
 ├── flo.lock        # held by the running server
 ├── FORMAT          # the data directory's format
-├── SYSTEM          # its shard and partition counts
+├── SYSTEM          # its shard count
 └── 00000/          # one directory per shard
     ├── segs/       # the durable log
     └── HARDSTATE   # the node's id and its Raft term and vote

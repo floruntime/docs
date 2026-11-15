@@ -344,7 +344,7 @@ Per-queue detail (same shape as the list item).
 
 ### `GET /api/v1/queues/:name/messages?namespace=<ns>&limit=<n>`
 
-Messages with `seq`, `priority`, `state` (`ready` / `leased` / `dlq`), `attempts`, `lease_remaining_ms`, `size`, and `payload`.
+The next ready messages, in the order a dequeue takes them, none taken: up to `limit` (default 20, at most 100), each with `seq`, `priority`, `deliveries`, `enqueued_at`, `size`, `payload` (up to 4 KiB of it) and `truncated`; `more` says more may follow.
 
 ### `GET /api/v1/queues/:name/dlq?namespace=<ns>`
 

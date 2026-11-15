@@ -131,7 +131,7 @@ A segment that won't read, or a hole in the log, is damage: the shard stops repl
 ```
 {data_dir}/
 ├── FORMAT                              # Data directory format (a number)
-├── SYSTEM                              # Topology lock (shards, partitions, version)
+├── SYSTEM                              # Topology lock (shard count, version)
 ├── 00000/                              # Shard 0 (zero-padded 5 digits)
 │   ├── HARDSTATE                       # Raft node id, current term, vote (28 bytes)
 │   ├── segs/
@@ -146,11 +146,11 @@ A segment that won't read, or a hole in the log, is damage: the shard stops repl
 
 ### FORMAT
 
-One number and a newline: the layout the directory is written in, `4` today. It is checked before anything else in the directory is read, and a binary reads only its own format. There is no migration.
+One number and a newline: the layout the directory is written in, `25` today. It is checked before anything else in the directory is read, and a binary reads only its own format. There is no migration.
 
 - **An empty directory** gets `FORMAT` first. Empty allows `lost+found`, dotfiles, and the lock, PID file and admin socket a server leaves.
-- **A newer format** is refused: `data directory format 5, this binary reads format 4 (/var/lib/flo/FORMAT); start a flo that reads format 5`.
-- **An older format** is refused: `data directory /var/lib/flo was written by an older Flo (format 3); this server needs format 4. There is no migration: run flo server wipe --data-dir /var/lib/flo`. **A Flo directory without `FORMAT`** (one with `SYSTEM` or a shard directory) is refused the same way, saying `(before format gating)`. Empty it with [`flo server wipe`](/reference/cli#flo-server-wipe), or start the older release.
+- **A newer format** is refused: `data directory format 26, this binary reads format 25 (/var/lib/flo/FORMAT); start a flo that reads format 26`.
+- **An older format** is refused: `data directory /var/lib/flo was written by an older Flo (format 24); this server needs format 25. There is no migration: run flo server wipe --data-dir /var/lib/flo`. **A Flo directory without `FORMAT`** (one with `SYSTEM` or a shard directory) is refused the same way, saying `(before format gating)`. Empty it with [`flo server wipe`](/reference/cli#flo-server-wipe), or start the older release.
 - **A non-empty directory with no Flo data** is refused, without suggesting a wipe, since it may be something else's: `/var/lib is not a Flo data directory and isn't empty (it holds postgresql); check data_dir`.
 - **A `FORMAT` that isn't a format number**, or isn't a file, is refused, naming what it holds.
 
@@ -158,13 +158,12 @@ The server, `flo server inspect`, `force-members`, `repair skip` and `salvage` r
 
 ### SYSTEM
 
-Written once on first boot. If `shards` or `partitions` don't match on restart, the node refuses to start with `TopologyMismatch`. Format:
+Written once on first boot. A start asking for another shard count is refused, naming both counts (`topology mismatch: the data was written for a shard count of 8, and this start asks for 4`). There is no partition count to record: keys route over a fixed 4096 slots on every node. Format:
 
 ```json
 {
   "shards": 8,
-  "partitions": 256,
-  "created_at": 1772033477,
+  "created_at": 1772033477938,
   "version": "1.0.0"
 }
 ```

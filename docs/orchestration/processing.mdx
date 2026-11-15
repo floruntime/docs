@@ -12,7 +12,7 @@ Traditional architectures pair a storage layer (Kafka, Redis) with a separate pr
 Flo eliminates that gap:
 
 - **Zero-copy reads** — source records are read directly from the Unified Append Log, no network hop
-- **In-node execution** — a job runs on the shard that leads the job's home partition, and reads and writes other shards' data in-process
+- **In-node execution** — every job runs on shard 0, which holds the jobs, and reads and writes other shards' data in-process
 - **Integrated KV** — `kv_lookup` reads Flo KV and a KV sink writes it, no external store
 - **Single deployment** — one binary, one config, one monitoring surface
 

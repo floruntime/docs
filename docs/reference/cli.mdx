@@ -104,7 +104,6 @@ flo server start [options]
 | `-d, --data-dir <path>` | Data directory | `~/.flo/data` |
 | `--durability <mode>` | `sync` or `async_flush` | — |
 | `-s, --shards <n>` | Number of shard threads, at most 256; a cluster member runs 1 (the default resolves to it) | CPU count, less one on 4 or more cores |
-| `--partitions <n>` | Virtual partitions, at most 16384 | `max(4096, shards × 32)` |
 | `--max-txn-ops <n>` | Most ops one KV transaction may hold, 1 to 256 | `64` |
 | `--max-txn-bytes <n>` | Most key and value bytes one KV transaction may hold, 1 to 1048576 | `262144` |
 | `-l, --log-level <level>` | `debug`, `info`, `warn` or `error` | — |
@@ -117,6 +116,8 @@ flo server start [options]
 | `--dashboard-port <port>` | Dashboard HTTP port | `listen_port + 2` |
 | `--no-metrics` | Don't start the metrics server | — |
 | `--no-dashboard` | Don't start the dashboard | — |
+
+There is no partition count to set: keys route over a fixed 4096 slots on every node and cluster, and `--partitions` is refused, saying so (exit 2).
 
 ### `flo server secret`
 
@@ -235,7 +236,7 @@ flo server salvage --data-dir /var/lib/flo --shard 3 --truncate-after 18233 --ye
 
 ### `flo server status`
 
-Show whether the server process is running and the port it bound, from its PID file, and what the data directory holds: its format (or why a server would refuse it) and its shard and partition counts.
+Show whether the server process is running and the port it bound, from its PID file, and what the data directory holds: its format (or why a server would refuse it) and its shard count.
 
 ```bash
 flo server status [--config <path>] [--data-dir <path>]
@@ -291,7 +292,6 @@ flo kv set <key> <value> [options]
 | `--ttl-ms <ms>` | Time to live; omitted for none |
 | `--condition <when>` | `always` (the default), `if_absent` (only if the key doesn't exist) or `if_present` (only if it does) |
 | `--cas-version <version>` | Only if this is the key's version; `0` means the key doesn't exist |
-| `-r, --routing-key <key>` | Explicit shard routing key |
 | `-t, --txn <id>` | Buffer the write in a transaction |
 
 It prints `version: <n>`, or `OK` inside a transaction, where the write has no version until it commits. A failed condition or version exits 3 with `[conflict/condition_failed]` or `[conflict/cas_mismatch]`.
@@ -308,7 +308,6 @@ flo kv get <key> [options]
 |------|-------------|
 | `-w, --wait-ms <ms>` | How long to wait, at most `5m`; `0` (the default) doesn't wait |
 | `--wait-for <what>` | `exists` (the default: answers at once if the key exists, else when it's written) or `change` (the key's next version). On timeout, a change wait prints the unchanged value; a key still absent exits 1 |
-| `-r, --routing-key <key>` | Explicit shard routing key |
 | `-t, --txn <id>` | Read inside a transaction, seeing its buffered writes; it can't wait |
 
 `-o json` prints `{"version":<n>,"value":"<value>"}`.
@@ -321,11 +320,7 @@ Get many keys in one call. Keys may live on different shards; the server gathers
 flo kv mget <key1> <key2> ... [options]
 ```
 
-| Flag | Description |
-|------|-------------|
-| `-r, --routing-key <key>` | The routing key every key was written with: all are read from its shard |
-
-At most 256 keys per call. Keys written with a routing key are found only with that routing key; mget them together with `-r`, and those written with another, or none, in a separate call. A missing key prints `(nil)`; it isn't an error. When the answers don't fit one response, the CLI asks again from where the server stopped.
+At most 256 keys per call, from any shards. A missing key prints `(nil)`; it isn't an error. When the answers don't fit one response, the CLI asks again from where the server stopped.
 
 ### `flo kv delete`
 
@@ -338,7 +333,6 @@ flo kv delete <key> [options]
 | Flag | Description |
 |------|-------------|
 | `--cas-version <version>` | Only if this is the key's version (race-free lock release) |
-| `-r, --routing-key <key>` | Explicit shard routing key |
 | `-t, --txn <id>` | Buffer inside a transaction |
 
 It prints `existed: true` or `existed: false`, or `OK` inside a transaction, where whether the key existed isn't known until commit.
@@ -375,7 +369,6 @@ flo kv history <key> [options]
 |------|-------------|
 | `-l, --limit <n>` | Most versions to show: 1 to 65, default 10 |
 | `--before-version <v>` | Only versions older than `v` |
-| `-r, --routing-key <key>` | Explicit shard routing key: give the one the key was written with |
 
 Each row is the version, the time it was written (`at_ms`, Unix milliseconds), whether it is a delete, and the value, under a header; `-o raw` leaves the header out. When one answer can't hold them all, the command asks again until it has shown `--limit` versions; if older ones remain it prints `more: true` last (on stderr with `-o raw`). `-o json` prints `{"versions": [...], "more": bool}`.
 
@@ -390,7 +383,6 @@ flo kv incr <key> [--delta <n>]
 | Flag | Description |
 |------|-------------|
 | `-d, --delta <n>` | What to add, may be negative (default `1`) |
-| `-r, --routing-key <key>` | Explicit shard routing key |
 | `-t, --txn <id>` | Buffer inside a transaction; prints `OK`, since the value isn't known until commit |
 
 A key whose value isn't an 8-byte counter is refused with `wrong_type` (exit 3).
@@ -408,7 +400,6 @@ flo kv expire <key> --ttl-ms 0     # clears the TTL
 |------|-------------|
 | `--ttl-ms <ms>` | Required; `0` clears the TTL |
 | `--cas-version <version>` | Only if this is the key's version (race-free lease renewal) |
-| `-r, --routing-key <key>` | Explicit shard routing key |
 | `-t, --txn <id>` | Buffer inside a transaction |
 
 It prints `OK`. A missing key exits 1.
@@ -418,7 +409,7 @@ It prints `OK`. A missing key exits 1.
 Existence check, with no value transferred. It prints `exists: true` and `version: <n>`, exiting `0`, or `exists: false` and `version: 0`, exiting `1`. Inside a transaction a key with only a buffered write prints `version: 0`: it has no version until commit.
 
 ```bash
-flo kv exists <key> [-r <routing-key>] [-t <txn-id>]
+flo kv exists <key> [-t <txn-id>]
 ```
 
 ### `flo kv json get` / `set` / `del`
@@ -435,14 +426,14 @@ flo kv json del <key> [--path <path>]
 - `json set` prints `version: <n>`. At `$` it writes the whole document, creating the key; at any other path the key must already hold a JSON object or array.
 - `json del` prints `version: <n>`, or `OK` at `$`, which deletes the key.
 
-A path with nothing at it exits 1; a key whose value isn't JSON is refused with `wrong_type` (exit 3). All three take `-r, --routing-key`; none run inside a transaction.
+A path with nothing at it exits 1; a key whose value isn't JSON is refused with `wrong_type` (exit 3). None run inside a transaction.
 
 ### `flo kv txn begin` / `commit` / `rollback`
 
-Per-shard transactions buffer writes on one pinned partition and commit them atomically as one Raft entry.
+Per-shard transactions buffer writes on one shard and commit them atomically as one Raft entry. A transaction is pinned to the `{tag}` of the key it begins with (the text between the first `{` and the next `}`), or the whole key if it has none.
 
 ```bash
-flo kv txn begin <routing-key>        # → txn: <id>, pinned: <hash>
+flo kv txn begin <key>                # → txn: <id>, pinned: <hash>
 flo kv txn commit <txn-id>            # → commit_index: <index>, ops: <n>
 flo kv txn rollback <txn-id>          # drops the buffered writes
 ```
@@ -450,13 +441,13 @@ flo kv txn rollback <txn-id>          # drops the buffered writes
 Add `--txn <id>` to `set`, `get`, `delete`, `incr`, `expire` or `exists` to run it inside the transaction:
 
 ```bash
-TXN=$(flo kv txn begin user:42 | sed -n 's/^txn: //p')
-flo kv set  user:42:name "Jane" -r user:42 --txn "$TXN"
-flo kv incr user:42:visits      -r user:42 --txn "$TXN"
+TXN=$(flo kv txn begin '{user:42}:name' | sed -n 's/^txn: //p')
+flo kv set  '{user:42}:name' "Jane" --txn "$TXN"
+flo kv incr '{user:42}:visits'      --txn "$TXN"
 flo kv txn commit "$TXN"
 ```
 
-The transaction id names its shard, so `commit` and `rollback` need nothing else. Ops inside a transaction must give the routing key it was begun with, otherwise they are refused with `wrong_routing_key`. `scan`, `mget`, `history` and the JSON commands don't run inside transactions.
+The transaction id names its slot, so `commit` and `rollback` need nothing else. Every key in a transaction must share the `{tag}` it was begun with; a key that routes elsewhere is refused with `[bad_request/keys_not_colocated]` (exit 3). `scan`, `mget`, `history` and the JSON commands don't run inside transactions.
 
 **Server caps**: 64 ops and 256 KiB of keys and values per transaction, unless the operator [sets them higher or lower](/getting-started/configuration#kv) (at most 256 ops and 1 MiB), 1024 open transactions per shard (past that, `txn begin` is refused with `too_many_transactions`). Transactions outlive connections: they are owned by their id, not by the TCP connection. One that goes 30 seconds without a request is dropped, and later use is refused with `no_such_transaction`.
 

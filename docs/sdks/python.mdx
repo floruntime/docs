@@ -26,7 +26,8 @@ async def main():
         seq = await client.queue.enqueue("tasks", b'{"task": "process"}')
         result = await client.queue.dequeue("tasks", 10)
         for msg in result.messages:
-            await client.queue.ack("tasks", [msg.seq])
+            print(msg.payload)
+        await client.queue.complete("tasks", result)  # within the lease, or they're delivered again
 
         # Stream
         await client.stream.append("events", b'{"event": "login"}')
@@ -98,11 +99,12 @@ status = await client.kv.json_get("order:42", "$.status")             # GetResul
 print(f"{status.value!r} @ v{status.version}")
 await client.kv.json_del("order:42", "$.status")
 
-# Per-shard transaction \u2014 atomic multi-key writes on one partition
-txn = await client.kv.begin("user:42")
+# Per-shard transaction \u2014 atomic multi-key writes on one shard. It is pinned
+# to the {tag} of the key it begins with: give every key in it the same one.
+txn = await client.kv.begin("{user:42}:name")
 try:
-    await txn.put("user:42:name", b"Jane")
-    await txn.incr("user:42:visits")
+    await txn.put("{user:42}:name", b"Jane")
+    await txn.incr("{user:42}:visits")
     result = await txn.commit()
     print(f"committed {result.op_count} ops at index {result.commit_index}")
 except Exception:
@@ -110,8 +112,8 @@ except Exception:
     raise
 
 # Or use as an async context manager (auto-rollback on exception)
-async with await client.kv.begin("user:42") as txn:
-    await txn.put("user:42:last_seen", b"now")
+async with await client.kv.begin("{user:42}:last_seen") as txn:
+    await txn.put("{user:42}:last_seen", b"now")
     await txn.commit()
 ```
 
@@ -130,22 +132,22 @@ seq = await client.queue.enqueue("tasks", payload,
 result = await client.queue.dequeue("tasks", 10,
     DequeueOptions(block_ms=30000))
 
-# A dequeue consumes its messages (queues are currently at-most-once)
+# A dequeue leases its messages: complete each within its lease, or it is delivered again
 for msg in result.messages:
     process(msg.payload)
+await client.queue.complete("tasks", result)
 
-# DLQ operations
-result = await client.queue.dlq_list("tasks")
-await client.queue.dlq_requeue("tasks", [msg.seq for msg in result.messages])
+# Dead letters: up to 100, oldest first; pass after=page.last_seq for the next page
+page = await client.queue.dlq_list("tasks", DlqListOptions(limit=100))
 
-# Peek without consuming
+# Peek: the next ready messages, without taking them
 result = await client.queue.peek("tasks", 5)
 ```
 
 ## Stream Operations
 
 ```python
-from flo import StreamReadOptions, StreamAppendOptions, StreamID, StreamGroupReadOptions
+from flo import StreamReadOptions, StreamAppendOptions, StreamID, StreamGroupReadOptions, StreamGroupNackOptions
 
 # Append
 result = await client.stream.append("events", b'{"event": "click"}')
@@ -173,12 +175,31 @@ for rec in result.records:
     print(rec.headers)   # dict[str, str] or None
     print(rec.id)        # StreamID(timestamp_ms, sequence)
 
-# Consumer groups
-await client.stream.group_join("events", "processors", "worker-1")
-result = await client.stream.group_read("events", "processors", "worker-1",
+# Consumer groups: a read leases its records to the consumer
+got = await client.stream.group_read("events", "processors", "worker-1",
     StreamGroupReadOptions(count=10, block_ms=30000))
-await client.stream.group_ack("events", "processors", [r.id for r in result.records])
+done, failed = [], []
+for r in got.records:
+    try:
+        await handle(r)
+        done.append(r)
+    except Exception:
+        failed.append(r)
+await client.stream.group_ack("events", "processors", got, done)
+
+# Nack a failure with why (at most 1024 bytes): ready again, or dead once
+# the group's attempts are spent
+await client.stream.group_nack("events", "processors", got, failed,
+    StreamGroupNackOptions(error="payment service timed out"))
+
+# Stopping before reaching some records? Abandon them: ready at once, no
+# failure counted. Abandon never dead-letters, so never use it for a record
+# that failed, or a poison record goes round for ever.
+await client.stream.group_nack("events", "processors", got, unstarted,
+    StreamGroupNackOptions(abandon=True))
 ```
+
+`abandon` can't be given with `dead`, `delay_ms` or `error` (`ValidationError`). A report to a group that doesn't exist raises `NotFoundError`.
 
 ## StreamWorker (high-level)
 
@@ -232,7 +253,7 @@ async def process(ctx: StreamContext) -> None:
     ctx.record               # full StreamRecord
 ```
 
-Records are **auto-acked** on handler success and **auto-nacked** on exception. Connection errors trigger automatic reconnect and consumer group re-join.
+Records are **auto-acked** on handler success and **auto-nacked** on exception. When the worker stops, records it read but hasn't started, and any whose handler the stop cancelled, are abandoned: ready for another consumer at once, with no attempt spent. Connection errors trigger automatic reconnect.
 
 ### Context Manager
 
@@ -284,3 +305,22 @@ async with FloClient("localhost:9000", namespace="myapp") as client:
 - **StreamWorker** and **ActionWorker** for managed consumption
 - **Headers** on stream records (read and write)
 - All operations support namespace overrides
+
+## Errors
+
+Refusals are `ServerError` subclasses; the ones below are raised without a retry, or once the client's retries run out.
+
+```python
+from flo import GroupHeldFullError, LimitError, QueueFullError
+
+try:
+    await client.queue.enqueue("tasks", payload)
+except QueueFullError:
+    ...  # the queue's or the shard's caps: back off and send again
+```
+
+| Error | When |
+|-------|------|
+| `QueueFullError` | An enqueue found the queue, or the shard's queues and groups together, at their caps. An `OverloadedError`: the client retries it with backoff, since it drains as messages are completed, and raises it once its retries run out. |
+| `GroupHeldFullError` | A group read took nothing new: the group's cap counts its leased, ready and dead records, and dead ones leave only when the group is deleted or a stream trim passes them. An `OverloadedError`, never retried: reading again won't help. A stream worker logs it and backs off. |
+| `LimitError` | Status `limit`: the node is at a limit built into the server. Only too many actions, counted per shard, is returned today; it is never retried, and no setting raises it. |

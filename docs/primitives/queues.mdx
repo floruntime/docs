@@ -229,9 +229,8 @@ for _, msg := range result.Messages {
 // Peek without consuming
 peeked, _ := client.Queue.Peek("tasks", 5, nil)
 
-// DLQ operations
+// Dead letters, a page at a time; requeueing them isn't served yet
 dlq, _ := client.Queue.DLQList("tasks", nil)
-client.Queue.DLQRequeue("tasks", []uint64{dlq.Messages[0].Seq}, nil)
 ```
 </Tab>
 <Tab title="Python">
@@ -252,9 +251,8 @@ async with FloClient("localhost:9000") as client:
     # Peek without consuming
     peeked = await client.queue.peek("tasks", 5)
 
-    # DLQ operations
+    # Dead letters, a page at a time; requeueing them isn't served yet
     dlq = await client.queue.dlq_list("tasks")
-    await client.queue.dlq_requeue("tasks", [m.seq for m in dlq.messages])
 ```
 </Tab>
 <Tab title="JavaScript">
@@ -279,9 +277,8 @@ for (const msg of result.messages) {
 // Peek without consuming
 const peeked = await client.queue.peek("tasks", 5);
 
-// DLQ operations
+// Dead letters, a page at a time; requeueing them isn't served yet
 const dlq = await client.queue.dlqList("tasks");
-await client.queue.dlqRequeue("tasks", dlq.messages.map(m => m.seq));
 ```
 </Tab>
 <Tab title="Zig">
@@ -310,7 +307,7 @@ for (result.messages) |msg| {
 var peeked = try queue.peek("tasks", 5, .{});
 defer peeked.deinit();
 
-// DLQ operations
+// Dead letters, a page at a time; requeueing them isn't served yet
 var dlq = try queue.dlqList("tasks", .{});
 defer dlq.deinit();
 ```

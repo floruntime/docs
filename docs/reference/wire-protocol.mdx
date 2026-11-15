@@ -16,7 +16,7 @@ Clients talk to Flo over TCP on the client port (default **9000**) with a binary
 | 8 | `request_id` | `u64` | Chosen by the client; the response carries it back |
 | 16 | `crc32` | `u32` | CRC-32 of the header (this field excluded) and the payload |
 | 20 | `op_code` | `u16` | The operation (see [OpCodes](#opcodes)) |
-| 22 | `version` | `u8` | `0x02` |
+| 22 | `version` | `u8` | `0x03`, the protocol version |
 | 23 | `flags` | `u8` | `0`: no flag is defined, and a request with any bit set is refused |
 | 24 | `table_hash` | `u64` | The hash of the op table the client was built for |
 
@@ -36,33 +36,35 @@ Every KV op is declared in the op table. Their payload has no value length and n
 [namespace_len:u16][namespace][key_len:u16][key][body]
 ```
 
-The body is the op's fields, in order. A field that may be left out is a presence byte (`0` or `1`) and then its value; a field with a default is sent present. Integers are fixed-width; bytes have a length prefix as wide as their bound needs (`u8` up to 255, `u16` up to 65535, else `u32`): a cursor a `u8`, a routing key or a path a `u16`, a value or a document a `u32`. A list has a count prefix by the same rule, then its elements. An answer is the op's answer fields the same way, and must decode whole. A body that doesn't decode is refused `bad_request` with `malformed`, `field_too_long` or `out_of_range`, naming the field and the bound it broke, with `ran` = no.
+The body is the op's fields, in order. A field that may be left out is a presence byte (`0` or `1`) and then its value; a field with a default is sent present. Integers are fixed-width; bytes have a length prefix as wide as their bound needs (`u8` up to 255, `u16` up to 65535, else `u32`): a cursor a `u8`, a path a `u16`, a value or a document a `u32`. A list has a count prefix by the same rule, then its elements. An answer is the op's answer fields the same way, and must decode whole. A body that doesn't decode is refused `bad_request` with `malformed`, `field_too_long` or `out_of_range`, naming the field and the bound it broke, with `ran` = no.
 
 | Op | Request fields | Answer |
 |----|----------------|--------|
-| `kv_get` | `wait_ms: u64` (default 0, at most 300000), `wait_for: u8` (`0` exists, the default; `1` change), `routing_key?: bytes`, `txn?: u64` | `version: u64`, `value: bytes` |
-| `kv_put` | `value: bytes` (at most 253817), `ttl_ms?: u64`, `condition: u8` (`0` always, the default; `1` if_absent; `2` if_present), `cas_version?: u64`, `routing_key?: bytes`, `txn?: u64` | `version?: u64`, absent inside a transaction |
-| `kv_delete` | `cas_version?: u64`, `routing_key?: bytes`, `txn?: u64` | `existed?: bool`, absent inside a transaction |
+| `kv_get` | `wait_ms: u64` (default 0, at most 300000), `wait_for: u8` (`0` exists, the default; `1` change), `txn?: u64` | `version: u64`, `value: bytes`, `expires_at_ms?: i64`, absent without a TTL |
+| `kv_put` | `value: bytes` (at most 257916), `ttl_ms?: u64`, `condition: u8` (`0` always, the default; `1` if_absent; `2` if_present), `cas_version?: u64`, `txn?: u64` | `version?: u64`, absent inside a transaction |
+| `kv_delete` | `cas_version?: u64`, `txn?: u64` | `existed?: bool`, absent inside a transaction |
 | `kv_scan` | `limit: u32` (1 to 1024), `cursor: bytes` (empty on the first page) | `names: [string]`, `cursor?: bytes`, absent on the last page; a page can hold fewer names than `limit`, even none, while more follow |
-| `kv_history` | `limit: u32` (1 to 65, default 10), `before_version?: u64`, `routing_key?: bytes` | `versions: [{version: u64, at_ms: i64, deleted: bool, value: bytes}]`, newest first, `more: bool` |
-| `kv_mget` | `keys: [bytes]` (1 to 256), `routing_key?: bytes` | `entries: [{found: bool, version: u64, value: bytes}]`, `next?: u16` |
-| `kv_incr` | `delta: i64` (default 1), `routing_key?: bytes`, `txn?: u64` | `version?: u64`, `value?: i64`, both absent inside a transaction |
-| `kv_expire` | `ttl_ms: u64` (`0` clears the TTL), `cas_version?: u64`, `routing_key?: bytes`, `txn?: u64` | nothing |
-| `kv_exists` | `routing_key?: bytes`, `txn?: u64` | `exists: bool`, `version: u64` |
-| `kv_json_get` | `path: string` (default `$`), `routing_key?: bytes` | `version: u64`, `document: bytes` |
-| `kv_json_set` | `path: string` (default `$`), `document: bytes` (JSON text), `routing_key?: bytes` | `version: u64` |
-| `kv_json_del` | `path: string` (default `$`), `routing_key?: bytes` | `version?: u64`, absent when the path was `$`, which deleted the key |
+| `kv_history` | `limit: u32` (1 to 65, default 10), `before_version?: u64` | `versions: [{version: u64, at_ms: i64, deleted: bool, value: bytes}]`, newest first, `more: bool` |
+| `kv_mget` | `keys: [bytes]` (1 to 256) | `entries: [{found: bool, version: u64, value: bytes}]`, `next?: u16` |
+| `kv_incr` | `delta: i64` (default 1), `txn?: u64` | `version?: u64`, `value?: i64`, both absent inside a transaction |
+| `kv_expire` | `ttl_ms: u64` (`0` clears the TTL), `cas_version?: u64`, `txn?: u64` | nothing |
+| `kv_exists` | `txn?: u64` | `exists: bool`, `version: u64` |
+| `kv_json_get` | `path: string` (default `$`) | `version: u64`, `document: bytes` |
+| `kv_json_set` | `path: string` (default `$`), `document: bytes` (JSON text) | `version: u64` |
+| `kv_json_del` | `path: string` (default `$`) | `version?: u64`, absent when the path was `$`, which deleted the key |
 | `kv_begin_txn` | nothing | `txn: u64`, `pinned: u64` |
 | `kv_commit_txn` | `txn: u64` | `commit_index: u64`, `ops: u16` |
 | `kv_rollback_txn` | `txn: u64` | nothing |
 
-The key is the envelope's key, except: `kv_scan`'s is the prefix to list (empty for every key); `kv_begin_txn`'s is the routing key the transaction pins, and may not be empty; `kv_mget`, `kv_commit_txn` and `kv_rollback_txn` take an empty key.
+The key is the envelope's key, except: `kv_scan`'s is the prefix to list (empty for every key); `kv_begin_txn`'s is the key whose `{tag}` the transaction pins, and may not be empty; `kv_mget`, `kv_commit_txn` and `kv_rollback_txn` take an empty key.
 
-`kv_scan` pages across every shard: `cursor` is the previous page's, unchanged. `kv_mget` answers as many keys as fit one response; `next`, when present, is the index of the first key not answered, so the client asks again from there. With `routing_key`, the request is answered on that routing key's shard, where keys written with it live; without, each key is looked up on the shard that owns it. `kv_history` answers versions older than `before_version` when it's given; `more` says older kept versions follow, so the client asks again with `before_version` set to the last version it got. Deleting a missing key isn't an error: it answers `existed` false. `kv_incr` on a value that isn't an 8-byte counter, and the JSON ops on a value that isn't JSON, are refused `bad_request` with `wrong_type`.
+`kv_scan` pages across every shard: `cursor` is the previous page's, unchanged. `kv_mget` answers as many keys as fit one response; `next`, when present, is the index of the first key not answered, so the client asks again from there. Each key is read on the shard that owns it, and the server gathers the answers; an mget isn't one snapshot across shards. `kv_history` answers versions older than `before_version` when it's given; `more` says older kept versions follow, so the client asks again with `before_version` set to the last version it got. Deleting a missing key isn't an error: it answers `existed` false. `kv_incr` on a value that isn't an 8-byte counter, and the JSON ops on a value that isn't JSON, are refused `bad_request` with `wrong_type`.
 
 `wait_for` exists answers at once if the key exists, else when it's written; change answers the key's next version. Either answers not found when the wait ends with the key absent, and change answers the value still there.
 
-A transaction id is `[shard:u16][counter:u48]`: a request carrying one runs on the shard it names, and on that shard's leader, reads included. An id no shard holds is refused `not_found` with `no_such_transaction`. `kv_commit_txn` and `kv_rollback_txn` route by the id in their body; they need no routing key. Inside a transaction an op must give the routing key it was begun with. `kv_scan`, `kv_mget`, `kv_history` and the JSON ops take no transaction.
+A key routes by its `{tag}`: the text between its first `{` and the next `}`, so `{user:1}:name` and `{user:1}:visits` live together. `{}` is a tag too, an empty one, so every key holding one routes together. A key with no `}` after its first `{`, or no `{`, routes by the whole key. Keys hash to one of 4096 slots, the same for every node and cluster, and each slot belongs to one shard. A request that names no key runs on shard 0.
+
+A transaction is pinned to the `{tag}` of the key it begins with, or the whole key if it has none; `pinned` is that routing hash. Its id is `[slot:u16][counter:u48]`: a request carrying one runs on the shard that owns that slot, and on that shard's leader, reads included. An id no shard holds is refused `not_found` with `no_such_transaction`. `kv_commit_txn` and `kv_rollback_txn` route by the id in their body. Inside a transaction an op's key must route with the key it was begun with: give every key the same `{tag}`. Another is refused `bad_request` with `keys_not_colocated`, `ran` = no. `kv_scan`, `kv_mget`, `kv_history` and the JSON ops take no transaction.
 
 ### List operations
 
@@ -113,7 +115,7 @@ The namespace ops are declared in the op table and run on shard 0. The namespace
 | 4 | `data_len` | `u32` | Bytes of data after the header |
 | 8 | `request_id` | `u64` | The request's id |
 | 16 | `crc32` | `u32` | CRC-32 of the header (this field excluded) and the data |
-| 20 | `version` | `u8` | `0x02` |
+| 20 | `version` | `u8` | `0x03` |
 | 21 | `status` | `u8` | See [Status codes](#status-codes) |
 | 22 | `flags` | `u8` | `0x01` `stale`; no other bit is defined |
 | 23 | `_pad` | `u8` | `0` |
@@ -125,7 +127,7 @@ A response carries no opcode: the client knows which request it sent. Any status
 
 ### Versions
 
-The table hash covers every op's request and answer layout and every log entry's. Until an op family is declared in the table, its hand-coded layouts are versioned by an epoch folded into the hash, which every change to one bumps. A server serves only clients carrying its own hash and protocol version; `flo version --verbose` prints both.
+The table hash covers every op's request and answer layout and every log entry's. Until an op family is declared in the table, its hand-coded layouts are versioned by an epoch folded into the hash, which every change to one bumps. A server serves only clients carrying its own hash and protocol version; `flo version --verbose` prints both. This release is protocol version 3, table hash `0xc1f93eb0ed86a281`.
 
 A request from another build is answered `bad_request` in the client's own version byte, carrying the server's hash, with a message naming both builds, such as `server table 0x…, client table 0x…: upgrade the client`. Then the connection is closed. The server counts these in `flo_client_version_refused_total`. A client checks an answer's version and hash before reading its data, and refuses an answer from another build.
 
@@ -150,8 +152,11 @@ Nodes built from different tables can't link either: a peer's hello carries the 
 | `12` | `unavailable` |
 | `13` | `outcome_pending` |
 | `14` | `no_namespace` |
+| `15` | `limit` |
 
 `no_namespace`: the namespace a request names doesn't exist. It isn't `not_found`, which means a missing key.
+
+`limit`: the node holds as much of something as the server is built to keep (reasons 32 to 35); it never ran. No setting raises these limits, so retrying won't help until something is deleted. Only `too_many_actions` is returned today: an action's shard holds 10,000 actions.
 
 `outcome_pending` is a write that committed but hasn't applied, because its shard halted at it or before it (reason `shard_halted`, `ran` = unknown). The message says which: one past the halt applies when the shard resumes; the one it halted at never runs. Don't resend it unchanged: that writes it twice, or halts again.
 
@@ -190,7 +195,7 @@ The status says whether to retry; the reason says what happened; `ran` says whet
 | `15` | `cas_mismatch` | The write's `cas_version` isn't the key's version. |
 | `16` | `condition_failed` | The write's `condition` didn't hold. |
 | `17` | `no_such_transaction` | No open transaction has this id here: it committed, rolled back, was begun in another namespace, or never existed. |
-| `18` | `wrong_routing_key` | The routing key (the key, when none is given) isn't the one the transaction was begun with. |
+| `18` | `keys_not_colocated` | The key routes elsewhere than the key the transaction was begun with: give every key in a transaction the same `{tag}`. |
 | `19` | `txn_too_large` | The transaction holds as many ops or bytes as it may. |
 | `20` | `too_many_waiters` | The shard holds as many waiting reads as it may. |
 | `21` | `conflicting_fields` | Two fields given together that don't go together, such as a wait inside a transaction. |
@@ -204,6 +209,12 @@ The status says whether to retry; the reason says what happened; `ran` says whet
 | `29` | `shard_halted` | The shard halted at an entry every replica fails the same way. With `unavailable` (`ran` = no) it takes no writes until the entry is repaired, so retrying doesn't help; with `outcome_pending`, see above. |
 | `30` | `admin_only` | The op is served only on the node's admin socket. |
 | `31` | `job_running` | The processing job is running: stop or cancel it, then remove it. |
+| `32` | `memory_budget` | With `limit`: the node's memory budget is spent. Not returned yet. |
+| `33` | `too_many_actions` | With `limit`: the action's shard holds 10,000 actions; delete one to register another. |
+| `34` | `too_many_workflow_definitions` | With `limit`: the node holds as many workflow definitions as it keeps. Not returned yet. |
+| `35` | `too_many_workflow_runs` | With `limit`: the node holds as many workflow runs as it keeps. Not returned yet. |
+| `36` | `queue_full` | With `overloaded`: an enqueue found the queue at its cap of messages or bytes, or the shard's queues and groups together at theirs. It drains as messages are completed; the SDKs retry it with backoff. |
+| `37` | `group_held_full` | With `overloaded`: a group read took nothing new, because the group holds as many records or bytes as its caps allow (the `[queues]` settings, which hold each group as they hold a queue), or the shard's queues and groups together hold theirs. The SDKs don't retry it: reading again won't help. A group's cap counts its leased, ready and dead records; an ack frees a record, but dead ones leave only when the group is deleted or a stream trim passes them. The shard's cap clears as its queues and groups drain. |
 
 The reasons are part of the op table, so a client and server that agree on the table hash agree on this list.
 
@@ -296,33 +307,42 @@ A `cluster_promote` value is the node id, u32 little-endian (4 bytes). A `cluste
 | OpCode | Value |
 |--------|-------|
 | `stream_group_create` | `0x150` |
-| `stream_group_join` | `0x151` |
-| `stream_group_leave` | `0x152` |
+| `stream_group_join` | `0x151` (removed: refused) |
+| `stream_group_leave` | `0x152` (removed: refused) |
 | `stream_group_read` | `0x153` |
 | `stream_group_ack` | `0x154` |
-| `stream_group_claim` | `0x155` |
+| `stream_group_claim` | `0x155` (removed: refused) |
 | `stream_group_pending` | `0x156` |
-| `stream_group_configure_sweeper` | `0x157` |
+| `stream_group_configure_sweeper` | `0x157` (removed: refused) |
 | `stream_group_nack` | `0x159` |
 | `stream_group_touch` | `0x15A` |
 | `stream_group_info` | `0x15B` |
 | `stream_group_delete` | `0x15C` |
+| `stream_group_list` | `0x15D` |
+| `stream_group_members` | `0x15E` |
+
+The removed ops are refused `bad_request`, naming what replaces them.
+
+An ack, nack or touch names a read's delivery and its records: `[group_len:u16][group][consumer_len:u16][consumer][term:u64][index:u64][count:u32]([ms:u64][seq:u64][deliveries:u32])*`. A nack then carries its error, `[error_len:u16][error]`, at most 1024 bytes, `0` for none; options `delay_ms`, `dead` or `abandon` say what becomes of the records. `abandon` hands them back unstarted: ready at once, the delivery counted but no failure. It is refused with `dead`, `delay_ms` or an error. An abandoned record never dead-letters, so abandon only records a consumer didn't start, or that its stop cut short; nack a record that failed, or a poison record goes round for ever. A report to a group that doesn't exist is refused `not_found`.
 
 ### Queues (0x170 – 0x19F)
 
 | OpCode | Value |
 |--------|-------|
 | `queue_enqueue` | `0x170` |
-| `queue_dequeue` | `0x171` |
-| `queue_complete` | `0x172` |
-| `queue_fail` | `0x174` |
 | `queue_dlq_list` | `0x176` |
 | `queue_dlq_delete` | `0x177` |
 | `queue_dlq_requeue` | `0x178` |
 | `queue_stats` | `0x17B` |
-| `queue_peek` | `0x17C` |
 | `queue_purge` | `0x17F` |
+| `queue_peek` | `0x180` |
+| `queue_dequeue` | `0x181` |
+| `queue_complete` | `0x182` |
+| `queue_fail` | `0x183` |
+| `queue_touch` | `0x184` |
 | `queue_list` | `0x198` |
+
+A `queue_dlq_list` value is `[limit:u32][after_seq:u64]`, both optional: up to `limit` dead letters (1 to 100; 100 when absent) after the one whose seq is `after_seq` (from the oldest when absent). The answer is `[count:u32]([seq:u64][size:u32][len:u32][payload][enqueued_at_ms:i64][deliveries:u32][priority:u8][moved_at_ms:i64])*[total:u64][has_more:u8][last_seq:u64]`, oldest first; `payload` is at most 4 KiB of the message's `size` bytes. To read the next page, send the answer's `last_seq` as `after_seq`.
 
 ### Time-Series (0x1A0 – 0x1BF)
 
@@ -335,6 +355,7 @@ A `cluster_promote` value is the node id, u32 little-endian (4 bytes). A `cluste
 | `ts_list` | `0x1A4` |
 | `ts_delete` | `0x1A5` |
 | `ts_retention` | `0x1A6` |
+| `ts_info` | `0x1A7` |
 
 A `ts_write` value is exactly one finite f64, 8 bytes little-endian; any other length, NaN or infinity is refused with `bad_request`.
 
@@ -348,10 +369,14 @@ A `ts_write` value is exactly one finite f64, 8 bytes little-endian; any other l
 | `action_list` | `0x303` |
 | `action_list_runs` | `0x304` |
 | `action_delete` | `0x305` |
-| `action_await` | `0x306` |
-| `action_complete` | `0x307` |
-| `action_fail` | `0x308` |
-| `action_touch` | `0x309` |
+| `action_await` | `0x30A` |
+| `action_complete` | `0x30B` |
+| `action_fail` | `0x30C` |
+| `action_touch` | `0x30D` |
+| `action_deliver` | `0x30E` (between shards only) |
+| `action_info` | `0x30F` |
+
+`action_list_runs` takes the action's name as its key: an action's runs live on its name's shard. An empty key is refused `bad_request`, `action name is required`.
 
 An `action_invoke` value is `[has_labels:u8]([labels_len:u16][labels])?[input]`: `has_labels` is 0 and the input follows, or 1 and the required worker labels, a JSON object, come first. An empty value, `has_labels` other than 0 or 1, labels that run past the value, or labels that aren't a JSON object are refused with `bad_request`.
 
@@ -401,6 +426,7 @@ Tags the server reads. An option it doesn't recognise is ignored for now; that c
 |-----|------|-------|
 | `0x05` | `limit` | u32: Maximum results for `ts_read` (earliest first); absent or 0 is all. List operations take theirs in the value |
 | `0x10` | `priority` | u8: Message priority (0-255; lower is taken first) |
+| `0x11` | `delay_ms` | u64: How long before a message, or a nacked group record, is ready (at most a day) |
 | `0x15` | `count` | u32: Number of messages to dequeue |
 | `0x17` | `block_ms` | u32: Long-poll wait (at most 5 min; 0 = don't wait); a longer one is refused |
 | `0x21` | `stream_start` | [16]u8: Read records after this StreamID (exclusive) |
@@ -415,8 +441,10 @@ Tags the server reads. An option it doesn't recognise is ignored for now; that c
 | `0x2A` | `retention_age` | u64: Retention policy - max age in seconds |
 | `0x2B` | `retention_bytes` | Refused: byte retention isn't supported ([#183](https://github.com/floruntime/flo/issues/183)) |
 | `0x2C` | `force` | void: Force a destructive op (e.g. delete a non-empty stream) |
-| `0x30` | `ack_timeout_ms` | u32: Time before unacked message auto-redelivers (overrides default) |
-| `0x31` | `max_deliver` | u8: Max delivery attempts before DLQ (default: 10, 0=unlimited) |
+| `0x30` | `ack_timeout_ms` | u32: A group's lease: a record not acked this long is delivered again (5 s to 12 h; default 30 s) |
+| `0x31` | `max_deliver` | u8: A group's attempts: a record is dead once nacked or expired this many times (1 to 255; default 5) |
+| `0x32` | `dead` | void: A nack makes its records dead now |
+| `0x34` | `abandon` | void: A nack hands its records back unstarted: ready at once, no failure counted |
 | `0x60` | `ts_from_ms` | i64: Start of time range (inclusive, unix ms) |
 | `0x61` | `ts_to_ms` | i64: End of time range (inclusive, 0 = now) |
 | `0x62` | `ts_window_ms` | i64: Aggregation window size (ms) |

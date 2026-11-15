@@ -39,8 +39,9 @@ console.log(decoder.decode(value!.value));
 await client.queue.enqueue("tasks", encoder.encode('{"task":"process"}'));
 const result = await client.queue.dequeue("tasks", 10);
 for (const msg of result.messages) {
-  await client.queue.ack("tasks", [msg.seq]);
+  console.log(decoder.decode(msg.payload));
 }
+await client.queue.complete("tasks", result); // within the lease, or they're delivered again
 
 await client.close();
 ```
@@ -121,11 +122,12 @@ const status = await client.kv.jsonGet("order:42", "$.status"); // GetResult | n
 if (status) console.log(`${decode(status.value)} @ v${status.version}`);
 await client.kv.jsonDel("order:42", "$.status");
 
-// Per-shard transaction — atomic multi-key writes on one partition
-const txn = await client.kv.begin("user:42");
+// Per-shard transaction — atomic multi-key writes on one shard. It is pinned
+// to the {tag} of the key it begins with: give every key in it the same one.
+const txn = await client.kv.begin("{user:42}:name");
 try {
-  await txn.put("user:42:name", encode("Jane"));
-  await txn.incr("user:42:visits", 1n);
+  await txn.put("{user:42}:name", encode("Jane"));
+  await txn.incr("{user:42}:visits", 1n);
   const result = await txn.commit();
   console.log(`committed ${result.opCount} ops at index ${result.commitIndex}`);
 } catch (err) {
@@ -144,14 +146,17 @@ const seq = await client.queue.enqueue("tasks", payload, {
   priority: 10,
 });
 
-// Dequeue with long polling (consumes the messages)
+// Dequeue with long polling: the messages are leased until completed
 const result = await client.queue.dequeue("tasks", 10, {
   blockMs: 30000,
 });
+await client.queue.complete("tasks", result);
 
-// DLQ
-const dlq = await client.queue.dlqList("tasks");
-await client.queue.dlqRequeue("tasks", seqs);
+// Dead letters: up to 100, oldest first; pass after: page.lastSeq for the next page
+const page = await client.queue.dlqList("tasks", { limit: 100 });
+
+// Peek: the next ready messages, without taking them
+const peeked = await client.queue.peek("tasks", 5);
 ```
 
 ## Stream Operations
@@ -180,18 +185,31 @@ for (const rec of records.records) {
   console.log(rec.id);       // StreamID { timestampMs, sequence }
 }
 
-// Consumer groups
-await client.stream.groupJoin("events", "processors", "consumer-1");
-const groupRecords = await client.stream.groupRead("events", {
+// Consumer groups: a read leases its records to the consumer
+const got = await client.stream.groupRead("events", {
   group: "processors",
   consumer: "consumer-1",
   limit: 10,
 });
-await client.stream.groupAck("events",
-  groupRecords.records.map(r => r.id),
-  { group: "processors", consumer: "consumer-1" }
-);
+const done = [], failed = [];
+for (const r of got.records) {
+  try { await handle(r); done.push(r); } catch { failed.push(r); }
+}
+await client.stream.groupAck("events", { ...got, records: done }, { group: "processors" });
+
+// Nack a failure with why (at most 1024 bytes): ready again, or dead once
+// the group's attempts are spent
+await client.stream.groupNack("events", { ...got, records: failed },
+  { group: "processors", error: "payment service timed out" });
+
+// Stopping before reaching some records? Abandon them: ready at once, no
+// failure counted. Abandon never dead-letters, so never use it for a
+// record that failed, or a poison record goes round for ever.
+await client.stream.groupNack("events", { ...got, records: unstarted },
+  { group: "processors", abandon: true });
 ```
+
+`abandon` can't be given with `dead`, `delayMs` or `error`. A report to a group that doesn't exist throws `NotFoundError`.
 
 `append()` takes a `Uint8Array`: encode strings with `TextEncoder`, and objects with `JSON.stringify` first.
 
@@ -247,7 +265,7 @@ async (ctx) => {
 }
 ```
 
-Records are **auto-acked** on handler success and **auto-nacked** on exception. If the connection drops, the worker redials (waiting as after a failed poll: jittered, from 100 ms up to 5 s, until `stop()`), rejoins the group and re-registers, then polls again. An `ActionWorker` does the same and registers its actions again.
+Records are **auto-acked** on handler success and **auto-nacked** on exception. When the worker stops, records it read but hasn't started are abandoned: ready for another consumer at once, with no attempt spent. `ctx.signal` aborts on a stop; a handler that throws once it has aborted abandons its record too, rather than nacking it. If the connection drops, the worker redials (waiting as after a failed poll: jittered, from 100 ms up to 5 s, until `stop()`), rejoins the group and re-registers, then polls again. An `ActionWorker` does the same and registers its actions again.
 
 ## Action & Worker Operations
 
@@ -407,10 +425,11 @@ See [examples/workflow.ts](https://github.com/floruntime/flo-js/blob/dev/example
 |--------|-----------|-------------|
 | `enqueue` | `enqueue(queue, payload, opts?) → Promise<bigint>` | Add message |
 | `dequeue` | `dequeue(queue, count, opts?) → Promise<DequeueResult>` | Fetch messages |
-| `ack` | `ack(queue, seqs, opts?) → Promise<void>` | Acknowledge |
-| `nack` | `nack(queue, seqs, opts?) → Promise<void>` | Nack (retry/DLQ) |
-| `dlqList` | `dlqList(queue, opts?) → Promise<DequeueResult>` | List DLQ |
-| `dlqRequeue` | `dlqRequeue(queue, seqs, opts?) → Promise<void>` | Requeue DLQ |
+| `complete` | `complete(queue, delivery, opts?) → Promise<QueueReportResult>` | Complete a dequeue's messages (pass its result) |
+| `fail` | `fail(queue, delivery, opts?) → Promise<QueueReportResult>` | Hand them back: ready again, or dead once their attempts are spent |
+| `touch` | `touch(queue, delivery, opts?) → Promise<QueueTouchResult>` | Keep their lease |
+| `peek` | `peek(queue, limit?, opts?) → Promise<PeekResult>` | The next ready messages, without taking them (`limit` 1 to 100, default 20) |
+| `dlqList` | `dlqList(queue, { limit?, after? }?) → Promise<DLQListResult>` | A page of dead letters, oldest first: `{ messages, total, hasMore, lastSeq }` |
 
 ### Stream Methods
 
@@ -418,9 +437,10 @@ See [examples/workflow.ts](https://github.com/floruntime/flo-js/blob/dev/example
 |--------|-----------|-------------|
 | `append` | `append(stream, payload, opts?) → Promise<AppendResult>` | Append record (with optional headers) |
 | `read` | `read(stream, opts?) → Promise<ReadResult>` | Read records |
-| `groupJoin` | `groupJoin(stream, group, consumer) → Promise<void>` | Join group |
-| `groupRead` | `groupRead(stream, opts) → Promise<ReadResult>` | Group read |
-| `groupAck` | `groupAck(stream, ids, opts) → Promise<void>` | Group ack |
+| `groupRead` | `groupRead(stream, opts) → Promise<StreamGroupReadResult>` | Lease up to `limit` of a group's records |
+| `groupAck` | `groupAck(stream, delivery, opts) → Promise<StreamGroupReportResult>` | Ack a read's records |
+| `groupNack` | `groupNack(stream, delivery, opts) → Promise<StreamGroupReportResult>` | Nack them (`error`, `delayMs`, `dead`), or hand them back unstarted (`abandon`) |
+| `groupTouch` | `groupTouch(stream, delivery, opts) → Promise<StreamGroupTouchResult>` | Keep their lease |
 
 ### Workflow Methods
 
@@ -438,3 +458,22 @@ See [examples/workflow.ts](https://github.com/floruntime/flo-js/blob/dev/example
 | `getDefinition` | `getDefinition(name) → Promise<Uint8Array \| null>` | Download definition YAML |
 | `disable` | `disable(name) → Promise<void>` | Pause new runs |
 | `enable` | `enable(name) → Promise<void>` | Resume new runs |
+
+## Errors
+
+Refusals are `ServerError` subclasses carrying `status`, `reason` and `ran`.
+
+```typescript
+import { isQueueFull, isGroupHeldFull, isLimit } from "@floruntime/node";
+
+try {
+  await client.queue.enqueue("tasks", payload);
+} catch (err) {
+  if (isQueueFull(err)) { /* the queue's or the shard's caps: back off and send again */ }
+  else if (isGroupHeldFull(err)) { /* a group read took nothing new: ack what you hold */ }
+  else if (isLimit(err)) { /* a LimitError: at a limit built into the server */ }
+  else throw err;
+}
+```
+
+A full queue and a full group are `OverloadedError`s with reason `QueueFull` or `GroupHeldFull`. The client retries a full queue with backoff, as any overloaded refusal that didn't run, since it drains as messages are completed. It doesn't retry `GroupHeldFull`: a group's cap counts its leased, ready and dead records, and dead ones leave only when the group is deleted or a stream trim passes them. `LimitError` (status `limit`) is thrown only for too many actions today, counted per shard; it is never retried, and no setting raises it.
