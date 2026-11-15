@@ -157,6 +157,7 @@ sources:
       tags:                     # optional: the series' full tag set
         host: web-01
       poll_interval_ms: 1000    # polling interval (default: 1000)
+      lateness_ms: 30000        # how late a point may arrive and still be read (default: 30000)
 ```
 
 Each emitted record looks like:
@@ -167,9 +168,15 @@ Each emitted record looks like:
 
 `tags` names one series exactly: all of its tags, not a subset.
 
-:::note
-A time-series source reads points in time order. A point written with a timestamp behind what the source has already read (a late write, or one from a writer whose clock lags) is not read by it. If you need such points, write each measurement in time order, or read them with `flo ts read` or `flo ts query` rather than a processing source.
-:::
+#### Late points
+
+A time-series source reads points in time order, and it reads only up to `lateness_ms` behind the newest point its field has, across all of the field's series. A point that arrives up to that late, from a host whose clock lags or that sends in batches, is still ahead of the source and gets read. Once the field has had no write for `lateness_ms`, the source reads everything up to the newest point.
+
+The window adds latency: a record reaches the source's sinks up to `lateness_ms` after its point was written, while the field keeps being written. Size it to how late your writers' points arrive, which is your send interval plus the clock skew between hosts. For example, a collector that sends every 10 s from hosts within 1 s of each other needs about 11 s. `lateness_ms: 0` reads up to the newest point at once, and misses any point that arrives behind it.
+
+A point that arrives more than the window behind is not read by a source that has passed it. Every point that arrives behind its field's newest is counted at each of these edges it trails by: `0s`, `1s`, `5s`, `15s`, `30s`, `1m`, `5m` and `1h`. The count shows as `flo_ts_late_points_total{behind="30s"}` per shard. A source with a window between two edges is covered by the next edge up, so a window on an edge, like the default 30 s, reads its count exactly. The count is the field's, across every writer, not only what one source skipped. It falls when a measurement's series are deleted or trimmed away.
+
+To read every point regardless of when it arrives, use `flo ts read` or `flo ts query` rather than a processing source.
 
 ### Multi-Source Merge
 
