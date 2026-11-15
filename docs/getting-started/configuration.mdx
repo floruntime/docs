@@ -39,10 +39,9 @@ port = 9000               # Client API port (binary protocol)
 bind = "0.0.0.0"          # Bind address
 data_dir = "~/.flo/data"  # Data directory for UAL segments and storage files
 shards = 0                # Number of shards, at most 256 (0 = CPU count, less one on 4 or more cores; a cluster member runs 1)
-# partition_count = 0     # Virtual partitions, at most 16384 (0 = auto: max(4096, shards × 32))
 ```
 
-`shards` and `partition_count` define the on-disk data layout. **Cannot be changed after data exists without rebalancing.**
+`shards` defines the on-disk data layout: a data directory starts only with the shard count it was written with. Keys route over a fixed 4096 slots, the same on every node and cluster, so there is no partition count to set.
 
 `[server] bind` is the interface this node serves on — for clients and, in a
 cluster, for peers. `0.0.0.0` (the default) listens everywhere and lets peers
@@ -61,7 +60,7 @@ a private interface, or firewall it.
 ```toml
 [storage]
 durability = "async_flush"       # sync | async_flush
-hot_buffer_capacity = 67108864   # Per-partition ring buffer size in bytes (64 MiB, the default; at least 2 MiB)
+hot_buffer_capacity = 67108864   # Per-shard ring buffer size in bytes (64 MiB, the default; at least 2 MiB)
 # hot_flush_seconds = 0          # Max seconds before hot → warm flush (default 0 = disabled; 300 suits production)
 # max_hot_entries = 0            # Max entries in hot tier before eviction (0 = capacity only)
 ```
@@ -180,6 +179,39 @@ reports which applies.
 half and all of it is replaced, heartbeats go out at a sixth of it. These are
 the only keys `[cluster]` reads. See [Clustering](/deployment/clustering).
 
+### `[kv]`
+
+```toml
+[kv]
+# max_txn_ops = 64          # most ops one transaction may hold, 1 to 256
+# max_txn_bytes = 262144    # most key and value bytes it may hold, up to 1048576 (1 MiB)
+```
+
+A value outside its range is refused at start. `--max-txn-ops` and
+`--max-txn-bytes` set them too, and beat the file. Past either limit, any op
+added to the transaction is refused with `txn_too_large`.
+
+`max_txn_bytes` counts each key with its namespace prefix: in namespace `tenant`
+at a limit of 100, a 1-byte key takes a value of at most 92 bytes. The default
+holds the largest value a plain set takes, under the longest key.
+
+A committed transaction is one log entry, and the shard does nothing else while
+it applies one, so raising these costs latency for every tenant on the shard,
+not correctness. Apply times, built ReleaseSafe as releases are, on a shared
+Apple-silicon Mac under load, range over five runs (your hardware will differ):
+
+| Transaction | Apply |
+|---|---|
+| 64 small ops | 85-88 µs |
+| 256 small ops | 324-336 µs |
+| 64 ops, 256 KiB (full at both defaults) | 126-139 µs |
+| 64 ops, 1 MiB | 270-330 µs |
+| 256 ops, 1 MiB (both maximums) | 529-577 µs |
+
+Set the same values on every node. A mismatch is safe, since replicas apply
+whatever a leader committed, but the leader's values decide, so the same
+transaction can be accepted or refused depending on which node leads.
+
 ### `[workers]`
 
 ```toml
@@ -195,6 +227,30 @@ interval: a worker with heartbeats turned off (for example the JavaScript SDK's
 A heartbeat or a fresh registration makes an unhealthy worker active again.
 See [Workers](/orchestration/workers#health-monitoring).
 
+### `[workflows]`
+
+```toml
+[workflows]
+# missing_action_wait_ms = 600000   # how long a step waits for its action to be registered; 0 fails it at once
+```
+
+A step past this wait takes its `target_not_found` outcome. The node leading the action's shard applies the setting, so set the same value on every node. See [Workflows](/orchestration/workflows#a-step-whose-action-isnt-registered).
+
+### `[queues]`
+
+```toml
+[queues]
+max_messages = 100000        # Messages one queue may hold, ready, leased and dead (1 to 16777216)
+max_bytes = 268435456        # Held bytes one queue may hold, likewise (64 KiB to 1 GiB)
+shard_held_bytes = 1073741824 # Held bytes all of a shard's queues may hold (64 KiB to 64 GiB)
+```
+
+Every replica holds every queued message in memory, so these bound what a runaway producer can make a node hold. A message holds its payload, its error text and 512 bytes besides, so empty messages fill a queue too. Past a cap, an enqueue is refused `overloaded`, with a message naming the cap; nothing already held is dropped. Consume, or purge, to make room. Dead letters count until the queue is purged.
+
+:::note
+**Set the same caps on every node.** The leader's caps decide, for every replica, whatever a replica's own settings say. A node that applies an enqueue under caps other than its own counts it in `flo_queue_cap_mismatch_total` and logs a warning naming both.
+:::
+
 ### Removed settings
 
 These are refused at start, with the reason. Remove them from `flo.toml`.
@@ -206,6 +262,7 @@ These are refused at start, with the reason. Remove them from `flo.toml`.
 | `[background_tasks]` | Namespace delete is refused, so there's no deletion task to tune. |
 | `[kv] expose_internal_keys` | Never read; internal keys stay hidden. |
 | `[storage] max_local_segments`, `enable_wal_truncation` | Not wired up: nothing reads them. |
+| `[server] partition_count` | Every cluster has 4096 key slots; there is no count to set. `--partitions` is refused too. |
 
 ## CLI Overrides
 
@@ -216,7 +273,6 @@ flo server start \
   --port 4444 \
   --data-dir ./my-data \
   --shards 4 \
-  --partitions 128 \
   --log-level debug \
   --log-format json \
   --metrics-port 9101 \

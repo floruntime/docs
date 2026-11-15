@@ -1,26 +1,28 @@
 ---
 title: Actions
-lede: Durable task execution — register named action types and run them on external workers in Go, Python, JavaScript, Zig, or any language that speaks the wire protocol. Built-in retries, timeouts, leases, labels, and dead-letter handling.
+lede: Durable task execution — register named action types and run them on external workers in Go, Python, JavaScript, Zig, or any language that speaks the wire protocol. Built-in retries, leases, labels, and stale-report fencing.
 ---
 
-Actions are **named, durable task types**. You register an action once, then invoke it on demand — Flo handles dispatch, retries, lease management, and dead-letter routing.
+Actions are **named, durable task types**. You register an action once, then invoke it on demand — Flo handles dispatch, retries and lease management.
 
-Action handlers run in **user-hosted workers** — long-lived processes (in Go, Python, JS, Zig, or any language that speaks the wire protocol) that pull tasks from Flo and report results. Flo owns the durable task queue, delivery, retries, and lease tracking; your worker owns the logic.
+Action handlers run in **user-hosted workers** — long-lived processes (in Go, Python, JS, Zig, or any language that speaks the wire protocol) that pull tasks from Flo and report results. Flo owns the runs, their delivery, retries and leases; your worker owns the logic.
+
+Every change to an action or a run (a registration, an invoke, a delivery to a worker, a complete, fail or touch, a lease running out) is an entry on the log of the shard that owns the action. Every replica applies the same entries, so every replica holds the same runs, and a report is checked against the run as the log has it.
 
 ```
 ┌──────────────┐                   ┌───────────────────────┐
 │  Client      │                   │  Flo Server (Shard)   │
 │              │  action invoke    │                       │
-│  flo action  │ ─────────────────▸│  ActionHandler        │
-│  invoke X    │  ◀─ run_id ───────┤    └─ queue pending    │
+│  flo action  │ ─────────────────▸│  run: pending         │
+│  invoke X    │  ◀─ run_id ───────┤                       │
 └──────────────┘                   └──────────┬────────────┘
                                               │
-┌──────────────┐   action_await               │
+┌──────────────┐   action await               │
 │  Worker      │ ◄────────────────────────────┘
-│  (Go/Py/JS)  │   task_id + payload
+│  (Go/Py/JS)  │   task: one delivery of the run
 │              │
 │  handler()   │
-│              │   action_complete(result)
+│              │   complete(result), naming the delivery
 │              │ ────────────────────────────▸ Flo
 └──────────────┘
 ```
@@ -35,22 +37,28 @@ Action handlers run in **user-hosted workers** — long-lived processes (in Go, 
 flo action register send-email --owner platform-team --timeout 60000 --retries 3
 ```
 
+`--timeout` is the action's lease in milliseconds, and `--retries` is the number of attempts a run gets in all, the first included. The CLI defaults are `--timeout 30000` and `--retries 0`, which the server raises to 1: one attempt, no retry.
+
 ### 2. Invoke it
 
 ```bash
 flo action invoke send-email '{"to":"alice@example.com","subject":"Welcome!"}'
-# → Result: send-email-1
+# → Result: act-1a2b3c4d5e6f00-3
 ```
+
+The printed id is the run's id.
 
 ### 3. Check status
 
 ```bash
-flo action status send-email-1
-# → RUN ID          STATUS     CREATED
-#   send-email-1    pending    2026-03-14 10:00:00
+flo action status act-1a2b3c4d5e6f00-3
+# → Run: act-1a2b3c4d5e6f00-3
+#   status: pending
+#   created_at: 1773482400000
+#   attempt: 0
 ```
 
-Nothing happens until a worker picks up the task — the run stays `pending` until a registered worker awaits it, then transitions to `running` and `completed`.
+Nothing happens until a worker takes the run: it stays `pending` until a worker awaits a task of its action, then goes `running`, then `completed` (or `failed` or `timed_out`).
 
 ---
 
@@ -58,17 +66,19 @@ Nothing happens until a worker picks up the task — the run stays `pending` unt
 
 ### Action
 
-A named task type stored in Flo's action registry. Each action has:
+A named task type, stored per namespace. Each action has:
 
 | Field | Default | Description |
 |-------|---------|-------------|
-| `name` | — | Unique name within a namespace (max 256 chars) |
-| `timeout_ms` | `30000` | Max execution time before timeout |
-| `max_retries` | `3` | Retries before dead-lettering |
-| `retry_delay_ms` | `1000` | Base delay for exponential backoff |
-| `description` | — | Human-readable description |
-| `version` | `1` | Auto-incremented on re-registration |
-| `enabled` | `true` | Can be disabled to block new invocations |
+| `name` | — | Unique within a namespace, at most 256 bytes, no NUL |
+| `owner` | — | Who owns it, at most 256 bytes (`--owner`; the CLI sends `cli` when omitted) |
+| `timeout_ms` | `300000` | The lease: how long a worker holds a run without completing, failing or touching it before the run is taken back. 5000 to 43200000 ms (12 h); `0` means 300000. See [Leases and touch](#leases-and-touch) |
+| `max_attempts` | `3` | Attempts a run gets, the first included; kept within 1 to 1000 |
+| `version` | `1` | One more on each re-registration |
+
+The defaults are the server's, for a registration that leaves the field out. Clients send their own: the CLI sends `--timeout 30000` and `--retries 0` (one attempt) unless told otherwise; the JavaScript, Python and Zig SDKs send a 30000 ms lease and 3 attempts; Go sends 0 (300000) and 3.
+
+Registering an action again replaces its settings, so the last registration wins. Deleting an action stops its runs being handed out; they stay, and they are handed out again if the action is registered again.
 
 ### Run
 
@@ -76,23 +86,41 @@ A single invocation of an action. Every invoke creates a run with a unique ID.
 
 | Status | Description |
 |--------|-------------|
-| `pending` | Queued, waiting for a worker to claim it |
-| `running` | Claimed by a worker, currently executing |
-| `completed` | Finished successfully with output |
-| `failed` | Failed permanently (retries exhausted or explicit fail) |
-| `cancelled` | Cancelled by user |
-| `timed_out` | Execution exceeded `timeout_ms` |
+| `pending` | Waiting for a worker to take it, or for a retry delay to pass |
+| `running` | A worker holds it |
+| `completed` | A worker completed it, with a result and optionally a named outcome |
+| `failed` | Failed for good: the worker failed it without retry, or its last attempt failed |
+| `timed_out` | Its last attempt's lease ran out without a report |
+
+### Task
+
+A **task** is one delivery of a run to one worker. A run delivered twice (after a failure, an expired lease or a hand-back) has two tasks, and only the latest can be reported on. A task carries:
+
+| Field | Description |
+|-------|-------------|
+| `run` | The run's id |
+| `namespace` | The run's namespace |
+| `deliveries` | The run's deliveries so far, this one included |
+| `term`, `index` | Where in the log the delivery was made |
+| `action` | The action the run invokes |
+| `created_at_ms` | When the run was invoked, in Unix milliseconds |
+| `attempt` | The run's failures so far, plus one |
+| `lease_ms` | How long the worker holds it without a touch |
+| `caller_run`, `caller_workflow` | The workflow run that invoked it, if one did |
+| `input` | The run's input, as invoked |
+
+`run`, `deliveries`, `term` and `index` name the delivery. Every complete, fail or touch names them back, with the action and the worker's id. The CLI prints a task's id as `run:deliveries:term:index:action`, and its `complete`, `fail` and `touch` take that id.
 
 ### Worker
 
-A long-running process that pulls pending tasks from Flo and executes them. Workers:
+A long-running process that takes tasks from Flo and executes them. Workers:
 
-- **Register** with Flo, declaring which action types they handle
-- **Await** tasks using long polling (blocking dequeue)
-- **Execute** the handler, optionally extending the lease with `touch`
+- **Register** with Flo, declaring which actions they handle
+- **Await** tasks using long polling
+- **Execute** the handler, touching the task to keep its lease while it runs
 - **Report** completion or failure back to Flo
 
-Workers can run anywhere — on the same machine, in a container, across the network. Multiple workers can handle the same action type for horizontal scaling.
+Workers can run anywhere — on the same machine, in a container, across the network. Several workers can handle the same action.
 
 ---
 
@@ -107,9 +135,9 @@ Actions are executed by external **worker** processes that pull tasks from Flo o
 The flow:
 
 1. **Invoke** creates a run in `pending` status
-2. A **worker** calls `await` (long poll) and receives the task
-3. The worker runs the handler and calls **complete** or **fail**
-4. Flo updates the run status and stores the result
+2. A **worker** awaits (long poll) and receives a task: a delivery of the run, leased to that worker
+3. The worker runs the handler, touching the task if it runs long, and calls **complete** or **fail**
+4. Flo records the result, or makes the run ready again for another attempt
 
 ---
 
@@ -131,7 +159,7 @@ The flow:
 
 ### Register
 
-The worker announces itself and the action types it handles:
+The worker announces itself and the actions it handles:
 
 ```bash
 flo worker register worker-1 process-order send-email
@@ -142,7 +170,7 @@ Registration includes:
 - **Task types** — list of action names this worker can execute
 - **Max concurrency** — how many tasks in parallel
 - **Machine ID** — for grouping workers on the same host
-- **Metadata** — arbitrary JSON for discovery
+- **Metadata** — a JSON object, which is also the worker's [labels](#labels)
 
 ### Await (Long Poll)
 
@@ -150,76 +178,128 @@ Workers block-wait for tasks:
 
 ```bash
 flo worker await process-order --worker-id worker-1 --block 30000
+# → Task: act-1a2b3c4d5e6f00-3:1:2:41:process-order
+#   Action: process-order
+#   Attempt: 1
+#   Payload: {"order_id":"A-1"}
 ```
 
-When a matching pending task exists, Flo returns a **task assignment**:
+An await names up to 64 actions, tried in order, and also takes tasks of the actions the worker registered. It waits up to `--block` milliseconds (at most 300000; `0` answers at once; the CLI's default is 5000) and answers with one task, or none.
 
-| Field | Description |
-|-------|-------------|
-| `task_id` | The run ID to complete/fail against |
-| `task_type` | Action name |
-| `payload` | Input bytes from the invoke call |
-| `created_at` | When the invoke happened |
-| `attempt` | Attempt number (starts at 1, increments on retry) |
+An await may carry a **request key** (the Go, JavaScript and Python workers send one). Retrying an await with the same key gets the task the first try got, while its lease runs, so a lost answer doesn't leave a run held by nobody. A task whose await has nobody left to answer, because the client went away, is handed back at once, with no failure counted.
+
+A draining worker's await is refused `worker_draining`, and an unhealthy one's `worker_unhealthy` until it heartbeats again.
 
 ### Complete
 
-Report successful completion with the result:
+Report success with the result:
 
 ```bash
-flo worker complete <task-id> --worker-id worker-1 --action process-order --result '{"status":"done"}'
+flo worker complete act-1a2b3c4d5e6f00-3:1:2:41:process-order --worker-id worker-1 --result '{"status":"done"}'
 ```
+
+`--outcome` names the outcome a [workflow](/orchestration/workflows/) step follows; none is `success`.
 
 ### Fail
 
-Report failure, optionally requesting a retry:
+Report failure:
 
 ```bash
-# Retry — task goes back to pending
-flo worker fail <task-id> --worker-id worker-1 --action process-order --error "Temporary failure" --retry
+# Retry: the run is ready again while it has attempts left
+flo worker fail act-1a2b3c4d5e6f00-3:1:2:41:process-order --worker-id worker-1 --error "Temporary failure" --retry
 
-# Permanent failure — task is marked failed
-flo worker fail <task-id> --worker-id worker-1 --action process-order --error "Invalid input"
+# Without --retry the run fails for good
+flo worker fail act-1a2b3c4d5e6f00-3:1:2:41:process-order --worker-id worker-1 --error "Invalid input"
 ```
 
-### Touch (Lease Extension)
+A fail on the wire has more than the CLI shows:
 
-For long-running tasks, extend the execution lease to prevent timeout:
+| Field | Default | Description |
+|-------|---------|-------------|
+| `retry` | `true` | Run it again while attempts are left; `false` fails the run now. The CLI sends `false` unless given `--retry` |
+| `abandoned` | `false` | Hand the run back untried: no failure is counted, so the next delivery has the same attempt |
+| `delay_ms` | `0` | How long before the run is ready again, at most 86400000 (a day) |
+| `error` | `""` | Why it failed |
+
+### Touch
+
+Keep the task's lease while the handler runs:
 
 ```bash
-flo worker touch <task-id> --worker-id worker-1 --action process-order --extend 30000
+flo worker touch act-1a2b3c4d5e6f00-3:1:2:41:process-order --worker-id worker-1
+# → Expires at: 1773482460000
 ```
+
+See [Leases and touch](#leases-and-touch).
 
 ### Heartbeat
 
-Workers send periodic heartbeats (typically every 30 seconds) to report their current load and stay registered. If the server responds with a `draining` status, the worker should stop accepting new tasks and finish current ones.
+Workers send periodic heartbeats (every 30 seconds in the SDKs) to report their current load and stay registered. If the server responds with a `draining` status, the worker should stop accepting new tasks and finish current ones.
 
 ### Drain
 
 Signal that the worker should finish current tasks but accept no new ones:
 
 ```bash
-flo worker drain --worker-id worker-1
+flo worker drain worker-1
 ```
+
+---
+
+## Leases and touch
+
+A delivered run is leased to its worker for the action's `timeout_ms`. If the worker neither completes, fails nor touches it before the lease runs out, the run is taken back: that counts as a failed attempt, and the run is ready again at once, or, on its last attempt, ends `timed_out`.
+
+A **touch** keeps the lease. It takes no length:
+
+- With **half the lease or less** left, the lease runs a full lease from now.
+- With **more than half** left, nothing changes.
+
+Either way it answers when the lease now runs out, in Unix milliseconds. So a handler that runs longer than the lease should touch at least every half lease. No delivery is held more than 12 hours from its delivery, however often it is touched; register a longer lease rather than touching a short one for hours.
+
+A new leader takes over the leases its shard's log holds. It waits a little past a lease's deadline before ending it (30 seconds, or the lease if shorter), since a worker that touched the old leader in time may not have reached the new one yet.
+
+---
+
+## Stale reports
+
+A complete, fail or touch is accepted only for the run's live delivery, from the worker that holds it. Any other is refused with status `conflict` and reason `stale_report`, and it changes nothing. The message says why:
+
+| Message | Meaning |
+|---------|---------|
+| `stale report: the lease expired and the run moved on` | The lease ran out before this report |
+| `stale report: the run was delivered again since` | The report names an earlier delivery |
+| `stale report: another worker holds this delivery` | The report comes from a worker that doesn't hold it |
+| `stale report: the run was completed` | The run is already complete |
+| `stale report: the run was released` | The delivery was already failed or handed back |
+| `stale report: the run isn't held` | The run isn't leased to anyone |
+| `stale report: the run was completed with another result` | A second complete for the same delivery, with a different outcome or result |
+
+A complete or fail sent again after it applied, with the same content, answers ok. So a worker that loses the answer to a report can safely send it again. A report naming an action other than the run's is answered `not_found`.
+
+The SDKs raise a stale report as its own error: `IsStaleReport(err)` in Go, `StaleReportError` in JavaScript and Python, `error.StaleReport` in Zig.
 
 ---
 
 ## Labels
 
-Actions can require specific worker capabilities using **labels**. When invoking an action with labels, only workers whose labels are a superset of the required labels will receive the task.
+Actions can require specific worker capabilities using **labels**. When invoking an action with labels, only workers whose labels include every required one receive the run.
 
 ```bash
+# A worker declares its labels when it registers
+flo worker register gpu-worker-1 render-video --labels '{"gpu":true,"vram_gb":24}'
+
 # Invoke with required labels
 flo action invoke render-video '{"url":"..."}' --labels '{"gpu":true,"vram_gb":24}'
 ```
 
-A worker with labels `{"gpu":true, "vram_gb":24, "region":"us-east"}` **matches** — it has all required keys with equal values. A worker with `{"gpu":true, "vram_gb":16}` **does not match** — `vram_gb` differs.
+A worker with labels `{"gpu":true, "vram_gb":24, "region":"us-east"}` **matches** — it has all required keys with equal values. A worker with `{"gpu":true, "vram_gb":16}` **does not match** — `vram_gb` differs. A worker that registered no labels gets no run that requires some.
 
 Label matching rules:
 - All keys in `required` must exist in `worker` labels
-- Values must be exactly equal (string, number, or boolean)
+- Values must be exactly equal (string, number, boolean or null)
 - Extra keys on the worker side are ignored
-- Nested objects and arrays are not compared (flat values only)
+- Nested objects and arrays never match
 
 ---
 
@@ -232,21 +312,42 @@ Label matching rules:
 
 Invoke priority, delay and idempotency keys aren't supported yet: runs are taken in the order they were invoked, at once, and every invoke starts a new run (tracked in [#181](https://github.com/floruntime/flo/issues/181)).
 
+The input is at most 64 KiB.
+
 ---
 
 ## Retry Behavior
 
-When a worker reports failure with `--retry`:
+A run gets the action's `max_attempts` attempts, the first included. An attempt is spent when its worker fails it, or when its lease runs out.
 
-1. The run status resets to `pending`
-2. The attempt counter increments
-3. The task goes back to the queue for the next available worker
-4. Backoff delay is applied: `retry_delay_ms × 2^(attempt-1)`
+When a worker fails a run with `retry` (the SDK workers do, for a handler error):
 
-When retries are exhausted (`max_retries` reached) or the worker fails without `--retry`:
-- The run status is set to `failed`
-- The error message and timestamps are recorded
-- The run can still be queried via `action status`
+1. The failure is counted and the error recorded
+2. If attempts are left, the run is `pending` again after the fail's `delay_ms` (0 unless given), for the next worker that awaits it
+3. Otherwise the run is `failed`
+
+A fail without `retry` makes the run `failed` at once. A fail with `abandoned` hands it back without counting a failure.
+
+When a lease runs out, the failure is counted with the error `lease expired`; the run is ready again at once while attempts are left, and `timed_out` otherwise.
+
+`flo action status` shows the attempt, the last error and the worker that holds or last held the run, for runs in any status.
+
+---
+
+## Inspecting Actions
+
+```bash
+# Registered actions
+flo action list
+
+# An action's settings, its runs by status, and how long completed runs took
+flo action info send-email
+
+# Its runs
+flo action runs send-email
+```
+
+`action info` shows the owner, version, lease and attempts, the runs waiting for a worker (counted up to 100,000), the runs running, completed, failed and timed out, and the mean, median, 95th percentile and longest time of completed runs, from a worker first taking the run to its completion. When the action's shard holds more than 10,000 of the namespace's runs, only the waiting count is given.
 
 ---
 
@@ -267,65 +368,70 @@ flo action invoke send-email '{}' --namespace staging
 
 ## Persistence
 
-Action registrations and run state are persisted to the Unified Append Log (UAL). On node restart:
+Action registrations and runs, with their deliveries, leases and results, are entries on the shard's log, applied the same way on every replica. A restarted node replays them, and a new leader picks up the runs and leases where the old one left them.
 
-- **Registrations** are replayed — all actions reappear in the registry
-- **Runs** are replayed — pending and running tasks are restored
-- Workers must re-register and resume polling
+The worker registry is not on the log: after a restart, workers register again (the SDK workers do so by themselves when they reconnect) and resume polling.
 
 ---
 
 ## SDK: Building Workers
 
-The SDKs provide a high-level `ActionWorker` that handles registration, polling, concurrency, heartbeats, and error recovery. You just write handler functions.
+The SDKs provide a high-level `ActionWorker` that handles registration, polling, concurrency, heartbeats, and reporting. You write handler functions.
 
 ### Handler Signature
 
-Every action handler receives an `ActionContext` and returns result bytes:
+Every action handler receives an `ActionContext` and returns its result:
 
 <Tabs>
 <Tab title="Go">
 ```go
-type ActionHandler func(actx *ActionContext) (result []byte, err error)
+// Return []byte, an *ActionResult (a named outcome), or any value to marshal as JSON.
+type ActionHandler func(actx *ActionContext) (result interface{}, err error)
 ```
 </Tab>
 <Tab title="Python">
 ```python
-async def handler(ctx: ActionContext) -> bytes:
+async def handler(ctx: ActionContext) -> bytes:  # or a dict, or an ActionResult
 ```
 </Tab>
 <Tab title="JavaScript">
 ```typescript
-type ActionHandler = (ctx: ActionContext) => Promise<Uint8Array>;
+type ActionHandler = (
+  ctx: ActionContext
+) => Promise<Record<string, unknown> | Uint8Array | ActionResult>;
 ```
 </Tab>
 <Tab title="Zig">
 ```zig
-pub const ActionHandler = *const fn (*ActionContext) anyerror![]const u8;
+pub const ActionHandler = *const fn (*ActionContext) anyerror!ActionHandlerResult;
+// ActionHandlerResult is .{ .bytes = ... } or .{ .result = ... } (a named outcome).
 ```
 </Tab>
 </Tabs>
 
 ### ActionContext
 
-The context object passed to every handler:
+The context passed to every handler:
 
-| Property | Type | Description |
-|----------|------|-------------|
-| `taskId` / `task_id` | string | Unique task/run identifier |
-| `actionName` / `action_name` | string | Which action this is |
-| `input` / `payload` | bytes | Raw input from the invoke call |
-| `attempt` | int | Attempt number (1-based) |
-| `createdAt` / `created_at` | timestamp | When the invoke happened |
-| `namespace` | string | Namespace scope |
+| | Go | JavaScript | Python | Zig |
+|---|---|---|---|---|
+| Task id (`run:deliveries:term:index:action`) | `TaskID()` | `taskId` | `task_id` | — |
+| Run id | `RunID()` | `runId` | `run_id` | `run_id` |
+| Action name | `ActionName()` | `actionName` | `action_name` | `action_name` |
+| Input bytes | `Input()` | `payload`, `input()` | `payload`, `input()` | `payload`, `input()` |
+| Attempt (failures so far, plus one) | `Attempt()` | `attempt` | `attempt` | `attempt` |
+| Lease | — | `leaseMs` | `task.lease_ms` | `lease_ms` |
+| Namespace | `Namespace()` | `namespace` | `namespace` | `namespace` |
+| Calling workflow run | `CallerRunID()` | `callerRunId` | `task.caller_run` | `caller_run_id` |
 
 Methods:
 
-| Method | Description |
-|--------|-------------|
-| `json()` / `Into()` | Parse input as JSON (typed or untyped) |
-| `toBytes()` / `Bytes()` | Serialize a value to JSON bytes for the response |
-| `touch(extendMs)` | Extend the execution lease (for long-running tasks) |
+| | Go | JavaScript | Python | Zig |
+|---|---|---|---|---|
+| Parse the input as JSON | `Into(&v)` | `json<T>()` | `json()`, `into(cls)` | `json(T)` |
+| Serialize a value to JSON bytes | `Bytes(v)` | `toBytes(v)` | `to_bytes(v)` | `toBytes(v)` |
+| Return a named outcome | `Result(outcome, v)` | `result(outcome, v)` | `result(outcome, v)` | `result(outcome, v)` |
+| Keep the lease; returns when it runs out, in Unix ms | `Touch()` | `touch()` | `touch()` | `touch()` |
 
 ### Complete Examples
 
@@ -338,7 +444,6 @@ import (
     "context"
     "fmt"
     "log"
-    "os"
     "os/signal"
     "syscall"
 
@@ -346,10 +451,9 @@ import (
 )
 
 type OrderRequest struct {
-    OrderID    string  `json:"order_id"`
-    CustomerID string  `json:"customer_id"`
-    Amount     float64 `json:"amount"`
-    Items      []Item  `json:"items"`
+    OrderID string  `json:"order_id"`
+    Amount  float64 `json:"amount"`
+    Items   []Item  `json:"items"`
 }
 
 type Item struct {
@@ -357,72 +461,61 @@ type Item struct {
     Quantity int    `json:"quantity"`
 }
 
-func processOrder(actx *flo.ActionContext) ([]byte, error) {
+func processOrder(actx *flo.ActionContext) (interface{}, error) {
     var req OrderRequest
     if err := actx.Into(&req); err != nil {
-        return nil, fmt.Errorf("invalid input: %w", err)
+        return nil, flo.NewNonRetryableErrorf("invalid input: %v", err)
     }
 
     log.Printf("Processing order %s ($%.2f)", req.OrderID, req.Amount)
 
-    // For long-running tasks, extend the lease periodically
     for i, item := range req.Items {
         log.Printf("  Item %d/%d: %s", i+1, len(req.Items), item.SKU)
 
-        // Extend lease every 3 items
-        if (i+1) % 3 == 0 {
-            actx.Touch(30000)
+        // Keep the lease while the work runs long
+        if _, err := actx.Touch(); err != nil {
+            return nil, fmt.Errorf("lost the task: %w", err)
         }
     }
 
-    return actx.Bytes(map[string]string{
-        "order_id": req.OrderID,
-        "status":   "processed",
-    })
+    return map[string]string{"order_id": req.OrderID, "status": "processed"}, nil
 }
 
-func sendEmail(actx *flo.ActionContext) ([]byte, error) {
+func sendEmail(actx *flo.ActionContext) (interface{}, error) {
     var input map[string]string
-    actx.Into(&input)
-
+    if err := actx.Into(&input); err != nil {
+        return nil, err
+    }
     log.Printf("Sending email to %s", input["to"])
-
-    return actx.Bytes(map[string]string{"status": "sent"})
+    return map[string]string{"status": "sent"}, nil
 }
 
 func main() {
-    client := flo.NewClient("localhost:9000",
-        flo.WithNamespace("myapp"),
-    )
+    ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+    defer stop()
+
+    client := flo.NewClient("localhost:9000", flo.WithNamespace("myapp"))
     if err := client.Connect(); err != nil {
         log.Fatal(err)
     }
     defer client.Close()
 
-    w, err := client.NewActionWorker(flo.ActionWorkerOptions{
-        Concurrency:   10,
-        ActionTimeout: 5 * time.Minute,
-    })
+    w, err := client.NewActionWorker(flo.ActionWorkerOptions{Concurrency: 10})
     if err != nil {
         log.Fatal(err)
     }
     defer w.Close()
 
-    w.MustRegisterAction("process-order", processOrder)
-    w.MustRegisterAction("send-email", sendEmail)
-
-    // Graceful shutdown
-    ctx, cancel := context.WithCancel(context.Background())
-    go func() {
-        sigCh := make(chan os.Signal, 1)
-        signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-        <-sigCh
-        w.Stop()
-        cancel()
-    }()
+    // nil registers the action with the server's defaults; pass
+    // &flo.ActionRegisterOptions{...} to set its lease and attempts.
+    w.MustRegisterAction("process-order", processOrder, &flo.ActionRegisterOptions{
+        TimeoutMS:  flo.Uint32Ptr(60000),
+        MaxRetries: flo.Uint32Ptr(3), // attempts in all
+    })
+    w.MustRegisterAction("send-email", sendEmail, nil)
 
     log.Println("Worker starting...")
-    w.Start(ctx)
+    w.Start(ctx) // returns the context's error once it is cancelled
 }
 ```
 </Tab>
@@ -431,7 +524,7 @@ func main() {
 import asyncio
 import logging
 import signal
-from flo import FloClient, ActionContext
+from flo import FloClient, ActionContext, ActionRegisterOptions
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -444,15 +537,10 @@ async def process_order(ctx: ActionContext) -> bytes:
     for i, item in enumerate(items):
         logger.info(f"  Item {i+1}/{len(items)}: {item['sku']}")
         await asyncio.sleep(1)
+        # Keep the lease while the work runs long
+        await ctx.touch()
 
-        # Extend lease every 3 items
-        if (i + 1) % 3 == 0:
-            await ctx.touch(30000)
-
-    return ctx.to_bytes({
-        "order_id": data["order_id"],
-        "status": "processed",
-    })
+    return ctx.to_bytes({"order_id": data["order_id"], "status": "processed"})
 
 async def send_email(ctx: ActionContext) -> bytes:
     data = ctx.json()
@@ -460,30 +548,29 @@ async def send_email(ctx: ActionContext) -> bytes:
     return ctx.to_bytes({"status": "sent"})
 
 async def main():
-    client = FloClient("localhost:9000", namespace="myapp")
-    await client.connect()
+    async with FloClient("localhost:9000", namespace="myapp") as client:
+        worker = client.new_action_worker(concurrency=10)
 
-    worker = client.new_action_worker(concurrency=10, action_timeout=300)
+        worker.register_action(
+            "process-order",
+            process_order,
+            ActionRegisterOptions(timeout_ms=60000, max_attempts=3),
+        )
+        worker.register_action("send-email", send_email)
 
-    worker.register_action("process-order", process_order)
-    worker.register_action("send-email", send_email)
+        # Decorator syntax also works
+        @worker.action("health-check")
+        async def health_check(ctx: ActionContext) -> bytes:
+            return ctx.to_bytes({"status": "healthy"})
 
-    # Decorator syntax also works
-    @worker.action("health-check")
-    async def health_check(ctx: ActionContext) -> bytes:
-        return ctx.to_bytes({"status": "healthy"})
+        loop = asyncio.get_running_loop()
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            loop.add_signal_handler(sig, worker.stop)
 
-    # Shutdown handling
-    stop = asyncio.Event()
-    loop = asyncio.get_running_loop()
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, lambda: (worker.stop(), stop.set()))
-
-    try:
-        await worker.start()
-    finally:
-        await worker.close()
-        await client.close()
+        try:
+            await worker.start()
+        finally:
+            await worker.close()
 
 asyncio.run(main())
 ```
@@ -492,7 +579,7 @@ asyncio.run(main())
 ```typescript
 import { ActionWorker, ActionContext } from "@floruntime/node";
 
-async function processOrder(ctx: ActionContext): Promise<Uint8Array> {
+async function processOrder(ctx: ActionContext) {
   const req = ctx.json<{
     orderId: string;
     amount: number;
@@ -504,20 +591,14 @@ async function processOrder(ctx: ActionContext): Promise<Uint8Array> {
   for (let i = 0; i < req.items.length; i++) {
     console.log(`  Item ${i + 1}/${req.items.length}: ${req.items[i].sku}`);
     await new Promise((r) => setTimeout(r, 1000));
-
-    // Extend lease every 3 items
-    if ((i + 1) % 3 === 0) {
-      await ctx.touch(30000);
-    }
+    // Keep the lease while the work runs long
+    await ctx.touch();
   }
 
-  return ctx.toBytes({
-    orderId: req.orderId,
-    status: "processed",
-  });
+  return ctx.toBytes({ orderId: req.orderId, status: "processed" });
 }
 
-async function sendEmail(ctx: ActionContext): Promise<Uint8Array> {
+async function sendEmail(ctx: ActionContext) {
   const data = ctx.json<{ to: string; subject: string }>();
   console.log(`Sending email to ${data.to}`);
   return ctx.toBytes({ status: "sent" });
@@ -527,10 +608,10 @@ const worker = new ActionWorker({
   endpoint: "localhost:9000",
   namespace: "myapp",
   concurrency: 10,
-  actionTimeoutMs: 300_000,
 });
 
-worker.action("process-order", processOrder);
+// The worker registers each action when it starts.
+worker.action("process-order", processOrder, { timeoutMs: 60000, maxRetries: 3 });
 worker.action("send-email", sendEmail);
 
 process.on("SIGINT", () => worker.stop());
@@ -544,33 +625,31 @@ await worker.close();
 const std = @import("std");
 const flo = @import("flo");
 
-fn processOrder(ctx: *flo.ActionContext) anyerror![]const u8 {
-    const input = try ctx.json(struct {
+fn processOrder(ctx: *flo.ActionContext) anyerror!flo.ActionHandlerResult {
+    const parsed = try ctx.json(struct {
         order_id: []const u8,
         amount: f64,
         items: []const struct { sku: []const u8, quantity: u32 },
     });
+    defer parsed.deinit();
+    const input = parsed.value;
 
     std.log.info("Processing order {s} (${d:.2})", .{ input.order_id, input.amount });
 
     for (input.items, 0..) |item, i| {
         std.log.info("  Item {d}/{d}: {s}", .{ i + 1, input.items.len, item.sku });
-
-        if ((i + 1) % 3 == 0) {
-            try ctx.touch(30000);
-        }
+        // Keep the lease while the work runs long
+        _ = try ctx.touch();
     }
 
-    return ctx.toBytes(.{
-        .order_id = input.order_id,
-        .status = "processed",
-    });
+    return .{ .bytes = try ctx.toBytes(.{ .order_id = input.order_id, .status = "processed" }) };
 }
 
-fn sendEmail(ctx: *flo.ActionContext) anyerror![]const u8 {
-    const input = try ctx.json(struct { to: []const u8, subject: []const u8 });
-    std.log.info("Sending email to {s}", .{input.to});
-    return ctx.toBytes(.{ .status = "sent" });
+fn sendEmail(ctx: *flo.ActionContext) anyerror!flo.ActionHandlerResult {
+    const parsed = try ctx.json(struct { to: []const u8, subject: []const u8 });
+    defer parsed.deinit();
+    std.log.info("Sending email to {s}", .{parsed.value.to});
+    return .{ .bytes = try ctx.toBytes(.{ .status = "sent" }) };
 }
 
 pub fn main() !void {
@@ -582,18 +661,19 @@ pub fn main() !void {
         .endpoint = "localhost:9000",
         .namespace = "myapp",
         .concurrency = 10,
-        .action_timeout_ms = 300_000,
     });
     defer worker.deinit();
 
-    try worker.registerAction("process-order", processOrder);
-    try worker.registerAction("send-email", sendEmail);
+    try worker.registerAction("process-order", processOrder, .{ .timeout_ms = 60000, .max_retries = 3 });
+    try worker.registerAction("send-email", sendEmail, .{});
 
     try worker.start();
 }
 ```
 </Tab>
 </Tabs>
+
+A handler that returns an error fails the task with retry; a non-retryable error fails it for good. See [Error Handling and Retries](/orchestration/workers#error-handling-and-retries).
 
 ### Worker Configuration
 
@@ -603,19 +683,21 @@ pub fn main() !void {
 flo.ActionWorkerOptions{
     WorkerID:      "my-worker",       // auto-generated if empty
     MachineID:     "host-01",         // defaults to hostname
-    Concurrency:   10,                // max parallel tasks
-    ActionTimeout: 5 * time.Minute,   // per-task timeout
-    BlockMS:       30000,             // long-poll timeout
+    Concurrency:   10,                // max parallel tasks (default 10)
+    ActionTimeout: 5 * time.Minute,   // handler time limit (default 5 min)
+    BlockMS:       30000,             // long-poll wait (0 = 30000, max 300000)
+    AutoTouch:     true,              // touch every sixth of the lease (default off)
 }
 ```
 </Tab>
 <Tab title="Python">
 ```python
 client.new_action_worker(
-    worker_id="my-worker",            # auto-generated if empty
-    concurrency=10,                   # max parallel tasks
-    action_timeout=300,               # seconds
-    block_ms=30000,                   # long-poll timeout
+    worker_id="my-worker",            # auto-generated if omitted
+    concurrency=10,                   # max parallel tasks (default 10)
+    action_timeout=300,               # handler time limit, seconds (default 300)
+    block_ms=30000,                   # long-poll wait (0 = 30000, max 300000)
+    auto_touch=True,                  # touch every quarter of the lease (default off)
 )
 ```
 </Tab>
@@ -626,10 +708,11 @@ new ActionWorker({
   namespace: "myapp",
   workerId: "my-worker",             // auto-generated if omitted
   machineId: "host-01",
-  concurrency: 10,                   // max parallel tasks
-  actionTimeoutMs: 300_000,          // per-task timeout
-  blockMs: 30_000,                   // long-poll timeout
+  concurrency: 10,                   // max parallel tasks (default 10)
+  actionTimeoutMs: 300_000,          // handler time limit (default 300000)
+  blockMs: 30_000,                   // long-poll wait (0 = 30000, max 300000)
   heartbeatIntervalMs: 30_000,       // heartbeat interval
+  autoTouch: true,                   // touch every quarter of the lease (default off)
 });
 ```
 </Tab>
@@ -639,49 +722,57 @@ flo.WorkerConfig{
     .endpoint = "localhost:9000",
     .namespace = "myapp",
     .worker_id = "my-worker",        // null = auto-generated
-    .concurrency = 10,               // max parallel tasks
-    .action_timeout_ms = 300_000,    // per-task timeout
-    .block_ms = 30_000,              // long-poll timeout
+    .concurrency = 10,               // max parallel tasks (default 1)
+    .block_ms = 30_000,              // long-poll wait (0 = 30000, max 300000)
     .heartbeat_interval_ms = 30_000, // heartbeat interval
     .machine_id = "host-01",
+    .metadata = "{\"gpu\":true}",    // the worker's labels
+    .auto_touch = true,              // touch every third of the lease (default off)
 }
 ```
 </Tab>
 </Tabs>
 
+With auto-touch on, the worker touches each task on a timer while its handler runs, and stops when the task turns stale. Without it, a handler that runs past the lease without touching is taken back and run again elsewhere.
+
 ---
 
 ## SDK: Invoking Actions
 
-You don't need a worker to invoke actions — any client can invoke and check status:
+You don't need a worker to invoke actions — any client can register, invoke and check status:
 
 <Tabs>
 <Tab title="Go">
 ```go
 client := flo.NewClient("localhost:9000")
-client.Connect()
+if err := client.Connect(); err != nil {
+    log.Fatal(err)
+}
 defer client.Close()
 
 // Register
-client.Action.Register("process-image", flo.ActionTypeUser, &flo.ActionRegisterOptions{
-    TimeoutMS:   ptr(60000),
-    MaxRetries:  ptr(3),
-    Description: "Resize and optimize images",
+err := client.Action.Register("process-image", flo.ActionTypeUser, &flo.ActionRegisterOptions{
+    TimeoutMS:  flo.Uint32Ptr(60000),
+    MaxRetries: flo.Uint32Ptr(3), // attempts in all
 })
 
 // Invoke
-result, _ := client.Action.Invoke("process-image",
+result, err := client.Action.Invoke("process-image",
     []byte(`{"url":"https://example.com/img.jpg","width":800}`),
     nil,
 )
 fmt.Println("Run ID:", result.RunID)
 
 // Poll for status
-status, _ := client.Action.Status(result.RunID, nil)
-fmt.Printf("Status: %s, Output: %s\n", status.Status, status.Output)
+status, err := client.Action.Status(result.RunID, nil)
+fmt.Printf("Status: %v, Output: %s, Outcome: %q\n", status.Status, status.Output, status.Outcome)
+
+// Settings and run counts
+info, err := client.Action.Info("process-image", nil)
+fmt.Println("Waiting:", info.Ready)
 
 // Delete
-client.Action.Delete("process-image", nil)
+err = client.Action.Delete("process-image", nil)
 ```
 </Tab>
 <Tab title="Python">
@@ -691,7 +782,7 @@ from flo import FloClient, ActionType, ActionRegisterOptions
 async with FloClient("localhost:9000") as client:
     # Register
     await client.action.register("process-image", ActionType.USER,
-        ActionRegisterOptions(timeout_ms=60000, max_retries=3))
+        ActionRegisterOptions(timeout_ms=60000, max_attempts=3))
 
     # Invoke
     result = await client.action.invoke("process-image",
@@ -700,7 +791,11 @@ async with FloClient("localhost:9000") as client:
 
     # Poll for status
     status = await client.action.status(result.run_id)
-    print(f"Status: {status.status}")
+    print(f"Status: {status.status.name}, outcome: {status.outcome}")
+
+    # Settings and run counts
+    info = await client.action.info("process-image")
+    print(f"Waiting: {info.ready}")
 
     # Delete
     await client.action.delete("process-image")
@@ -716,19 +811,23 @@ await client.connect();
 // Register
 await client.action.register("process-image", ActionType.User, {
   timeoutMs: 60000,
-  maxRetries: 3,
+  maxRetries: 3, // attempts in all
 });
 
 // Invoke
 const result = await client.action.invoke(
   "process-image",
-  encode('{"url":"https://example.com/img.jpg","width":800}')
+  new TextEncoder().encode('{"url":"https://example.com/img.jpg","width":800}')
 );
 console.log("Run ID:", result.runId);
 
 // Poll for status
 const status = await client.action.status(result.runId);
-console.log("Status:", status.status);
+console.log("Status:", status.status, "Outcome:", status.outcome);
+
+// Settings and run counts
+const info = await client.action.info("process-image");
+console.log("Waiting:", info.ready);
 
 // Delete
 await client.action.delete("process-image");
@@ -736,27 +835,34 @@ await client.action.delete("process-image");
 </Tab>
 <Tab title="Zig">
 ```zig
-var client = try flo.Client.init(allocator, "localhost:9000", .{});
+var client = flo.Client.init(allocator, "localhost:9000", .{});
 defer client.deinit();
 try client.connect();
 
+var actions = flo.Actions.init(&client);
+
 // Register
-try client.actions.registerAction("process-image", .user, .{
+try actions.registerAction("process-image", .user, .{
     .timeout_ms = 60000,
-    .max_retries = 3,
+    .max_retries = 3, // attempts in all
 });
 
 // Invoke
-const result = try client.actions.invoke("process-image",
+var result = try actions.invoke("process-image",
     "{\"url\":\"https://example.com/img.jpg\"}", .{});
 defer result.deinit();
 
 // Status
-const status = try client.actions.getStatus(result.run_id, .{});
+var status = try actions.getStatus(result.run_id, .{});
 defer status.deinit();
 
+// Settings and run counts
+var info = try actions.info("process-image", .{});
+defer info.deinit();
+std.debug.print("waiting: {d}\n", .{info.ready});
+
 // Delete
-try client.actions.deleteAction("process-image", .{});
+try actions.deleteAction("process-image", .{});
 ```
 </Tab>
 </Tabs>
@@ -779,12 +885,14 @@ steps:
       failure: flo.Failed
 ```
 
-When a workflow invokes an action, it parks in `waiting` until a worker claims the task and reports completion, then resumes with the result.
+When a workflow invokes an action, it parks in `waiting` until a worker completes or fails the run, then resumes with the result. A worker's named outcome picks the step's transition.
+
+If the step's action isn't registered, the step waits for it to be, for up to the server's `[workflows] missing_action_wait_ms` (default 600000, ten minutes; `0` doesn't wait). If it still isn't registered by then, the step ends with the outcome `target_not_found`.
 
 ---
 
 ## Related Docs
 
-- [Workers](/orchestration/workers/) — Low-level worker protocol details
+- [Workers](/orchestration/workers/) — Worker registration, heartbeats, drain and error handling
 - [Workflows](/orchestration/workflows/) — Compose actions into multi-step orchestrations
 - [Stream Processing](/orchestration/processing/) — Continuous data pipelines (different from actions)

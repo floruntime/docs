@@ -52,6 +52,9 @@ pub fn main() !void {
     const seq = try queue.enqueue("tasks", "payload", .{ .priority = 5 });
     var result = try queue.dequeue("tasks", 10, .{});
     defer result.deinit();
+    // Leased: complete them within the lease, or they're delivered again
+    var done = try queue.complete("tasks", result.lease, result.messages, .{});
+    defer done.deinit();
 
     // Stream
     var stream = flo.Stream.init(&client);
@@ -136,17 +139,18 @@ if (try kv.jsonGet("order:42", "$.status", .{})) |status_const| {
 }
 _ = try kv.jsonDel("order:42", "$.status", .{});
 
-// Per-shard transaction — atomic multi-key writes on one partition
-var txn = try kv.begin("user:42", .{});
+// Per-shard transaction — atomic multi-key writes on one shard. It is pinned
+// to the {tag} of the key it begins with: give every key in it the same one.
+var txn = try kv.begin("{user:42}:name", .{});
 defer txn.deinit();
-_ = try txn.put("user:42:name", "Jane", .{});
-try txn.incr("user:42:visits", 1);
+_ = try txn.put("{user:42}:name", "Jane", .{});
+try txn.incr("{user:42}:visits", 1);
 const result = try txn.commit();
 std.debug.print("committed {d} ops at index {d}\n", .{ result.op_count, result.commit_index });
 // On error, call `txn.rollback()` instead — idempotent.
 ```
 
-`scan`, `mget`, `jsonGet`, `jsonSet`, `jsonDel`, and `history` are not supported inside a transaction and return `FloError.TxnUnsupportedOp`. Server caps: 256 ops per transaction, 1 MiB total payload.
+`scan`, `mget`, `jsonGet`, `jsonSet`, `jsonDel`, and `history` are not supported inside a transaction and return `FloError.TxnUnsupportedOp`. Server caps: 64 ops and 256 KiB of keys and values per transaction, unless the operator [sets them higher or lower](/getting-started/configuration#kv) (at most 256 ops and 1 MiB).
 
 ## Queue Operations
 
@@ -158,17 +162,18 @@ const seq = try queue.enqueue("tasks", "payload", .{
     .priority = 5,
 });
 
-// Dequeue with long polling (consumes the messages)
+// Dequeue with long polling: the messages are leased until completed
 var result = try queue.dequeue("tasks", 10, .{
     .block_ms = 5000,
 });
 defer result.deinit();
 
-// Ack, Nack, DLQ
-try queue.ack("tasks", &seqs, .{});
-var dlq = try queue.dlqList("tasks", .{ .limit = 100 });
-defer dlq.deinit();
-try queue.dlqRequeue("tasks", &seqs, .{});
+// Complete them within the lease (queue.fail hands them back)
+var report = try queue.complete("tasks", result.lease, result.messages, .{});
+defer report.deinit();
+// Dead letters: up to 100, oldest first; pass .after = page.last_seq for the next page
+var page = try queue.dlqList("tasks", .{ .limit = 100 });
+defer page.deinit();
 ```
 
 ## Stream Operations
@@ -207,13 +212,28 @@ for (records.records) |rec| {
     // rec.headers = ?[]const u8 (raw wire bytes, null if no headers)
 }
 
-// Consumer groups
-try stream.groupJoin("events", "my-group", "worker-1", .{});
-var group_records = try stream.groupRead("events", "my-group", "worker-1", .{
+// Consumer groups: a read leases its records to the consumer
+var got = try stream.groupRead("events", "my-group", "worker-1", .{
     .count = 10, .block_ms = 5000,
 });
-defer group_records.deinit();
-try stream.groupAck("events", "my-group", seqs, .{});
+defer got.deinit();
+var acked = try stream.groupAck("events", "my-group", got.lease, done_records, .{ .consumer = "worker-1" });
+defer acked.deinit();
+
+// Nack a failure with why (at most 1024 bytes): ready again, or dead once
+// the group's attempts are spent
+var nacked = try stream.groupNack("events", "my-group", got.lease, failed_records, .{
+    .consumer = "worker-1", .error_message = "payment service timed out",
+});
+defer nacked.deinit();
+
+// Stopping before reaching some records? Abandon them: ready at once, no
+// failure counted. Abandon never dead-letters, so never use it for a record
+// that failed, or a poison record goes round for ever.
+var handed_back = try stream.groupNack("events", "my-group", got.lease, unstarted_records, .{
+    .consumer = "worker-1", .abandon = true,
+});
+defer handed_back.deinit();
 
 // Info and trim
 const info = try stream.info("events", .{});
@@ -283,7 +303,9 @@ fn handler(ctx: *flo.StreamContext) !void {
 }
 ```
 
-Records are **auto-acked** on handler success and **auto-nacked** on error. Connection errors trigger automatic reconnect and consumer group re-join.
+Records are **auto-acked** on handler success and **auto-nacked** on error. When the worker stops, records it read but hasn't started are abandoned: ready for another consumer at once, with no attempt spent. The worker can't interrupt a running handler; a long one checks `ctx.stopping()` and returns an error to cut itself short, and that record is abandoned too, not nacked. Connection errors trigger automatic reconnect.
+
+`abandon` can't be given with `dead`, `delay_ms` or `error_message` (`FloError.BadRequest`, before sending). A report to a group that doesn't exist is `FloError.NotFound`.
 
 ## ActionWorker
 
@@ -292,14 +314,14 @@ The `ActionWorker` is a high-level worker that manages connection, registration,
 ```zig
 const flo = @import("flo");
 
-fn processOrder(ctx: *flo.ActionContext) ![]const u8 {
+fn processOrder(ctx: *flo.ActionContext) anyerror!flo.ActionHandlerResult {
     const input = try ctx.json(OrderRequest);
     defer input.deinit();
 
-    // For long tasks, extend the lease
-    try ctx.touch(30000);
+    // For long tasks, keep the lease: touch at least every half lease
+    _ = try ctx.touch();
 
-    return ctx.toBytes(.{ .status = "completed" });
+    return .{ .bytes = try ctx.toBytes(.{ .status = "completed" }) };
 }
 
 pub fn main() !void {
@@ -314,7 +336,8 @@ pub fn main() !void {
     });
     defer worker.deinit();
 
-    try worker.registerAction("process-order", processOrder);
+    // The last argument is the action's options: .{} is a 30 s lease and 3 attempts.
+    try worker.registerAction("process-order", processOrder, .{});
     try worker.start();
 }
 ```
@@ -326,7 +349,7 @@ var actions = flo.Actions.init(&client);
 
 // Register an action type
 try actions.registerAction("send-email", .user, .{
-    .timeout_ms = 30000, .max_retries = 3,
+    .timeout_ms = 30000, .max_retries = 3, // max_retries counts attempts in all
 });
 
 // Invoke an action; .labels routes it to workers registered with those labels
@@ -361,3 +384,13 @@ After a refusal, `client.lastError()` gives its status `code`, `reason`, `ran` (
 - All results that allocate memory have a `.deinit()` method — always `defer result.deinit()`
 - The client requires an allocator at init time
 - String values returned from `get()` must be freed by the caller
+
+## Errors
+
+A refusal is a `FloError`; `client.lastError()` has the server's status, reason, `ran` and message.
+
+| Error | When |
+|-------|------|
+| `FloError.Overloaded` with reason `queue_full` | An enqueue found the queue, or the shard's queues and groups together, at their caps. The client retries it with backoff, since it drains as messages are completed, and returns it once its retries run out. |
+| `FloError.GroupHeldFull` | A group read took nothing new: the group's cap counts its leased, ready and dead records, and dead ones leave only when the group is deleted or a stream trim passes them. Never retried: reading again won't help. The stream worker logs it and backs off. |
+| `FloError.Limit` | Status `limit`: the node is at a limit built into the server. Only too many actions, counted per shard, is returned today; it is never retried, and no setting raises it. |

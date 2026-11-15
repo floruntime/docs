@@ -1,9 +1,9 @@
 ---
 title: KV
-lede: Strongly consistent, versioned key-value storage with CAS, TTL, blocking gets, and namespace isolation.
+lede: Versioned key-value storage with CAS, TTL, blocking gets and namespace isolation; writes are replicated before they're acknowledged.
 ---
 
-Flo's KV store provides strongly consistent key-value storage backed by the Unified Append Log. Every write is Raft-replicated across the cluster before being acknowledged. Reads go directly to the local projection — no Raft round-trip, no cross-node hops for single-key lookups.
+Flo's KV store is versioned key-value storage backed by the Unified Append Log. Every write is Raft-replicated across the cluster before being acknowledged. Reads go directly to the local projection, with no Raft round-trip, so what one reflects depends on the node that answers: a leader's read reflects what it has committed, a follower can lag, and a deposed leader can answer stale until it finds out. See [what a read reflects](/deployment/clustering#writes-and-reads).
 
 ## Core Concepts
 
@@ -53,7 +53,6 @@ flo kv set mykey "hello world"
 | `--condition <when>` | `always` (the default), `if_absent` (only if the key does **not** exist) or `if_present` (only if it **does**) |
 | `--cas-version <version>` | Only set if the key's version is exactly this |
 | `-n <namespace>` | Target namespace |
-| `-r <routing-key>` | Explicit shard routing key for co-location |
 | `-t <txn-id>` | Buffer the write in a transaction |
 
 A condition and a version may be given together; the write happens only if both hold.
@@ -73,7 +72,6 @@ flo kv get mykey -o json   # includes version number
 | `--wait-for <what>` | What to wait for: `exists` (the default) or `change` |
 | `-o <fmt>` | Output format: `json`, `table`, `raw` |
 | `-n <namespace>` | Target namespace |
-| `-r <routing-key>` | Explicit shard routing key |
 | `-t <txn-id>` | Read inside a transaction, seeing its buffered writes |
 
 The two kinds of wait serve different purposes:
@@ -91,20 +89,18 @@ flo kv get config:feature-flags --wait-ms 5m --wait-for change
 
 ### Multi-key get
 
-Fetch many keys in one request. Keys may live on different shards — the server looks each up on the shard that owns it and returns one entry per requested key, in order (with a `found` flag distinguishing missing keys from empty values).
+Fetch many keys in one request. Keys may live on different shards — the server reads each on the shard that owns it, gathers the answers, and returns one entry per requested key, in order (with a `found` flag distinguishing missing keys from empty values).
 
 ```bash
 flo kv mget user:1 user:2 user:3
 flo kv mget user:1 user:2 --output json
-flo kv mget user:42:name user:42:visits -r user:42   # keys written with -r user:42
 ```
 
-Keys written with a routing key live on its shard: read them with the same routing key, which applies to every key in the call. An mget reads each key as it stands when it gets there: it isn't one snapshot across shards.
+An mget reads each key as it stands when it gets there: it isn't one snapshot across shards.
 
 | Flag | Description |
 |------|-------------|
-| `-r, --routing-key <key>` | The routing key every key was written with: all are read from its shard |
-| `--output <fmt>` | `text` (default), `json`, `table` |
+| `-o, --output <fmt>` | `table` (default), `json`, `raw` |
 | `-n <namespace>` | Target namespace |
 
 Limited to **256 keys per call**. One answer holds about 256 KiB; when the values don't fit, the server answers what does and says where it stopped, and the CLI and SDKs ask again for the rest on their own.
@@ -114,8 +110,6 @@ Limited to **256 keys per call**. One answer holds about 256 KiB; when the value
     ```go
     entries, err := client.KV.MGet([]string{"user:1", "user:2", "user:3"}, nil)
     if err != nil { return err }
-    // Keys written with a routing key: read them with it.
-    routed, err := client.KV.MGet([]string{"user:42:name", "user:42:visits"}, &flo.KVMGetOptions{RoutingKey: "user:42"})
     for _, e := range entries {
         if e.Found {
             fmt.Printf("%s = %s (v%d)\n", e.Key, e.Value, e.Version)
@@ -128,8 +122,6 @@ Limited to **256 keys per call**. One answer holds about 256 KiB; when the value
   <Tab title="Python">
     ```python
     entries = await client.kv.mget(["user:1", "user:2", "user:3"])
-    # Keys written with a routing key: read them with it.
-    routed = await client.kv.mget(["user:42:name", "user:42:visits"], KVMGetOptions(routing_key="user:42"))
     for e in entries:
         if e.found:
             print(f"{e.key} = {e.value!r} (v{e.version})")
@@ -140,8 +132,6 @@ Limited to **256 keys per call**. One answer holds about 256 KiB; when the value
   <Tab title="JavaScript">
     ```ts
     const entries = await client.kv.mget(["user:1", "user:2", "user:3"]);
-    // Keys written with a routing key: read them with it.
-    const routed = await client.kv.mget(["user:42:name", "user:42:visits"], { routingKey: "user:42" });
     for (const e of entries) {
       if (e.found) {
         console.log(`${e.key} = ${new TextDecoder().decode(e.value)} (v${e.version})`);
@@ -155,9 +145,6 @@ Limited to **256 keys per call**. One answer holds about 256 KiB; when the value
     ```zig
     var result = try kv.mget(&.{ "user:1", "user:2", "user:3" }, .{});
     defer result.deinit();
-    // Keys written with a routing key: read them with it.
-    var routed = try kv.mget(&.{ "user:42:name", "user:42:visits" }, .{ .routing_key = "user:42" });
-    defer routed.deinit();
     for (result.entries) |e| {
         if (e.found) {
             std.debug.print("{s} = {s} (v{d})\n", .{ e.key, e.value, e.version });
@@ -180,7 +167,6 @@ Deleting a key that doesn't exist succeeds: it prints `existed: false`, and `exi
 | Flag | Description |
 |------|-------------|
 | `-n <namespace>` | Target namespace |
-| `-r <routing-key>` | Explicit shard routing key |
 
 ### Scan
 
@@ -215,7 +201,6 @@ Returns the key's versions, newest first, each with its version, the time it was
 |------|-------------|
 | `--limit <n>` / `-l` | Max entries, 1 to 65 (default: 10) |
 | `--before-version <v>` | Only versions older than `v` |
-| `-r <routing-key>` | Explicit shard routing key: give the one the key was written with |
 | `-n <namespace>` | Target namespace |
 
 Each key keeps at most **64 older versions and at most 64 KiB of them**, each charged its value's bytes plus 64; the oldest go first while either bound is exceeded, and the newest older version is always kept, however large. So a key with small values keeps 64 versions, one with 4 KiB values about 15, and one large write can evict a key's whole small history. An oldest kept version above 1 means older ones were evicted.
@@ -266,15 +251,21 @@ flo kv set counter "42" --cas-version 7
 
 If another writer updated the key between your read and write, the CAS fails with `[conflict/cas_mismatch]` (exit 3) and the original value is preserved.
 
-**CAS works across the cluster.** You can read the version on one node and CAS-update through another: every write goes to the leader, which checks the version against what it has applied when the write arrives. In a cluster, two writes carrying the same version that arrive before either has committed can both pass, so CAS guards against a stale read; it is not yet a lock between concurrent writers.
+**CAS works across the cluster.** You can read the version on one node and CAS-update through another. The version travels in the write's log entry and is checked as the entry applies, in log order, the same on every node: of two writes carrying one version, the first in the log wins and the other is refused. A stale read costs you a refused write, never an overwrite.
 
 ## Atomicity model
 
-Flo's KV store is built around **per-key linearizable writes** rather than multi-key transactions. Every mutation goes through Raft as a single committed entry, so each individual operation is atomic and durable on its own — the same model used by etcd, Consul, and FoundationDB single-key paths.
+Flo's KV store is built around **single-key writes in one log order** rather than multi-key transactions. Every mutation goes through Raft as a single committed entry, so each operation applies whole, and every node applies a key's writes in the same order. How durable an acknowledged write is depends on [the durability mode](/deployment/clustering#durability-and-the-diverged-state).
 
 ### Conditional & atomic writes
 
 Use the conditional flags on `kv set`/`KV.Put` to express "do this only if X". Each is a single Raft entry — no coordinator, no roundtrips, no rollback to worry about.
+
+A condition is decided when its entry applies, not when the write arrives, so racing writers can't both pass, and a new leader's answer counts everything committed before it. That has three effects:
+
+- **A failed condition still costs a replicated commit.** The write goes through the log like one that passes, then changes nothing: no version, no history. So does a delete or an `expire` of a key that isn't there, and an `incr` that's refused.
+- **A key whose TTL has run out by the entry's timestamp is absent**: `if_absent` writes over it, and `if_present` is refused.
+- **In a [transaction](#transactions), a conflict appears at commit, not at the op**, and a condition sees that transaction's own earlier writes.
 
 | Pattern | How |
 |---------|-----|
@@ -328,17 +319,17 @@ A version mismatch is refused with `[conflict/cas_mismatch]`, as `set` with `--c
 
 ### Multi-key atomicity
 
-For multi-key writes that must commit or fail as a unit, Flo offers [**per-shard transactions**](#transactions). Operations are buffered on a single pinned partition and replicated as one Raft entry on commit. Pick the right tool:
+For multi-key writes that must commit or fail as a unit, Flo offers [**per-shard transactions**](#transactions). Operations are buffered on one shard and replicated as one Raft entry on commit. Pick the right tool:
 
 | Need | Recommended approach |
 |------|---------------------|
-| "Several keys, all-or-nothing" | Open a [transaction](#transactions) pinned to a routing key — all writes commit atomically as one Raft entry. |
-| "All these keys live together" | Set the same `--routing-key` on every related key (see [Shard Co-location](#shard-co-location)). Reads and writes stay on one shard. |
+| "Several keys, all-or-nothing" | Give the keys the same `{tag}` and open a [transaction](#transactions) — all writes commit atomically as one Raft entry. |
+| "All these keys live together" | Give every related key the same `{tag}`, as in `{user:123}:name` (see [Shard Co-location](#shard-co-location)). Reads and writes stay on one shard. |
 | "Update several fields of one document" | Model the state as a **single key with a JSON value** and use [`kv json set`](#json-paths) or CAS on the whole document. One Raft entry, no coordination. |
 | "Atomic counter" | Use [`kv incr`](#counters) — unconditional and conflict-free. |
 | "Long-running multi-step state machine" | Use a [workflow](/orchestration/workflows). Workflows give you durable execution, retries, and compensation steps. |
 | "Idempotent producer / exactly-once write" | Use `--condition if_absent` on a dedupe key (e.g. `dedupe:<request-id>`) before doing the work. |
-| "Cross-partition transaction" | Not supported. Either restructure keys to share a routing key, or use a workflow with compensating actions. |
+| "Cross-shard transaction" | Not supported. Either restructure keys to share a `{tag}`, or use a workflow with compensating actions. |
 
 ## Counters
 
@@ -373,7 +364,7 @@ TTLs are set at write time via `--ttl-ms` / `PutOptions.TTLMs`, but you can also
 | `kv expire <key> --ttl-ms <duration>` | Set the TTL on an existing key, from now, without rewriting the value |
 | `kv expire <key> --ttl-ms 0` | Clear the TTL: make the key permanent |
 
-`expire` takes `--cas-version`, `-r` and `--txn` like `delete`; a missing key is not found (exit 1).
+`expire` takes `--cas-version` and `--txn` like `delete`; a missing key is not found (exit 1).
 
 Each is a single Raft entry. Use it to extend session leases, refresh distributed locks, or promote a temporary value to permanent without losing it.
 
@@ -411,26 +402,26 @@ The `json set` is a single Raft entry; concurrent writers updating different fie
 
 ## Transactions
 
-Per-shard transactions buffer multiple writes on a single pinned partition and commit them atomically as **one Raft entry**. Open with a routing key, and give that routing key with every op inside the transaction (`-r`); an op with another is refused with `wrong_routing_key`. The transaction id names its shard, so `commit` and `rollback` take nothing else.
+Per-shard transactions buffer multiple writes on one shard and commit them atomically as **one Raft entry**. A transaction is pinned to the `{tag}` of the key it begins with, or the whole key if it has none, and every key in it must route the same way: give them all the same `{tag}`, as in `{user:42}:name`. A key that routes elsewhere is refused with `[bad_request/keys_not_colocated]`, and nothing of it runs. The transaction id names its slot, so `commit` and `rollback` take nothing else.
 
 | Op | Wire | Purpose |
 |----|------|---------|
-| `kv txn begin <routing-key>` | `0x110` | Open a new transaction. Returns its id (`txn`) and the partition's routing hash (`pinned`). |
+| `kv txn begin <key>` | `0x110` | Open a new transaction pinned to the key's `{tag}`. Returns its id (`txn`) and the routing hash it is pinned to (`pinned`). |
 | `kv txn commit <txn-id>` | `0x111` | Apply all buffered ops atomically. Returns the op count and the `commit_index`. |
 | `kv txn rollback <txn-id>` | `0x112` | Discard buffered ops. A transaction that isn't open (already committed, rolled back or dropped as idle) is refused with `no_such_transaction`. |
 
-Inside a transaction, `set`, `get`, `delete`, `incr`, `expire` and `exists` accept a `--txn <id>` flag; writes are buffered until commit. **Reads inside the transaction see the buffered writes.** `scan`, `mget`, `history` and the JSON ops take no transaction.
+Inside a transaction, `set`, `get`, `delete`, `incr`, `expire` and `exists` accept a `--txn <id>` flag; writes are buffered until commit. **Reads inside the transaction see the buffered writes**, a conditional one too: it reads as written until the commit decides it. `scan`, `mget`, `history` and the JSON ops take no transaction.
 
-**Server caps**: 256 ops per transaction, 1 MiB total payload, 1024 open transactions per shard (past that, `txn begin` is refused with `too_many_transactions`).
+**Server caps**: 64 ops and 256 KiB of keys and values per transaction, unless the operator [sets them higher or lower](/getting-started/configuration#kv) (at most 256 ops and 1 MiB), 1024 open transactions per shard (past that, `txn begin` is refused with `too_many_transactions`).
 
-**A commit applies whole or not at all.** If one of its ops can't apply when the commit does (an `incr` on a value that isn't a counter, or one that would overflow; an `expire` of a key that's gone or past its TTL by then), the whole commit is refused with that op's reason and position, as in `the transaction's op 2: not found; nothing in the transaction applied`, and none of its writes apply. The status is that op's: `bad_request` (exit 3) for an `incr`, `not_found` (exit 1) for an `expire`.
+**A commit applies whole or not at all.** If one of its ops can't apply when the commit does (a condition or `--cas-version` that doesn't hold; an `incr` on a value that isn't a counter, or one that would overflow; an `expire` of a key that's gone or past its TTL by then), the whole commit is refused with that op's reason and position, as in `the transaction's op 2: not found; nothing in the transaction applied`, and none of its writes apply. The status is that op's: `conflict` (exit 3) for a condition or `--cas-version`, `bad_request` (exit 3) for an `incr`, `not_found` (exit 1) for an `expire`.
 
 ```bash
 # Open (prints txn: <id> and pinned: <hash>), write, commit
-TXN=$(flo kv txn begin user:42 | sed -n 's/^txn: //p')
-flo kv set user:42:name "Jane"   -r user:42 --txn $TXN
-flo kv incr user:42:visits       -r user:42 --txn $TXN
-flo kv set user:42:last_seen "$(date -u +%s)" -r user:42 --txn $TXN
+TXN=$(flo kv txn begin '{user:42}:name' | sed -n 's/^txn: //p')
+flo kv set '{user:42}:name' "Jane"   --txn $TXN
+flo kv incr '{user:42}:visits'       --txn $TXN
+flo kv set '{user:42}:last_seen' "$(date -u +%s)" --txn $TXN
 flo kv txn commit $TXN           # → commit_index: N, ops: 3
 ```
 
@@ -440,22 +431,22 @@ Transactions survive across stateless connections — they are owned by their id
 
 | Pattern | Use |
 |---------|-----|
-| Atomic update of 2–10 related keys on the same partition | **Transaction** |
+| Atomic update of 2–10 related keys sharing a `{tag}` | **Transaction** |
 | Atomic update of fields inside one document | [`kv json set`](#json-paths) |
 | Atomic counter increment | [`kv incr`](#counters) |
 | Multi-step business process across shards / external systems | [Workflow](/orchestration/workflows) |
 
 ## Shard Co-location
 
-By default, each key is routed to a shard based on its hash. When you need related keys to land on the same shard (for locality or future atomic operations), use `--routing-key`:
+Each key routes to a shard by its hash. To keep related keys on one shard, for a transaction or for locality, put the same `{tag}` in each key: the text between the first `{` and the next `}` is what routes.
 
 ```bash
-flo kv set user:123:name "Alice" -r "user:123"
-flo kv set user:123:email "alice@co.io" -r "user:123"
-flo kv set user:123:prefs '{"theme":"dark"}' -r "user:123"
+flo kv set '{user:123}:name' "Alice"
+flo kv set '{user:123}:email' "alice@co.io"
+flo kv set '{user:123}:prefs' '{"theme":"dark"}'
 ```
 
-All three keys route to the same shard because they share the routing key `user:123`.
+All three keys route to the same shard because they share the tag `user:123`. The tag is part of the key: read and write it whole. `{}` is a tag too, an empty one, so every key holding `{}` routes together; a key with no `}` after its first `{` routes by the whole key, as one with no braces does.
 
 ## Cluster Behavior
 
@@ -465,7 +456,7 @@ In a multi-node cluster:
 - **Reads** are served from the local shard's projection — no Raft round-trip needed.
 - **Data replicates** to all nodes. A key written on node 1 is readable from node 2 and node 3 after replication.
 - **Node failures** are tolerated as long as a majority (quorum) of nodes remain healthy. A 3-node cluster survives 1 node failure.
-- **CAS and conditional writes** are consistent across the cluster — the version check happens at the leader during Raft proposal.
+- **CAS and conditional writes** are decided as their entries apply, in log order, so every node decides them alike.
 
 ### Reads from a halted shard
 
@@ -831,7 +822,7 @@ The KV store is implemented as a **KV Projection** — a hash table with MVCC ve
 
 | Property | Value |
 |----------|-------|
-| Max key size | ~3.9 KB |
+| Max key size | 4096 bytes, in any namespace |
 | Key bytes | Any except NUL (`0x00`), which is refused |
 | Max value size | ~256 KB |
 | Max namespace length | 63 bytes |
@@ -843,8 +834,8 @@ The KV store is implemented as a **KV Projection** — a hash table with MVCC ve
 
 **Read path**: `kv_get` → KV projection lookup → response. No Raft involvement.
 
-**Recovery**: On server restart, the projection is rebuilt by replaying UAL entries from the last snapshot. Read-after-write consistency is immediate after recovery — there is no warm-up period.
+**Recovery**: On server restart, the projection is rebuilt by replaying the log. A node serves reads once that's done; a cluster member with `async_flush`, or a new leader, [refuses them for a retry](/deployment/clustering#writes-and-reads) until it has caught up.
 
 **TTL enforcement**: Lazy — expired keys are detected at read time rather than proactively swept. This avoids background I/O for expiry.
 
-**Tombstones**: Deletes write a tombstone entry to the UAL. Prior versions remain in the version history and are queryable via `history`. A tombstone and its history stay in memory until the key is removed; nothing purges them sooner.
+**Tombstones**: A delete of a live key writes a tombstone entry to the UAL. A delete of a key that isn't live goes through the log and changes nothing. Prior versions remain in the version history and are queryable via `history`. A tombstone and its history stay in memory until the key is removed; nothing purges them sooner.

@@ -9,7 +9,7 @@ Most databases maintain two copies of every write: a write-ahead log (WAL) for d
 
 The Unified Append Log captures every mutation — KV puts, queue enqueues, stream appends, time-series writes — as a sequenced, typed entry. The Raft consensus log and the storage log are the same thing. There is no separate WAL.
 
-Everything else — the KV hash table, the queue's priority heap, the time-series columnar buffers — is a **projection**: a derived view rebuilt deterministically from the log. If you deleted every projection and replayed the log from the beginning, you'd get back to exactly the same state.
+Everything else — the KV and queue families, the time-series columnar buffers — is derived state, rebuilt deterministically from the log. If you deleted it all and replayed the log from the beginning, you'd get back to exactly the same state.
 
 ## Unified Append Log (UAL)
 
@@ -36,6 +36,8 @@ The CRC covers the header and payload together. Payload layout varies by entry t
 | **Warm** | Sealed disk segments (`.flseg` files), memory-mapped | Historical data, bounded by local disk space. |
 
 When entries age out of the hot ring, they're flushed to warm segments. A warm store hash map keeps payload copies in memory (default 32 MB) for the stream read path, which fetches record payloads by index, so those reads don't have to go to disk immediately. KV entries are never copied there: the KV projection holds the value, and nothing reads a KV payload from the log.
+
+The warm store holds the newest payloads, so on the default 64 MB ring it mostly duplicates the ring; it serves an entry that wraps the ring's end, or history when the ring is smaller than the store. A stream record past the ring is read back from the durable log: its sealed segment, or the segment writer's buffer if it hasn't been flushed yet. The segment read runs on the node's bulk I/O thread, never on a shard's thread. Each entry is checked against the log's terms before it's used, nothing not yet committed is kept, and recent results are kept in a small per-shard cache (8 MB). A segment that turns out corrupt is damage to the shard. See [Tiered Storage](/primitives/streams#tiered-storage) for what a client sees.
 
 ### Segment Format
 
@@ -69,15 +71,9 @@ Projections are specialized data structures that consume UAL entries and maintai
 - Reads are O(1) hash table lookups — no Raft round-trip needed
 - Historical lookups walk the version chain
 
-### Queue Projection
+### Queues
 
-The old system stored each message as 8 separate KV entries (~1.5 KB overhead per message). The new design uses native structures:
-
-- **Ready heap** — min-heap ordered by priority, 16 bytes per node
-- **Lease tracker** — maps sequences to lease expiry timestamps. Unused today: a dequeue acks each message as it hands it out, so queues are at-most-once
-- **DLQ state** — tracks retry counts, moves failures to dead-letter queue
-
-Per-message overhead: **~64 bytes** (23× reduction from the old design).
+Queues are a state machine on the log, not a projection: every enqueue, dequeue, complete, fail, touch and lease expiry is an entry every replica applies alike. Each shard keeps a queue's messages, its ready keys ordered by (priority, due time, seq), every lease's deadline, and its dead letters (oldest first, kept until the queue is purged). A dequeue logs a deliver that leases the first due ready messages; the leader's expire duty ends leases past their deadline. A ready message costs its payload plus about 340 bytes of memory.
 
 ### Stream Projection
 
@@ -104,7 +100,7 @@ The projection router owns the three in-memory projections:
 | Entry Types | Destination |
 |-------------|-------------|
 | `kv_put`, `kv_delete`, `kv_incr`, `kv_expire`, `kv_batch` | KV Projection |
-| `queue_enqueue`, `queue_ack`, `queue_nack`, `queue_lease`, `queue_purge` | Queue Projection |
+| `queue_enqueue`, `queue_deliver`, `queue_settle`, `queue_release`, `queue_extend`, `queue_expire`, `queue_purge` | The queue machine |
 | `ts_write`, `ts_write_batch` | TS Projection |
 
 Every other type — stream appends, trims and deletes, consumer-group commits, namespaces, actions, workflows, processing jobs — has one registered applier in its subsystem, and an entry type may have one or the other, never both; the server refuses to start otherwise. Raft's own control entries (`raft_noop`, `raft_config`, `raft_snapshot`) belong to the consensus layer and have no applier. Blocking reads wake on the apply, not on the request that caused it.
@@ -135,7 +131,7 @@ A segment that won't read, or a hole in the log, is damage: the shard stops repl
 ```
 {data_dir}/
 ├── FORMAT                              # Data directory format (a number)
-├── SYSTEM                              # Topology lock (shards, partitions, version)
+├── SYSTEM                              # Topology lock (shard count, version)
 ├── 00000/                              # Shard 0 (zero-padded 5 digits)
 │   ├── HARDSTATE                       # Raft node id, current term, vote (28 bytes)
 │   ├── segs/
@@ -150,11 +146,11 @@ A segment that won't read, or a hole in the log, is damage: the shard stops repl
 
 ### FORMAT
 
-One number and a newline: the layout the directory is written in, `4` today. It is checked before anything else in the directory is read, and a binary reads only its own format. There is no migration.
+One number and a newline: the layout the directory is written in, `25` today. It is checked before anything else in the directory is read, and a binary reads only its own format. There is no migration.
 
 - **An empty directory** gets `FORMAT` first. Empty allows `lost+found`, dotfiles, and the lock, PID file and admin socket a server leaves.
-- **A newer format** is refused: `data directory format 5, this binary reads format 4 (/var/lib/flo/FORMAT); start a flo that reads format 5`.
-- **An older format** is refused: `data directory /var/lib/flo was written by an older Flo (format 3); this server needs format 4. There is no migration: run flo server wipe --data-dir /var/lib/flo`. **A Flo directory without `FORMAT`** (one with `SYSTEM` or a shard directory) is refused the same way, saying `(before format gating)`. Empty it with [`flo server wipe`](/reference/cli#flo-server-wipe), or start the older release.
+- **A newer format** is refused: `data directory format 26, this binary reads format 25 (/var/lib/flo/FORMAT); start a flo that reads format 26`.
+- **An older format** is refused: `data directory /var/lib/flo was written by an older Flo (format 24); this server needs format 25. There is no migration: run flo server wipe --data-dir /var/lib/flo`. **A Flo directory without `FORMAT`** (one with `SYSTEM` or a shard directory) is refused the same way, saying `(before format gating)`. Empty it with [`flo server wipe`](/reference/cli#flo-server-wipe), or start the older release.
 - **A non-empty directory with no Flo data** is refused, without suggesting a wipe, since it may be something else's: `/var/lib is not a Flo data directory and isn't empty (it holds postgresql); check data_dir`.
 - **A `FORMAT` that isn't a format number**, or isn't a file, is refused, naming what it holds.
 
@@ -162,13 +158,12 @@ The server, `flo server inspect`, `force-members`, `repair skip` and `salvage` r
 
 ### SYSTEM
 
-Written once on first boot. If `shards` or `partitions` don't match on restart, the node refuses to start with `TopologyMismatch`. Format:
+Written once on first boot. A start asking for another shard count is refused, naming both counts (`topology mismatch: the data was written for a shard count of 8, and this start asks for 4`). There is no partition count to record: keys route over a fixed 4096 slots on every node. Format:
 
 ```json
 {
   "shards": 8,
-  "partitions": 256,
-  "created_at": 1772033477,
+  "created_at": 1772033477938,
   "version": "1.0.0"
 }
 ```
