@@ -256,7 +256,7 @@ import { ActionType } from "@floruntime/node";
 
 // Register and invoke
 await client.action.register("process-image", ActionType.User, {
-  timeoutMs: 60000, maxRetries: 3,
+  timeoutMs: 60000, maxRetries: 3, // the lease, and attempts in all
 });
 const result = await client.action.invoke("process-image", payload);
 ```

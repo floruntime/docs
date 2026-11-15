@@ -250,7 +250,7 @@ from flo import ActionType, ActionRegisterOptions
 
 # Register and invoke actions
 await client.action.register("process-image", ActionType.USER,
-    ActionRegisterOptions(timeout_ms=60000, max_retries=3))
+    ActionRegisterOptions(timeout_ms=60000, max_attempts=3))
 
 result = await client.action.invoke("process-image", payload)
 

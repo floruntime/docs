@@ -343,11 +343,16 @@ Records are **auto-acked** on handler success and **auto-nacked** on error. Conn
 w, _ := client.NewActionWorker(flo.ActionWorkerOptions{Concurrency: 10})
 defer w.Close()
 
-w.MustRegisterAction("process-order", func(actx *flo.ActionContext) ([]byte, error) {
+// The last argument is the action's options (*flo.ActionRegisterOptions); nil
+// takes the server's defaults.
+w.MustRegisterAction("process-order", func(actx *flo.ActionContext) (interface{}, error) {
     var input map[string]interface{}
-    actx.Into(&input)
-    return actx.Bytes(map[string]string{"status": "done"})
-})
+    if err := actx.Into(&input); err != nil {
+        return nil, err
+    }
+    actx.Touch() // keeps the lease in a long handler
+    return map[string]string{"status": "done"}, nil
+}, nil)
 
 w.Start(ctx)
 ```
