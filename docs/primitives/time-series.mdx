@@ -12,7 +12,7 @@ Each data point consists of four components:
 - **Measurement** — The metric name (e.g., `cpu`, `memory`, `http_requests`)
 - **Tags** — Indexed key-value pairs for filtering (e.g., `host=web-01,region=us-east`)
 - **Fields** — The actual metric values. A single value uses the default field name `value`; multi-field writes name each field explicitly (e.g., `user=72.5,system=7.4`)
-- **Timestamp** — Millisecond precision. When omitted, a single `--value` write takes the server's time; `--fields` and batch lines without one take the CLI's time, once for all their fields.
+- **Timestamp** — Kept in nanoseconds. `--timestamp` takes milliseconds, and a batch takes the unit `--precision` names, kept exactly. When omitted, a single `--value` write takes the server's time; `--fields` and batch lines without one take the CLI's time, once for all their fields.
 
 A **series** is the unique combination of measurement + tag set + field name. A series keeps every point written to it until a delete or a retention trim removes it.
 
@@ -63,14 +63,16 @@ flo ts write --batch --file /path/to/data.txt --precision ms
 cat data.txt | flo ts write --batch --precision ns
 ```
 
-The `--precision` flag specifies the timestamp unit in the payload:
+The `--precision` flag specifies the timestamp unit in the payload. Every unit is kept exactly, to the nanosecond:
 
-| Precision | Description | Conversion |
-|-----------|-------------|------------|
-| `ns` | Nanoseconds (InfluxDB default) | ÷ 1,000,000 |
-| `us` | Microseconds | ÷ 1,000 |
-| `ms` | Milliseconds (Flo default) | identity |
-| `s` | Seconds | × 1,000 |
+| Precision | Description |
+|-----------|-------------|
+| `ns` | Nanoseconds (InfluxDB default) |
+| `us` | Microseconds |
+| `ms` | Milliseconds (Flo default) |
+| `s` | Seconds |
+
+A timestamp must be after 1970 and no later than 2262-04-11T23:47:16Z, the latest a signed 64-bit count of nanoseconds holds; one outside that is refused.
 
 Field types: float values are stored natively, integers (suffix `i`) are converted to `f64`, booleans become `0.0`/`1.0`. String fields are not supported.
 
@@ -98,8 +100,11 @@ flo ts read cpu --tags host=web-01 --from 1708700000000 --to 1708700500000
 # Read a specific field
 flo ts read cpu --tags host=web-01 --field system --from -1h
 
-# Limit results
-flo ts read cpu --tags host=web-01 --from -1h --limit 100
+# The newest 100 points, newest first
+flo ts read cpu --tags host=web-01 --newest --limit 100
+
+# Every point in a day, page after page
+flo ts read cpu --tags host=web-01 --from -24h --all -o raw
 
 # Output as JSON
 flo ts read cpu --tags host=web-01 --from -1h -o json
@@ -107,13 +112,17 @@ flo ts read cpu --tags host=web-01 --from -1h -o json
 
 The `--from` and `--to` flags accept relative durations (`-1h`, `-30m`, `-7d`) or absolute epoch-millisecond timestamps.
 
-A read returns the earliest matching points in its range, at most 4,096 of them. `--limit` defaults to 4,096, so a read of a busy series returns its earliest 4,096 points from `--from` on: pass a later `--from` for recent ones. A limit above 4,096 (or `--limit 0`, for every point) is refused when more than 4,096 points match, rather than cut short:
+A read returns a page of the matching points: oldest first from `--from` (an hour ago by default), or newest first with `--newest`, which reaches back as far as it pages unless you give a `--from`. A page holds up to `--limit` points, 4,096 at most and by default. When more follow, the read says where to go on:
 
 ```text
-Error: bad request: more than 4096 points match; pass --limit (at most 4096) or narrow the range [bad_request]
+Note: more points follow: --cursor 0017a3c94f2e80000000000000012c00
 ```
 
-To summarise more points than that, use `flo ts query`, which aggregates every point in its range, up to 1,048,576 points per query. Past that, narrow the range or the tags.
+Pass that cursor to read the next page, or `--all` to follow the pages to the last (with `-o raw` or `-o json`, which print each page as it comes). Pages go on from the last point read, so a point that was there for the whole read is read once: none repeated, none skipped, even among points that share a time. With `-o json`, the read prints `{"points": [...], "cursor": ...}`, each point with its `time_ns` (its exact time, in nanoseconds) beside `timestamp_ms`, and `cursor` the next page's, or `null` on the last. Times are kept to the nanosecond: a point stamped by the server when it took the write, rather than given a timestamp, keeps its nanoseconds, and a read answers them.
+
+A read of a series that doesn't exist, where the measurement has no series of the field with the given tags, is `not found` (exit 1). A series that exists, with no points in the range or past the cursor, answers no points and succeeds. A series goes with its last point: once retention ages out every point of a series, or a delete removes it, the series no longer exists and a read of it is `not found` (unlike a stream, which stays when it is trimmed empty).
+
+To summarise more points than a page holds, use `flo ts query`, which aggregates every point in its range, up to 1,048,576 points per query. Past that, narrow the range or the tags.
 
 ### Filtering by Tag
 
@@ -171,7 +180,7 @@ flo ts query temperature --tags sensor=A1 --from -24h --window 1h --agg max
 
 Windows are aligned to the epoch (`timestamp / window * window`), so a bucket's
 start does not shift with `--from` and the same point always lands in the same
-bucket across queries. Each row of the result is one window.
+bucket across queries. Each row of the result is one window. With `-o json`, each bucket has `start_ms` and `start_ns`.
 
 ### Output Formats
 
@@ -229,7 +238,11 @@ Multiple filters are comma-separated: `{host=web-01,region=us-east}`
 |--------|---------|-------------|
 | Duration | `[1h]` | Last N units from now |
 | Duration units | `[30s]`, `[5m]`, `[1h]`, `[7d]` | Seconds, minutes, hours, days |
+| Relative range | `[2h..1h]` | From two hours ago to one hour ago |
 | Absolute | `[1708700000000..1708800000000]` | Epoch millisecond range |
+| From a time | `[1708700000000]` | From that epoch millisecond on, with no end |
+
+A bare number in a range is always epoch milliseconds, as `--from` and `--to` take. One past the year 3000 as milliseconds is refused, since it's most likely a nanosecond or microsecond time pasted in. A range whose start is after its end is refused rather than read as empty. FloQL answers each point's time in nanoseconds; the CLI prints it in milliseconds.
 
 ### Pipeline Stages
 
@@ -266,7 +279,7 @@ A typical query chains `window()` → aggregation → optional post-processing:
 cpu{host=web-01}[1h] | window(5m) | avg() | where(value > 80) | round(2)
 ```
 
-A FloQL query reads at most 131,072 points to run its stages over, and answers at most 4,096 raw points. Past either, it's refused: narrow the range or the tags, or aggregate.
+A FloQL query reads at most 131,072 points to run its stages over, and answers at most 4,096 raw points. Past either, it's refused: narrow the range or the tags, aggregate, or page through the raw points with `flo ts read`.
 
 ## Managing Data
 

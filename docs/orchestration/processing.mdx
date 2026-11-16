@@ -157,6 +157,7 @@ sources:
       tags:                     # optional: the series' full tag set
         host: web-01
       poll_interval_ms: 1000    # polling interval (default: 1000)
+      lateness_ms: 30000        # how late a point may arrive and still be read (default: 30000)
 ```
 
 Each emitted record looks like:
@@ -167,9 +168,15 @@ Each emitted record looks like:
 
 `tags` names one series exactly: all of its tags, not a subset.
 
-:::note
-A time-series source reads points in time order. A point written with a timestamp behind what the source has already read (a late write, or one from a writer whose clock lags) is not read by it. If you need such points, write each measurement in time order, or read them with `flo ts read` or `flo ts query` rather than a processing source.
-:::
+#### Late points
+
+A time-series source reads points in time order, and it reads only up to `lateness_ms` behind the newest point its field has, across all of the field's series. A point that arrives up to that late, from a host whose clock lags or that sends in batches, is still ahead of the source and gets read. Once the field has had no write at all, late or not, for `lateness_ms`, the source reads everything up to the newest point.
+
+The window adds latency: a record reaches the source's sinks up to `lateness_ms` after its point was written, while the field keeps being written. Size it to how late your writers' points arrive, which is your send interval plus the clock skew between hosts. For example, a collector that sends every 10 s from hosts within 1 s of each other needs about 11 s. `lateness_ms: 0` reads up to the newest point at once, and misses any point that arrives behind it.
+
+A point that arrives more than the window behind is not read by a source that has passed it. Every point that arrives behind its field's newest is counted at each of these edges it trails by: `0s`, `1s`, `5s`, `15s`, `30s`, `1m`, `5m` and `1h`. The counter `flo_ts_late_points_total{behind="30s"}` counts them per shard, since the server started. A source with a window between two edges is covered by the next edge up, so a window on an edge, like the default 30 s, reads its count exactly. The count covers every field and every writer on the shard, not only what one source skipped. `flo processing status` shows a running job's count against its window's edge: `Late points: at least 3, more than 30s behind their field's newest`. That counts the points of the job's source fields that arrived more than the edge behind their field's newest point. Not every one of them was missed: a source still behind reads a late point that is ahead of its cursor. The count is kept with the field, so it covers every series of the field, including ones a tag filter leaves out, and points that arrived before the job started. A field read by several of the job's sources counts once. A job with several TS sources reports against the largest edge among them. A window past `1h` has no edge, so no count is shown.
+
+To read every point regardless of when it arrives, use `flo ts read` or `flo ts query` rather than a processing source.
 
 ### Multi-Source Merge
 
@@ -673,7 +680,7 @@ On submission, the job enters the `RUNNING` state and begins polling its sources
 flo processing status job-1 -n analytics
 ```
 
-Prints the job's id, name, status, batch size, the records it has processed since the server started, and when it was created. Status is answered by the shard's leader, which runs the job's pipelines, so a running job's status also says what it is waiting for and the last record it skipped:
+Prints the job's id, name, status, batch size, the records it has processed since the server started, and when it was created. Status is answered by the shard's leader, which runs the job's pipelines. So a running job's status also says what it is waiting for and the last record it skipped, what the pipelines have read and written since they started there, and, for a job with a TS source, its late points ([Late points](#late-points)):
 
 ```
 Job:        job-<id>
@@ -682,6 +689,13 @@ Status:     RUNNING
 Batch size: 200
 Processed:  15420 records
 Created:    1700000000000ms
+On this node: 15420 in, 15420 out over 61200ms; ticks avg 340us
+```
+
+A job with a TS source adds its late points:
+
+```
+Late points: at least 3, more than 30s behind their field's newest
 ```
 
 ### Listing Jobs
