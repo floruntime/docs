@@ -102,7 +102,7 @@ flo ts read cpu --tags host=web-01 --field system --from -1h
 flo ts read cpu --tags host=web-01 --newest --limit 100
 
 # Every point in a day, page after page
-flo ts read cpu --tags host=web-01 --from -24h --all
+flo ts read cpu --tags host=web-01 --from -24h --all -o raw
 
 # Output as JSON
 flo ts read cpu --tags host=web-01 --from -1h -o json
@@ -116,7 +116,7 @@ A read returns a page of the matching points: oldest first from `--from` (an hou
 Note: more points follow: --cursor 0017a3c94f2e80000000000000012c00
 ```
 
-Pass that cursor to read the next page, or `--all` to follow the pages to the last. Pages go on from the last point read, so a point that was there for the whole read is read once: none repeated, none skipped, even among points that share a time. With `-o json`, the read prints `{"points": [...], "cursor": ...}`, each point with its `time_ns` (its exact time, in nanoseconds) beside `timestamp_ms`, and `cursor` the next page's, or `null` on the last. Times are kept to the nanosecond: a point stamped by the server when it took the write, rather than given a timestamp, keeps its nanoseconds, and a read answers them.
+Pass that cursor to read the next page, or `--all` to follow the pages to the last (with `-o raw` or `-o json`, which print each page as it comes). Pages go on from the last point read, so a point that was there for the whole read is read once: none repeated, none skipped, even among points that share a time. With `-o json`, the read prints `{"points": [...], "cursor": ...}`, each point with its `time_ns` (its exact time, in nanoseconds) beside `timestamp_ms`, and `cursor` the next page's, or `null` on the last. Times are kept to the nanosecond: a point stamped by the server when it took the write, rather than given a timestamp, keeps its nanoseconds, and a read answers them.
 
 To summarise more points than a page holds, use `flo ts query`, which aggregates every point in its range, up to 1,048,576 points per query. Past that, narrow the range or the tags.
 
