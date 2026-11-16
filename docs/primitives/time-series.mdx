@@ -12,7 +12,7 @@ Each data point consists of four components:
 - **Measurement** — The metric name (e.g., `cpu`, `memory`, `http_requests`)
 - **Tags** — Indexed key-value pairs for filtering (e.g., `host=web-01,region=us-east`)
 - **Fields** — The actual metric values. A single value uses the default field name `value`; multi-field writes name each field explicitly (e.g., `user=72.5,system=7.4`)
-- **Timestamp** — Millisecond precision. When omitted, a single `--value` write takes the server's time; `--fields` and batch lines without one take the CLI's time, once for all their fields.
+- **Timestamp** — Kept in nanoseconds. `--timestamp` takes milliseconds, and a batch takes the unit `--precision` names, kept exactly. When omitted, a single `--value` write takes the server's time; `--fields` and batch lines without one take the CLI's time, once for all their fields.
 
 A **series** is the unique combination of measurement + tag set + field name. A series keeps every point written to it until a delete or a retention trim removes it.
 
@@ -63,14 +63,16 @@ flo ts write --batch --file /path/to/data.txt --precision ms
 cat data.txt | flo ts write --batch --precision ns
 ```
 
-The `--precision` flag specifies the timestamp unit in the payload:
+The `--precision` flag specifies the timestamp unit in the payload. Every unit is kept exactly, to the nanosecond:
 
-| Precision | Description | Conversion |
-|-----------|-------------|------------|
-| `ns` | Nanoseconds (InfluxDB default) | ÷ 1,000,000 |
-| `us` | Microseconds | ÷ 1,000 |
-| `ms` | Milliseconds (Flo default) | identity |
-| `s` | Seconds | × 1,000 |
+| Precision | Description |
+|-----------|-------------|
+| `ns` | Nanoseconds (InfluxDB default) |
+| `us` | Microseconds |
+| `ms` | Milliseconds (Flo default) |
+| `s` | Seconds |
+
+A timestamp later than about the year 2262, the latest a signed 64-bit count of nanoseconds holds, is refused.
 
 Field types: float values are stored natively, integers (suffix `i`) are converted to `f64`, booleans become `0.0`/`1.0`. String fields are not supported.
 
