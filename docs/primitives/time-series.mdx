@@ -180,7 +180,7 @@ flo ts query temperature --tags sensor=A1 --from -24h --window 1h --agg max
 
 Windows are aligned to the epoch (`timestamp / window * window`), so a bucket's
 start does not shift with `--from` and the same point always lands in the same
-bucket across queries. Each row of the result is one window.
+bucket across queries. Each row of the result is one window. With `-o json`, each bucket has `start_ms` and `start_ns`.
 
 ### Output Formats
 
@@ -238,7 +238,11 @@ Multiple filters are comma-separated: `{host=web-01,region=us-east}`
 |--------|---------|-------------|
 | Duration | `[1h]` | Last N units from now |
 | Duration units | `[30s]`, `[5m]`, `[1h]`, `[7d]` | Seconds, minutes, hours, days |
+| Relative range | `[2h..1h]` | From two hours ago to one hour ago |
 | Absolute | `[1708700000000..1708800000000]` | Epoch millisecond range |
+| From a time | `[1708700000000]` | From that epoch millisecond on, with no end |
+
+A bare number in a range is always epoch milliseconds, as `--from` and `--to` take. One past the year 3000 as milliseconds is refused, since it's most likely a nanosecond or microsecond time pasted in. A range whose start is after its end is refused rather than read as empty. FloQL answers each point's time in nanoseconds; the CLI prints it in milliseconds.
 
 ### Pipeline Stages
 
