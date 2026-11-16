@@ -72,7 +72,7 @@ The `--precision` flag specifies the timestamp unit in the payload. Every unit i
 | `ms` | Milliseconds (Flo default) |
 | `s` | Seconds |
 
-A timestamp later than about the year 2262, the latest a signed 64-bit count of nanoseconds holds, is refused.
+A timestamp must be after 1970 and no later than 2262-04-11T23:47:16Z, the latest a signed 64-bit count of nanoseconds holds; one outside that is refused.
 
 Field types: float values are stored natively, integers (suffix `i`) are converted to `f64`, booleans become `0.0`/`1.0`. String fields are not supported.
 
