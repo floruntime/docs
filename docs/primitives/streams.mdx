@@ -139,6 +139,10 @@ one, so a single append larger than the limit comes back entire. A range's
 and may name any record, including one inside an append: the read resumes with
 the record after it.
 
+A read of a stream that doesn't exist, never created or since deleted, is
+`not found` (exit 1). A stream that exists with nothing in the range, or
+nothing past `--start`, answers no records and succeeds.
+
 ### Blocking Reads
 
 Blocking reads wait for new data instead of returning empty results immediately.
@@ -155,7 +159,7 @@ flo stream read events --block 300000 --start 0-0 --limit 5
 flo stream read events --block 5000 --start '$' --limit 5
 ```
 
-If matching data already exists, the blocking read returns immediately. If no data arrives within the timeout, it returns an empty (but successful) result.
+If matching data already exists, the blocking read returns immediately. If no data arrives within the timeout, it returns an empty (but successful) result. A blocking read of a stream that doesn't exist yet waits for its first append, rather than answering `not found`.
 
 ### Follow Mode
 
