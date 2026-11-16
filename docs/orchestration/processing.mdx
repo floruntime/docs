@@ -137,7 +137,7 @@ sources:
       poll_interval_ms: 1000  # how often to read from the source (default: 1000)
 ```
 
-The cursor is persisted at most once a second, so a crash re-delivers up to the last second of records (**at-least-once**). A record is not retried once the cursor has moved past it: if a sink write or an operator fails, the error is logged and the record is skipped.
+The cursor moves in the same log entry as the sink writes of the records it moved past, so each record is written **exactly once**, across restarts and leader changes. A record is not retried once the cursor has moved past it: if an operator fails on it, or a sink's target refuses its write for good, the error is logged and counted and the record is skipped.
 
 :::note
 Leave `partitions:` out: a stream source reads every partition, and `all` is the only value accepted. To process part of a stream, filter on a field, or write that part to its own stream.
@@ -201,7 +201,18 @@ sinks:
 
 Sinks define where the pipeline writes results. Four sink kinds are supported.
 
-A sink writes each record **at least once**. When a sink's target is full (a queue at its caps, or a shard whose log can take no more writes), the pipeline holds at that record and goes on once there's room. A write refused for room after it was sent makes the pipeline read that record again, so it and the records after it can reach a stream, a KV key or a queue twice. A write refused for any other reason is counted as dropped (`flo_processing_records_dropped_total`) and logged; it isn't retried.
+A sink writes each record **exactly once**. A pipeline's writes for a batch of records, to whatever shards hold their targets, go in one log entry with the source cursor they move it to, and reach each target in the order they were made.
+
+- **A full queue** keeps the job's writes it has no room for, in order, and takes them as it drains: none is lost, and none overtakes an earlier one. A client's enqueue isn't held back by them. Past 16 MiB kept for one queue, or 128 MiB on its shard, the pipeline waits, and so does every job writing to that shard. `flo processing status` says so: `RUNNING (waiting for room on shard 2 (orders))`. Drain the queue to let them go on. A queue's caps (`[queues]` settings) are those of the node the job runs on.
+- **A pipeline waits for its writes to be taken.** While 1024 of the shard's writes to another shard are unacknowledged, its pipelines writing there wait: `waiting: 1024 writes to shard 3 unacked`. That shard is slow or can't be reached; `flo_shard_channel_unacked_messages` shows the backlog. A pipeline also waits while a sink's shard is halted (`waiting: sink shard 3 is halted`) or its own shard's log is full (`waiting for room in this shard's log`).
+- **A sink's namespace must exist.** A sink doesn't create one; until it's created the pipeline reads nothing, its status says `waiting for namespace <name>`, the server logs the `flo namespace create` that ends the wait, and `flo_processing_pipelines_waiting_namespace` counts it.
+- **A write refused for good** is lost to that sink. One a client's write would be refused for (a key the server keeps for itself, a queue message over 64 KiB) is refused before it's sent, counted in `flo_processing_records_dropped_total` and logged. One the target itself refuses is counted by reason on the shard that holds it, in `flo_shard_channel_sink_refusals_total`, and logged there naming the target and the shard the job runs on. These counts aren't kept per job.
+
+### Limits
+
+One record may make at most **64 sink writes, of 1 MiB in all**: each sink writes once per record, and a time-series sink with a `fields:` map once per field. A job whose sinks and fields make more than that for every record is refused at submit; use fewer sinks or fields, or split the job. An operator that emits several records for one (a `flatmap`) multiplies them, which the submit can't see. A record past the limit is skipped: counted once in `flo_processing_records_dropped_total` and in `flo_processing_records_too_large_total`, logged, and named in the job's status with where it was in its source.
+
+A poll reads up to `batch_size` records, a page after another as each batch of writes is logged.
 
 ### Stream Sink
 
@@ -669,7 +680,7 @@ On submission, the job enters the `RUNNING` state and begins polling its sources
 flo processing status job-1 -n analytics
 ```
 
-Prints the job's id, name, status, batch size, the records it has processed since the server started, and when it was created. For a job running on the node you ask, it also prints what that node's pipelines have read and written since they started there, and, for a job with a TS source, its late points ([Late points](#late-points)):
+Prints the job's id, name, status, batch size, the records it has processed since the server started, and when it was created. Status is answered by the shard's leader, which runs the job's pipelines. So a running job's status also says what it is waiting for and the last record it skipped, what the pipelines have read and written since they started there, and, for a job with a TS source, its late points ([Late points](#late-points)):
 
 ```
 Job:        job-<id>
@@ -761,9 +772,9 @@ flo processing submit job.yaml -n staging
 Submit, stop, cancel and remove go through Raft, so jobs survive a restart:
 
 - A `RUNNING` job's pipelines are rebuilt on restart and keep consuming
-- Each pipeline resumes from its **durable source cursor**, persisted through Raft at most once a second, so a crash re-delivers up to the last second of records (at-least-once)
+- Each pipeline resumes from its **source cursor**, which moves through Raft with the sink writes it covers, so no record is written twice or skipped by a restart
 - Stopped and cancelled jobs stay idle, and removed jobs stay removed
-- A stored job the server can't rebuild is kept as `FAILED` with its reason and cursors, never dropped
+- A stored job the server can't rebuild is kept as `FAILED` with its reason, never dropped; its cursors are kept until it's removed
 - New job IDs don't collide with pre-restart IDs
 
 What does not survive a restart: `aggregate` totals and the processed-record count, both kept in memory.
@@ -779,9 +790,14 @@ With metrics enabled, the server exports these on `/metrics`. Counts start from 
 | `flo_processing_jobs_completed_total` | Jobs stopped |
 | `flo_processing_jobs_cancelled_total` | Jobs cancelled |
 | `flo_processing_records_processed_total` | Records read from sources |
-| `flo_processing_records_dropped_total` | Records a sink could not write |
-| `flo_processing_checkpoints_completed_total` | Source cursors persisted |
-| `flo_processing_errors_total` | Cursor persists and operator chains that failed |
+| `flo_processing_records_dropped_total` | Records a sink could not write: refused before it was sent, or too large |
+| `flo_processing_records_too_large_total` | Records whose sink writes don't fit one entry (64 writes, 1 MiB) |
+| `flo_processing_sink_batches_total` | Batches of sink writes proposed, each with the source cursor it moves to |
+| `flo_processing_ticks_held_total` | Pipeline polls that couldn't read: waiting for a namespace, a halted or busy shard, unacked writes, or the log |
+| `flo_shard_channel_unacked_messages{shard_id}` | Messages this shard sent to other shards that aren't yet acknowledged |
+| `flo_processing_pipelines_waiting_namespace` | Pipelines waiting for a sink's namespace to be created |
+| `flo_shard_channel_sink_refusals_total{shard_id,reason}` | Sink writes a target on this shard refused for good, by reason |
+| `flo_processing_errors_total` | Operator chains that failed |
 | `flo_processing_failed_jobs{shard_id}` | Jobs held as `FAILED` on each shard; also `processing_failed_jobs` per shard on `/status` |
 
 ## Not Supported Yet
