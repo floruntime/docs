@@ -180,15 +180,23 @@ flo queue watch tasks
 
 ## Dead Letter Queue
 
-A message failed or expired 5 times, or failed with `--dlq`, is dead. Dead letters are kept until the queue is purged, and count towards what the queue holds.
+A message failed or expired 5 times, or failed with `--dlq`, is dead. Dead letters are kept until they're requeued or deleted, or the queue is purged, and count towards what the queue holds.
 
 ```bash
-# List DLQ messages, oldest first
+# List dead letters, oldest dead first
 flo queue dlq list tasks
 flo queue dlq list tasks --limit 50
+
+# Ready again at once, attempts reset
+flo queue dlq requeue tasks --ids 7,9
+flo queue dlq requeue tasks --all
+
+# Gone for good; a dry run first
+flo queue dlq delete tasks --all --dry-run
+flo queue dlq delete tasks --all --max 500
 ```
 
-Each DLQ entry records the sequence number, its `deliveries` (how many times it was delivered), and when it died. Requeueing and deleting dead letters aren't supported yet.
+Each dead letter shows its seq, its `deliveries` (how many times it was delivered), its `failures`, when it died, its last error and up to 4 KiB of its payload. A requeued message is ready at once, at its priority, with its failures reset to 0, so it gets its full attempts again; its deliveries and last error are kept. With `--all`, a requeue or delete works through the dead letters a batch of up to 100 at a time, oldest first, up to `--max`.
 
 ## Limits
 
@@ -340,7 +348,7 @@ A queue is kept as a few ordered families in each shard's state:
 - **Messages** — each message's payload, priority, status (ready, leased or dead), delivery count and current lease. A ready message costs its payload plus about 340 bytes of memory.
 - **Ready keys** — ordered by `(priority, due time, seq)`, so the next message is the first key.
 - **Deadlines** — every lease's expiry, earliest first, which the leader's expire duty reads every second.
-- **Dead letters** — oldest first, kept until the queue is purged.
+- **Dead letters** — oldest first, kept until they're requeued or deleted, or the queue is purged.
 
 A dequeue logs a deliver; every replica applies it by leasing the first due ready messages, so they all lease the same ones.
 
