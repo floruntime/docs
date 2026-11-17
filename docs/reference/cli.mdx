@@ -538,9 +538,14 @@ flo stream group info    <stream> --group <name>
 flo stream group list    <stream>
 flo stream group members <stream> <group>
 flo stream group delete  <stream> --group <name>
+flo stream group steal   <stream> --group <name> --consumer <id> --min-idle <ms> [--lease <ms>] --ids <delivery,...>
+flo stream group dlq list    <stream> --group <name> [--limit <n>] [--after <cursor>]
+flo stream group dlq requeue <stream> --group <name> (--ids <id,...> | --all [--max <n>])
+flo stream group dlq delete  <stream> --group <name> (--ids <id,...> | --all [--max <n>]) [--dry-run]
 ```
 
-- `read` prints each record with its delivery, `term.index.id.deliveries`, which `ack`, `nack` and `touch` take in `--ids`. A read takes at most 100 records.
+- `read` prints each record with its delivery, `term.index.id.deliveries`, which `ack`, `nack`, `touch` and `steal` take in `--ids`. A read takes at most 100 records.
+- `steal` takes records another consumer has left idle at least `--min-idle`, idle being the time since the lease last moved (its read or its holder's last touch). `dlq requeue` resets a dead letter's failures to 0, keeping its deliveries and last error; `dlq` commands take record ids (`ms-seq`), as `dlq list` prints them. See [Dead letters](/primitives/streams/#dead-letters).
 - `--ack-timeout` is the lease, 5000 to 43200000 ms (default 30000). `--max-deliver` is the attempts, 1 to 255 (default 5): a record nacked or expired that many times is dead.
 - `nack --error` is kept on the record, up to 1024 bytes. `nack --abandon` hands records back unstarted: ready at once, no attempt spent, never dead-lettered; it takes no `--delay`, `--dlq` or `--error`.
 - A report to a group that isn't there is refused `not_found`; a read past the group's caps with nothing ready is refused `overloaded` with reason `group_held_full` (exit 4).
