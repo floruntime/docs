@@ -332,7 +332,7 @@ flo stream group dlq delete events --group processors --all
 
 A requeued record gets its full attempts again: its failures go to 0, while its deliveries and its last error stay, so its history still shows. It is ready at once and goes to the group's next read. A record a trim cut since it died can't be read again, so a requeue answers it `gone`; `--all` passes over those, which cleanup takes.
 
-`--all` works a batch of up to 100 at a time, oldest first, each batch logged on its own; each is printed as it is answered, with any record it refused, so a run cut short shows how far it got. A record named that isn't dead is refused `not dead`, and the command exits 3.
+`--all` works a batch of up to 100 at a time, oldest first, each batch logged on its own; each is printed as it is answered, with any record it refused, so a run cut short shows how far it got. `--max` stops it after that many, no batch taking more than is left. A `--dry-run` looks at one batch, and says when more remain past it. A record named that isn't dead is refused `not dead`, and the command exits 3.
 
 ### Stealing records
 
@@ -344,7 +344,7 @@ flo stream group steal events --group processors --consumer rescue --min-idle 30
 
 A steal takes records another consumer holds: each gets a new delivery for `--consumer`, with the group's lease unless `--lease` names one, and its failures stay. It prints each record's new delivery, as a read does, and the old holder's ack, nack or touch is stale from then on.
 
-Only a record **idle** at least `--min-idle` is taken. Idle is the time since its lease last moved: its read, or its holder's last touch. So a consumer that keeps touching what it holds is alive and is never stolen from; one that stopped is. A record not idle long enough is refused `not idle`, and the command exits 3.
+Only a record **idle** at least `--min-idle` is taken. Idle is the time since its holder last touched it: its read, a steal, or any touch, even one that leaves the lease as it stands (a touch moves the lease only once half of it is gone). So a consumer that touches what it holds more often than `--min-idle` is alive and is never stolen from; one that stopped is. A record not idle long enough is refused `not idle`, and the command exits 3.
 
 A steal is for an operator moving work off a consumer that hangs while holding its lease. It is never needed for recovery: a record whose lease runs out goes to the group's next read by itself.
 
