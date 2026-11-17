@@ -633,7 +633,7 @@ flo queue dlq requeue <queue> (--ids <seq,...> | --all [--max <n>])
 flo queue dlq delete <queue> (--ids <seq,...> | --all [--max <n>]) [--dry-run]
 ```
 
-`dlq list` pages a queue's dead letters, oldest dead first, each with its deliveries, failures, when it died, its last error and up to 4 KiB of its payload; a page that stops short prints the `--after` cursor for the next. `dlq requeue` makes dead letters ready again at once, at their priority, with their failures reset (their deliveries and last error kept). `dlq delete` removes them for good; `--dry-run` says how many it would delete. With `--all`, each works a batch of up to 100 at a time, oldest first, up to `--max`. A message that isn't dead, or isn't there, is named with why, and the command exits 3. A queue that was never written to is refused not found.
+`dlq list` pages a queue's dead letters, oldest dead first, each with its deliveries, failures, when it died, its last error and up to 4 KiB of its payload; a page that stops short prints the `--after` cursor for the next. `dlq requeue` makes dead letters ready again at once, at their priority, with their failures reset (their deliveries and last error kept). `dlq delete` removes them for good; `--dry-run` says how many it would delete, and with `--all` it looks at the first batch only, saying "and more remain" when others are past it. With `--all`, each works a batch of up to 100 at a time, oldest first, up to `--max`. A message that isn't dead, or isn't there, is named with why, and the command exits 3. A queue that was never written to is refused not found.
 
 ### `flo queue purge`
 

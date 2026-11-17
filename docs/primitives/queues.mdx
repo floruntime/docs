@@ -196,7 +196,7 @@ flo queue dlq delete tasks --all --dry-run
 flo queue dlq delete tasks --all --max 500
 ```
 
-Each dead letter shows its seq, its `deliveries` (how many times it was delivered), its `failures`, when it died, its last error and up to 4 KiB of its payload. A requeued message is ready at once, at its priority, with its failures reset to 0, so it gets its full attempts again; its deliveries and last error are kept. With `--all`, a requeue or delete works through the dead letters a batch of up to 100 at a time, oldest first, up to `--max`.
+Each dead letter shows its seq, its `deliveries` (how many times it was delivered), its `failures`, when it died, its last error and up to 4 KiB of its payload. A requeued message is ready at once, at its priority, with its failures reset to 0, so it gets its full attempts again; its deliveries and last error are kept. With `--all`, a requeue or delete works through the dead letters a batch of up to 100 at a time, oldest first, up to `--max`. A dry run with `--all` counts the first batch only, and says "and more remain" when others are past it.
 
 ## Limits
 
