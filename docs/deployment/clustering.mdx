@@ -374,8 +374,9 @@ members it knows for the group's membership, and follows the leader they
 name. A member that was down while **every** member it knew was replaced
 can't rejoin by itself, since it takes nothing from a node it doesn't know
 (a peer proves only that it holds the cluster secret). It logs that it
-`was likely down while every member it knew was replaced`, and
-`flo cluster status` shows `members_silent`. Stop it, move its data directory
+`was likely down while every member it knew was replaced`, `flo cluster
+status` says the same (`"members_silent": true` with `--json`, and in
+`/status`). Stop it, move its data directory
 aside, and start it again with `--join` naming a live member, as above.
 
 ### Restoring a data directory from a copy
