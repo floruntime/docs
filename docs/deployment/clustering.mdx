@@ -366,6 +366,30 @@ A node whose data directory has hard state but no log refuses to start with
 node with an empty data directory started with `--cluster` founds a new
 cluster and logs a warning saying so.
 
+### A member that was down while the membership changed
+
+A member stopped while others were added and removed catches up when it
+starts again, as long as a member it knew is still in the group: it asks the
+members it knows for the group's membership, and follows the leader they
+name. A member that was down while **every** member it knew was replaced
+can't rejoin by itself, since it takes nothing from a node it doesn't know
+(a peer proves only that it holds the cluster secret). It logs that it
+`was likely down while every member it knew was replaced`, and
+`flo cluster status` shows `members_silent`. Stop it, move its data directory
+aside, and start it again with `--join` naming a live member, as above.
+
+### Restoring a data directory from a copy
+
+Not supported. Don't put back a node's data directory from a backup, a disk
+snapshot or another copy: its log is older than what it once held, and it may
+have voted and acknowledged writes the copy doesn't have. Move the directory
+aside and start the node with `--join` instead; it catches up from the group.
+
+A node that comes back on an old copy in which it is its config's only voter
+asks the members its log names before it stands for election. If any of them
+holds a newer committed config, it never stands, and logs `its data may be an
+old copy. It won't campaign; wipe it and rejoin`.
+
 ### When a majority lost its data
 
 No leader can be elected: the surviving member needs votes, and members that
