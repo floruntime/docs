@@ -469,7 +469,7 @@ flo stream create <name> [options]
 
 ### `flo stream alter`
 
-Change a stream's retention. A bound left out, or given as 0, keeps its current value.
+Change a stream's retention. A bound left out, or given as 0, keeps its current value. It works on any stream, including one its first append made.
 
 ```bash
 flo stream alter <name> [--retention <hours>] [--retention-count <n>]
