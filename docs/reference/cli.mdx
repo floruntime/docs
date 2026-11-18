@@ -747,7 +747,7 @@ flo workflow start <name> [data] --run-id <id>
 
 The server gives each run an id that names the shard it runs on, so
 `status`, `history`, `signal` and `cancel` go straight there. With `--run-id`
-you choose the id instead (not of the form `wfr-<hex>-<hex>`, which is the
+you choose the id instead (not of the form `wfr-<hex>-<hex>-<hex>`, which is the
 server's): those commands then ask every shard which holds it, so a generated
 id is the faster path. A start refuses, as `conflict`, an id a run of any
 workflow already has in the namespace; a start retried with the same
@@ -757,7 +757,7 @@ concurrent starts ids of their own.
 
 | Flag | Description |
 |------|-------------|
-| `--run-id <id>` | Choose the run's id. Ids of the form `wfr-<hex>-<hex>` are the server's and are refused |
+| `--run-id <id>` | Choose the run's id. Ids of the form `wfr-<hex>-<hex>-<hex>` are the server's and are refused |
 
 ### `flo workflow status`
 

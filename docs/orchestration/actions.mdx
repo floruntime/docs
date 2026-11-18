@@ -43,7 +43,7 @@ flo action register send-email --owner platform-team --timeout 60000 --retries 3
 
 ```bash
 flo action invoke send-email '{"to":"alice@example.com","subject":"Welcome!"}'
-# → Result: act-1a2b3c4d5e6f00-3
+# → Result: act-1a2b3c4d5e6f00-3-1c
 ```
 
 The printed id is the run's id.
@@ -51,8 +51,8 @@ The printed id is the run's id.
 ### 3. Check status
 
 ```bash
-flo action status act-1a2b3c4d5e6f00-3
-# → Run: act-1a2b3c4d5e6f00-3
+flo action status act-1a2b3c4d5e6f00-3-1c
+# → Run: act-1a2b3c4d5e6f00-3-1c
 #   status: pending
 #   created_at: 1773482400000
 #   attempt: 0
@@ -178,7 +178,7 @@ Workers block-wait for tasks:
 
 ```bash
 flo worker await process-order --worker-id worker-1 --block 30000
-# → Task: act-1a2b3c4d5e6f00-3:1:2:41:process-order
+# → Task: act-1a2b3c4d5e6f00-3-1c:1:2:41:process-order
 #   Action: process-order
 #   Attempt: 1
 #   Payload: {"order_id":"A-1"}
@@ -195,7 +195,7 @@ A draining worker's await is refused `worker_draining`, and an unhealthy one's `
 Report success with the result:
 
 ```bash
-flo worker complete act-1a2b3c4d5e6f00-3:1:2:41:process-order --worker-id worker-1 --result '{"status":"done"}'
+flo worker complete act-1a2b3c4d5e6f00-3-1c:1:2:41:process-order --worker-id worker-1 --result '{"status":"done"}'
 ```
 
 `--outcome` names the outcome a [workflow](/orchestration/workflows/) step follows; none is `success`.
@@ -206,10 +206,10 @@ Report failure:
 
 ```bash
 # Retry: the run is ready again while it has attempts left
-flo worker fail act-1a2b3c4d5e6f00-3:1:2:41:process-order --worker-id worker-1 --error "Temporary failure" --retry
+flo worker fail act-1a2b3c4d5e6f00-3-1c:1:2:41:process-order --worker-id worker-1 --error "Temporary failure" --retry
 
 # Without --retry the run fails for good
-flo worker fail act-1a2b3c4d5e6f00-3:1:2:41:process-order --worker-id worker-1 --error "Invalid input"
+flo worker fail act-1a2b3c4d5e6f00-3-1c:1:2:41:process-order --worker-id worker-1 --error "Invalid input"
 ```
 
 A fail on the wire has more than the CLI shows:
@@ -226,7 +226,7 @@ A fail on the wire has more than the CLI shows:
 Keep the task's lease while the handler runs:
 
 ```bash
-flo worker touch act-1a2b3c4d5e6f00-3:1:2:41:process-order --worker-id worker-1
+flo worker touch act-1a2b3c4d5e6f00-3-1c:1:2:41:process-order --worker-id worker-1
 # → Expires at: 1773482460000
 ```
 
