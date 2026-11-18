@@ -12,7 +12,7 @@ Traditional architectures pair a storage layer (Kafka, Redis) with a separate pr
 Flo eliminates that gap:
 
 - **Zero-copy reads** — source records are read directly from the Unified Append Log, no network hop
-- **In-node execution** — every job runs on shard 0, which holds the jobs, and reads and writes other shards' data in-process
+- **In-node execution** — a job runs on its first source's shard, which holds the job, and reads and writes other shards' data in-process
 - **Integrated KV** — `kv_lookup` reads Flo KV and a KV sink writes it, no external store
 - **Single deployment** — one binary, one config, one monitoring surface
 
@@ -725,7 +725,7 @@ flo processing cancel job-1 -n analytics
 
 ### Removing a Job
 
-A stopped, cancelled or failed job keeps its definition, and counts toward the server's limit of 10,000 jobs, until it is removed. Removing it frees that slot; afterwards its id is not found:
+A stopped, cancelled or failed job keeps its definition, and counts toward its shard's limit of 10,000 jobs, until it is removed. A job is held by the shard of its first source, so the limit is per shard: a server of four shards holds up to 40,000 jobs, at most 10,000 of them reading their first source from any one shard. Removing it frees that slot; afterwards its id is not found:
 
 ```bash
 flo processing cancel job-1 -n analytics
