@@ -682,7 +682,7 @@ On submission, the job enters the `RUNNING` state and begins polling its sources
 flo processing status job-1 -n analytics
 ```
 
-Prints the job's id, name, status, batch size, the records it has processed since the server started, and when it was created. Status is answered by the shard's leader, which runs the job's pipelines. So a running job's status also says what it is waiting for and the last record it skipped, what the pipelines have read and written since they started there, and, for a job with a TS source, its late points ([Late points](#late-points)):
+Prints the job's id, name, status, batch size, the records it has processed (kept with its cursors, so the count survives a restart and a leader change), and when it was created. Status is answered by the shard's leader, which runs the job's pipelines. So a running job's status also says what it is waiting for and the last record it skipped, what the pipelines have read and written since they started there, and, for a job with a TS source, its late points ([Late points](#late-points)):
 
 ```
 Job:        job-<id>
@@ -759,7 +759,7 @@ A job lives in the namespace it is submitted to (`-n`), and is listed, inspected
 - A job **may read other namespaces**: a source or a `kv_lookup` can name one, for shared reference data or to gather from several namespaces into one.
 - Sources, sinks and lookups that name no namespace use the job's.
 - The same job name in different namespaces are **independent jobs**.
-- On a server of more than one shard, a stream or queue sink outside `default` must be stored on the job's own shard. Where a stream or queue is stored follows from its name and namespace, so one stored on another shard is refused at submit, naming the sink. Use the `default` namespace for it, or run one shard (`--shards 1`). KV and time-series sinks, and sinks in `default`, have no such limit.
+- A job lives on the shard of its first source, found by that source's namespace and name. If its first source reads another namespace, that namespace must exist when the job is submitted: create it first, then submit. A job never creates a namespace other than its own.
 
 To move data from namespace A into B, submit the job in B and have it read from A.
 
@@ -779,7 +779,7 @@ Submit, stop, cancel and remove go through Raft, so jobs survive a restart:
 - A stored job the server can't rebuild is kept as `FAILED` with its reason, never dropped; its cursors are kept until it's removed
 - New job IDs don't collide with pre-restart IDs
 
-What does not survive a restart: `aggregate` totals and the processed-record count, both kept in memory.
+What does not survive a restart: `aggregate` totals, kept in memory.
 
 ## Processing Metrics
 
@@ -800,7 +800,7 @@ With metrics enabled, the server exports these on `/metrics`. Counts start from 
 | `flo_processing_pipelines_waiting_namespace` | Pipelines waiting for a sink's namespace to be created |
 | `flo_shard_channel_sink_refusals_total{shard_id,reason}` | Sink writes a target on this shard refused for good, by reason |
 | `flo_processing_errors_total` | Operator chains that failed |
-| `flo_processing_failed_jobs{shard_id}` | Jobs held as `FAILED` on each shard; also `processing_failed_jobs` per shard on `/status` |
+| `flo_processing_failed_jobs{shard_id}` | Jobs the shard's leader holds as `FAILED`: stored as failed at submit, or running with a definition that doesn't build on that node. Counted by the leader only (0 elsewhere); also `processing_failed_jobs` per shard on `/status` |
 
 ## Not Supported Yet
 
