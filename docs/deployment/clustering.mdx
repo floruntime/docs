@@ -375,7 +375,7 @@ name. A member that was down while **every** member it knew was replaced
 can't rejoin by itself, since it takes nothing from a node it doesn't know
 (a peer proves only that it holds the cluster secret). It logs that it
 `was likely down while every member it knew was replaced`, `flo cluster
-status` says the same (`"members_silent": true` with `--json`, and in
+status` says the same (`"members_silent": true` with `--output json`, and in
 `/status`). Stop it, move its data directory
 aside, and start it again with `--join` naming a live member, as above.
 
@@ -387,9 +387,11 @@ have voted and acknowledged writes the copy doesn't have. Move the directory
 aside and start the node with `--join` instead; it catches up from the group.
 
 A node that comes back on an old copy in which it is its config's only voter
-asks the members its log names before it stands for election. If any of them
-holds a newer committed config, it never stands, and logs `its data may be an
-old copy. It won't campaign; wipe it and rejoin`.
+asks the members its log names before its first election. If one of them
+answers within an election timeout with a newer committed config, it doesn't
+stand for election while it runs, and logs `its data may be an old copy. It
+won't campaign; wipe it and rejoin`. With no answer in time it stands as
+before, so a group that really is down to this node stays available.
 
 ### When a majority lost its data
 
