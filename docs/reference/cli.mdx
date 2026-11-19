@@ -469,10 +469,10 @@ flo stream create <name> [options]
 
 ### `flo stream alter`
 
-Change a stream's retention. A bound left out, or given as 0, keeps its current value. It works on any stream, including one its first append made.
+Change a stream's retention. A bound left out, or given as 0, keeps its current value; `--clear-retention` and `--clear-retention-count` drop the age or count bound. Setting and clearing one bound at once is refused. It works on any stream, including one its first append made.
 
 ```bash
-flo stream alter <name> [--retention <hours>] [--retention-count <n>]
+flo stream alter <name> [--retention <hours>] [--retention-count <n>] [--clear-retention] [--clear-retention-count]
 ```
 
 ### `flo stream append`
