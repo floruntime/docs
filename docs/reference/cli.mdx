@@ -183,8 +183,12 @@ flo server repair skip --data-dir /var/lib/flo --shard 3 --index 18234 --reason 
 | `-d, --data-dir <path>` | Data directory | from the config |
 | `--shard <n>` | The halted shard (`/status` names it) | required |
 | `--index <i>` | The entry it halted at (`halt_index` in `/status`) | required |
+| `--seq <s>` | For a shard halted in a message another shard sent it: skip that message alone | — |
+| `--whole-entry` | For a shard halted in such a message: skip every message the entry carries | — |
 | `--reason <text>` | Why, recorded with the repair | — |
 | `--yes` | Append the repair | — |
+
+An entry carrying messages from another shard (a `channel_inbound`) that halted at one of them needs `--seq` or `--whole-entry`; the dry run names the sender and the messages each would drop. After `--seq`, the next message may halt the shard in turn: skip it the same way, or the rest with `--whole-entry`.
 
 ### `flo server wipe`
 

@@ -333,6 +333,21 @@ refused write; the SDKs never retry either. An SDK worker's registration,
 group join and polls keep backing off on `shard_halted` instead, up to about
 30 seconds apart, and resume by themselves once the shard is repaired.
 
+A shard can also halt in a message another shard sent it, such as an action
+started by a workflow on another shard, or a processing job's write to a key
+this shard owns. `/status` then names that message too (`halt_message`, its
+sender and seq). The repair skips that message alone, or every message of the
+entry; the others apply. Each skipped message is answered `conflict`, reason
+`skipped_by_repair`, and never runs:
+
+- a skipped action or child workflow start fails the step that called it,
+  saying so;
+- a skipped answer to a call fails the step waiting on it. When the skipped
+  answer is the one saying the callee started, the callee's run still
+  executes: the step has already failed, so its end changes nothing;
+- a skipped processing sink write loses its records, counted in
+  `flo_shard_channel_sink_skipped_writes_total` and `_bytes_total`.
+
 Membership changes still go through, so a halted group can replace a dead
 node.
 

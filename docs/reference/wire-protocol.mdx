@@ -215,6 +215,7 @@ The status says whether to retry; the reason says what happened; `ran` says whet
 | `35` | `too_many_workflow_runs` | With `limit`: the node holds as many workflow runs as it keeps. Not returned yet. |
 | `36` | `queue_full` | With `overloaded`: an enqueue found the queue at its cap of messages or bytes, or the shard's queues and groups together at theirs. It drains as messages are completed; the SDKs retry it with backoff. |
 | `37` | `group_held_full` | With `overloaded`: a group read took nothing new, because the group holds as many records or bytes as its caps allow (the `[queues]` settings, which hold each group as they hold a queue), or the shard's queues and groups together hold theirs. The SDKs don't retry it: reading again won't help. A group's cap counts its leased, ready and dead records; an ack frees a record, but dead ones leave only when the group is deleted or a stream trim passes them. The shard's cap clears as its queues and groups drain. |
+| `38` | `skipped_by_repair` | With `conflict`: a message another shard sent this one was skipped by a repair of the entry carrying it, so it never ran. The message names the entry, the message, its sender and, for a skip of the whole entry, the message the shard halted at. Don't resend it unchanged: it halts the shard again. |
 
 The reasons are part of the op table, so a client and server that agree on the table hash agree on this list.
 
