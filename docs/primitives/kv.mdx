@@ -9,7 +9,7 @@ Flo's KV store is versioned key-value storage backed by the Unified Append Log. 
 
 ### Versioned Writes
 
-Every mutation to a key creates a new **version**: 1 on its first write, one more on each after.
+Every mutation to a key creates a new **version**, one more than the last. A key's versions never repeat: a key written after it was deleted and reaped, or expired and reaped, starts past every version any reaped key in its namespace had. So versions grow within a namespace, not from 1 in each life of a key, and a CAS read before a key went can never match its next life. A key first written in a fresh namespace starts at 1.
 
 Put responses include the new version number, which you can use for subsequent CAS updates:
 
@@ -205,7 +205,7 @@ Returns the key's versions, newest first, each with its version, the time it was
 
 Each key keeps at most **64 older versions and at most 64 KiB of them**, each charged its value's bytes plus 64; the oldest go first while either bound is exceeded, and the newest older version is always kept, however large. So a key with small values keeps 64 versions, one with 4 KiB values about 15, and one large write can evict a key's whole small history. An oldest kept version above 1 means older ones were evicted.
 
-Deletes are versions too (`deleted: true`): a key's history survives its deletion, and its memory comes back only when the key is removed.
+Deletes are versions too (`deleted: true`). History is best effort: a delete keeps only the delete, and drops the versions before it; so does an overwrite with a smaller value, which keeps only its own. Either returns the memory those versions held. An hour after a delete, the key's tombstone goes too, and its history is then not found.
 
 One answer holds 256 KiB, so a history of large values can take several. An answer says `more` when older kept versions follow; ask again with `before_version` set to the last version it gave. The CLI does this itself up to `--limit`, and prints `more: true` (on stderr with `-o raw`) when versions remain beyond it.
 
@@ -234,7 +234,7 @@ TTL combines with conditions. A common pattern is a TTL with `--condition if_abs
 flo kv set lock:resource "owner-1" --ttl-ms 30s --condition if_absent
 ```
 
-Expiry is **lazy** — keys are checked at read time rather than proactively swept. This means expired keys don't consume I/O until accessed.
+An expired key reads as not found from the moment its TTL runs out. Its memory comes back shortly after: the shard's leader drops expired keys, and deleted keys' tombstones once an hour old, in the background, about once a second.
 
 ## Compare-and-Swap (CAS)
 
