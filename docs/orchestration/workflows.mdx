@@ -632,6 +632,11 @@ flo workflow start process-order '{"order_id":"ORD-123"}' --idempotency-key orde
 # → wfrun-1  (same run, no duplicate)
 ```
 
+Idempotency keys starting with `_` are reserved for the server, which keys
+the runs its schedules and stream triggers start with them. A start with
+such a key is refused as a bad request ("reserved idempotency key: a
+leading '_' is the server's"); keys without it are yours.
+
 ---
 
 ## Scheduling
