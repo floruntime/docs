@@ -258,6 +258,26 @@ sinks:
         sensor: sensor
 ```
 
+#### How the sink reads a record
+
+A time-series sink reads each record as a JSON object, and every field it names is that object's own top-level field:
+
+- A field of the same name inside a nested object, or the text `"name":` inside another string, isn't the field.
+- A string's escapes are decoded (`\"`, `\\`, `\u00e9`), so two values that differ only in an escaped character are two tag values. An escaped key matches too, and space or a newline around a colon doesn't matter.
+- A field the record gives twice is read at its first. Two tags or fields may read the same record field.
+- A tag's field must be a JSON string and a value's a JSON number. A number must be written as JSON writes one: `+1`, `.5`, `1.`, `012` and `0x10` aren't numbers. A record that is a JSON number alone is the value of a sink with no tags or fields.
+- A tag value's trailing spaces are trimmed, as for any time-series write, so `"a"` and `"a "` name one series.
+
+A record the sink can't read in full writes no point, rather than one in another series. The record is dropped by that sink, counted in `flo_processing_records_dropped_total`, shown in the job's status with the last drop's sink and reason, and logged at most every 30 seconds. A record is dropped once, whatever its fault, when:
+
+- it isn't a well-formed JSON object: a top-level array or value, a byte-order mark, invalid UTF-8, a raw control character, a trailing comma or a cut-off record;
+- it lacks one of the sink's tag fields, or a tag's field isn't a string;
+- a tag's value holds `,` (which would split it into two tags) or a control character such as a tab or newline;
+- its tags come to more than 1024 bytes, written as `name=value` pairs joined by commas;
+- an escaped value the sink reads decodes past 7168 bytes, or the record nests past 4000 levels.
+
+A sink is refused at submit if it names more than 32 tags, a tag named with `,` or `=`, an empty tag name or record field, or a record field longer than 253 bytes.
+
 ### KV Sink
 
 Writes each record's value to Flo KV under its key:
