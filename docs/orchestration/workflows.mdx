@@ -862,7 +862,9 @@ Each shard holds its workflows' definitions, runs and signals in memory, and is 
 
 The 1 MiB isn't kept for wakes alone. Entries that are never refused, such as steps and their results, use it too, so once a shard is 1 MiB past its share, wakes are refused too until memory frees or the wait times out. A refused wake can be sent again.
 
-To free memory, delete what you no longer need. Two metrics show a shard held at its share: `flo_shard_memory_refusals_total` counts what it refused, and `flo_workflow_duties_memory_held` counts schedules and triggers holding their starts. Each held schedule or trigger also logs a warning at most once a minute, naming the workflow, the shard and the share.
+To free memory, delete what you no longer need. `flo workflow run-delete <run_id>` deletes an ended run, with its history, and frees what it held; a run still live is refused `run_live`, so cancel it first. `flo action run-delete <run_id>` does the same for an action run.
+
+Two metrics show a shard held at its share: `flo_shard_memory_refusals_total` counts what it refused, and `flo_workflow_duties_memory_held` counts schedules and triggers holding their starts. Each held schedule or trigger also logs a warning at most once a minute, naming the workflow, the shard and the share.
 
 ---
 
