@@ -246,7 +246,7 @@ Given the input `{"hostname":"web-01","cpu_percent":72.5}`, the sink writes a po
 
 #### `value_field` Shorthand
 
-If the JSON payload contains a single number to use as the value, use `value_field` instead of a full `fields:` map. It is written as the point's `value` field; a payload that is just a number is used as it is:
+If the JSON payload contains a single number to use as the value, use `value_field` instead of a full `fields:` map. With a stream source it names the record's field to read, written as the point's `value` field; a payload that is just a number is used as it is. With a time-series source it names the field each point is written under instead (see below), and `tags:` and `fields:` are refused at submit, since a point keeps its own value and tags:
 
 ```yaml
 sinks:
