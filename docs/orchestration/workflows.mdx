@@ -845,6 +845,25 @@ To re-enable:
 flo workflow enable reconcile-accounts
 ```
 
+
+---
+
+## Memory Limits
+
+Each shard holds its workflows' definitions, runs and signals in memory, and is held to its share of the node's memory budget. Past the share, Flo refuses what would create more, and lets what it has already admitted finish:
+
+- **Creating a definition** is refused `limit`/`memory_budget` (the CLI exits 3). Replacing one with a smaller definition is still taken.
+- **Starting a run** is refused the same way, and nothing of it is kept. Send it again once memory frees.
+- **A schedule** doesn't fire while its shard is past its share. Once memory frees, its latest due slot fires once, as a missed slot does.
+- **A stream trigger** starts nothing while its shard is past its share, and keeps its place in the stream. Once memory frees, it starts a run for each event in order, none skipped. Events that stream retention trims meanwhile are lost, as for any stalled trigger.
+- **A child workflow** isn't started. Its parent's step waits and asks again (every 5 s, doubling up to 60 s) rather than fail.
+- **A signal** is refused. One that wakes a run waiting for its type is still taken, within 1 MiB past the share: refusing it could strand a run that would finish and free memory.
+- **Runs already started** take their steps and finish. A step that calls an action or a child on a shard past its share waits for it, as above.
+
+The 1 MiB isn't kept for wakes alone. Entries that are never refused, such as steps and their results, use it too, so once a shard is 1 MiB past its share, wakes are refused too until memory frees or the wait times out. A refused wake can be sent again.
+
+To free memory, delete what you no longer need. Two metrics show a shard held at its share: `flo_shard_memory_refusals_total` counts what it refused, and `flo_workflow_duties_memory_held` counts schedules and triggers holding their starts. Each held schedule or trigger also logs a warning at most once a minute, naming the workflow, the shard and the share.
+
 ---
 
 ## Validation
