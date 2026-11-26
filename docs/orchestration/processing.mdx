@@ -137,6 +137,8 @@ sources:
       poll_interval_ms: 1000  # how often to read from the source (default: 1000)
 ```
 
+A job reads its source every `poll_interval_ms` (at least 1), up to `batch_size` records a poll, and nothing tells it sooner that records arrived: the interval is how soon a new record is seen. A poll that fills its batch waits for the interval too before the next one. While its job runs, each source wakes its shard once an interval even when it finds nothing: at the default 1000 ms that costs nothing over the shard's own wake every 100 ms, but `poll_interval_ms: 1` wakes it up to 1,000 times a second for each such source. Pick the longest interval the job's latency allows. A source that waits (for room in a sink's outbox, a halted sink shard, a namespace not yet created) is looked at again on the shard's own wake, not every interval.
+
 The cursor moves in the same log entry as the sink writes of the records it moved past, so each record is written **exactly once**, across restarts and leader changes. A record is not retried once the cursor has moved past it: if an operator fails on it, or a sink's target refuses its write for good, the error is logged and counted and the record is skipped.
 
 :::note
