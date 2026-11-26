@@ -166,7 +166,7 @@ Each emitted record looks like:
 {"measurement": "cpu_usage", "field": "value", "value": 72.5, "timestamp_ms": 1700000000000, "tags": {"host": "web-01"}}
 ```
 
-`tags` holds the point's full tag set, each value a string; a tag written without `=` has the empty string. A key the point gives twice keeps its first pair in the point's sorted tag string, and a key that isn't UTF-8 is left out of `tags` (the point keeps it, and a time-series sink writes it). A tag value, field or measurement that isn't UTF-8 appears as an array of its byte values. A value outside 1e-6 to 2^53 is written with an exponent (`1e19`), so operators read it as a number. Operators can filter or route on any of these, and stream and queue sinks receive the record as shown.
+`tags` holds the point's full tag set, each value a string; a tag written without `=` has the empty string. A key the point gives twice keeps its first pair in the point's bytewise sorted tag string (`a=10,a=9` keeps `10`; a bare `a` sorts first and wins with an empty value), and a key that isn't UTF-8 is left out of `tags` (the point keeps it, and a time-series sink writes it). A tag value, field or measurement that isn't UTF-8 appears as an array of its byte values. A value outside 1e-6 to 2^53 is written with an exponent (`1e19`), so operators read it as a number; a `map`'s or `aggregate`'s numbers are written the same way. Operators can filter or route on any of these, and stream and queue sinks receive the record as shown.
 
 `tags` names one series exactly: all of its tags, not a subset.
 
@@ -349,7 +349,7 @@ Sinks without `match` receive all records from the main operator chain. A single
 
 Operators are the transformation steps between source and sink. They are declared in the `operators:` array and execute in order. Flo includes eight built-in operator types.
 
-A record an operator can't read is skipped and counted, never dropped unseen: `map`, `flatmap`, `aggregate`, a `filter` with a `json:` condition and a filtering `kv_lookup` skip a record that isn't JSON (or gives a key twice), and `aggregate` skips one whose field isn't a number. The job's status names the last: `1 record skipped, the last record 1795654803804-0: map: the record isn't JSON it can read`. `keyby` passes such a record on with its key unchanged, and an enriching `kv_lookup` passes it on as it is.
+A record an operator can't read is skipped and counted, never dropped unseen: `map`, `flatmap`, `aggregate`, a `filter` with a `json:` condition and a filtering `kv_lookup` skip a record that isn't JSON (or gives a key twice), and `aggregate` skips one whose field isn't a number. The job's status names the last: `1 record skipped, the last record 1795654803804-0: map: the record isn't JSON it can read`. `keyby` passes such a record on with its key unchanged, and an enriching `kv_lookup` passes it on as it is. Every part of a filter's `AND` or `OR` is asked, so a record that doesn't pass and that a `json:` part couldn't read is counted whichever part failed. Skips are logged as warnings, at most every 30 s per job. The count is the current leader's: it starts again with a new leader, and a batch whose writes weren't logged counts its skips again when it runs again.
 
 ### `filter` — Expression-Based Filter
 
@@ -390,6 +390,7 @@ A JSON condition matches only a record whose value is JSON with the field presen
 **Writing a condition:**
 - Values are written without quotes: `json:status=done`, not `json:status="done"`.
 - No spaces around the operator: `json:amount>100`, not `json:amount > 100`. The operator is `=`, never `==`.
+- `=` and `!=` compare two whole numbers exactly, so an id past 2^53 matches only itself; ordering, and any number with a fraction, compares as a 64-bit float. A number past a float's range can't be compared: the record is counted as skipped.
 - `AND` and `OR` are uppercase with a space on each side; a lowercase `and`/`or` is part of the text being matched.
 - Paths are `$.a.b` or `a.b`; arrays can't be indexed.
 - `=` against a string field compares text (`json:code=5` matches `"5"` and `5`); a boolean field matches only `true` or `false`.
