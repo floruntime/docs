@@ -326,7 +326,7 @@ start:
 | `random` | Each pass tries the executors in a shuffled order |
 | `health-weighted` | Prefer executors with higher health scores |
 
-A pass is one step's run through the plan's executors. The order is fixed when the pass starts and kept with the run, so a pass resumed after a restart or a leader change goes on in the same order. Where the next pass starts is the leader's own count: when another node becomes leader, round-robin starts again at the first executor and random draws a fresh order. Every strategy consults each executor's circuit breaker before trying it.
+A pass is one step's run through the plan's executors. The order is fixed when the pass starts and kept with the run, so a pass resumed after a restart or a leader change goes on in the same order. Where the next pass starts is the leader's own count, kept for its term: when another node becomes leader, or the workflow is created again, round-robin starts again at the first executor and random draws a fresh order. Every strategy consults each executor's circuit breaker before trying it.
 
 ### Circuit Breakers
 
@@ -349,6 +349,8 @@ closed ──(N consecutive failures)──▸ open ──(cooldown expires)─�
   └──────────(the probe succeeds)───────────────────────────────────┘
   open ◂──────────(the probe fails)─────────────────────────────────┘
 ```
+
+A breaker's state lasts one leader's term: a new leader, a restart, or creating the workflow again starts every breaker of that workflow closed. A retry is not made once the executor's own failure has opened its breaker.
 
 When a circuit breaker is **open**, under any selection strategy, the engine emits a `plan_breaker_skip` history event and moves to the next executor without attempting the action. This means a failing executor is taken out of rotation within seconds rather than consuming retries on every request.
 
