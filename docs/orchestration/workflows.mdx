@@ -341,20 +341,20 @@ breaker:
 States:
 - **Closed**: normal operation, calls go through.
 - **Open**: the executor is skipped, after `failure_threshold` consecutive failures.
-- **Half-open**: after `cooldown_ms`, every call goes through until a result arrives: a success closes the breaker, a failure opens it again.
+- **Half-open**: after `cooldown_ms`, one call goes through, a probe, while every other pass skips the executor as if it were open. The probe's success closes the breaker; its failure opens it again. A probe with no result after another `cooldown_ms` is given up, and the next call probes instead.
 
 ```
 closed ──(N consecutive failures)──▸ open ──(cooldown expires)──▸ half_open
   ▲                                                                 │
-  └──────────(a call succeeds)──────────────────────────────────────┘
-  open ◂──────────(a call fails)────────────────────────────────────┘
+  └──────────(the probe succeeds)───────────────────────────────────┘
+  open ◂──────────(the probe fails)─────────────────────────────────┘
 ```
 
 When a circuit breaker is **open**, under any selection strategy, the engine emits a `plan_breaker_skip` history event and moves to the next executor without attempting the action. This means a failing executor is taken out of rotation within seconds rather than consuming retries on every request.
 
 ### Health Tracking
 
-When `selection: health-weighted`, the engine tracks each executor's success rates since the server started and uses them to prefer healthier executors.
+The engine tracks each executor's success rates; `selection: health-weighted` uses them to prefer healthier executors, and every breaker counts its failures from them. A call's result counts once, when the step that takes it is logged.
 
 **Health Score** (0.0–1.0) is computed as:
 
@@ -372,7 +372,7 @@ At each plan invocation, executors are sorted by descending health score and tri
 
 #### Runtime Behavior
 
-Health state is **in-memory only** — it resets to defaults on server restart. This is intentional:
+Health state is **in-memory only**, kept by the shard's leader: it resets to defaults when another node becomes leader, when the server restarts, and when the workflow is created again (its plans may have changed). This is intentional:
 
 - **Fast convergence**: With a `failure_threshold` of 5, the engine rediscovers a broken executor within a handful of requests.
 - **No stale data**: An executor that was down before restart may have recovered. Starting from a clean slate avoids unnecessary penalization.
