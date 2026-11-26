@@ -258,6 +258,12 @@ sinks:
         sensor: sensor
 ```
 
+These are refused at submit, where one would leave a setting unread or mean two things:
+
+- `value_field` beside `fields:`: each of `fields:` names the point it writes and the record field it reads, so `value_field` would do nothing.
+- An empty `value_field`, which names no field.
+- `value_field`, other than `value`, in a job with both a stream source and a time-series source: it would name the field read from one source's records and the field written for the other's points. Split the job in two.
+
 #### How the sink reads a record
 
 A time-series sink reads each record as a JSON object, and every field it names is that object's own top-level field:
