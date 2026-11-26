@@ -163,8 +163,10 @@ sources:
 Each emitted record looks like:
 
 ```json
-{"measurement": "cpu_usage", "value": 72.5, "timestamp_ms": 1700000000000}
+{"measurement": "cpu_usage", "field": "value", "value": 72.5, "timestamp_ms": 1700000000000, "tags": {"host": "web-01"}}
 ```
+
+`tags` holds the point's full tag set, each value a string; a tag written without `=` has the empty string. A key the point gives twice keeps its first pair in the point's bytewise sorted tag string (`a=10,a=9` keeps `10`; a bare `a` sorts first and wins with an empty value), and a key that isn't UTF-8 is left out of `tags` (the point keeps it, and a time-series sink writes it). A tag value, field or measurement that isn't UTF-8 appears as an array of its byte values. A value outside 1e-6 to 2^53 is written with an exponent (`1e19`), so operators read it as a number; a `map`'s or `aggregate`'s numbers are written the same way. Operators can filter or route on any of these, and stream and queue sinks receive the record as shown.
 
 `tags` names one series exactly: all of its tags, not a subset.
 
@@ -246,7 +248,7 @@ Given the input `{"hostname":"web-01","cpu_percent":72.5}`, the sink writes a po
 
 #### `value_field` Shorthand
 
-If the JSON payload contains a single number to use as the value, use `value_field` instead of a full `fields:` map. With a stream source it names the record's field to read, written as the point's `value` field; a payload that is just a number is used as it is. With a time-series source it names the field each point is written under instead (see below), and `tags:` and `fields:` are refused at submit, since a point keeps its own value and tags:
+If the JSON payload contains a single number to use as the value, use `value_field` instead of a full `fields:` map. With a stream source it names the record's field to read, written as the point's `value` field; a payload that is just a number is used as it is. With a time-series source it names the field each point is written under instead (see below), and `tags:` and `fields:` are refused at submit, since a point keeps its own tags:
 
 ```yaml
 sinks:
@@ -347,6 +349,8 @@ Sinks without `match` receive all records from the main operator chain. A single
 
 Operators are the transformation steps between source and sink. They are declared in the `operators:` array and execute in order. Flo includes eight built-in operator types.
 
+A record an operator can't read is skipped and counted, never dropped unseen: `map`, `flatmap`, `aggregate`, a `filter` with a `json:` condition and a filtering `kv_lookup` skip a record that isn't JSON (or gives a key twice), and `aggregate` skips one whose field isn't a number. The job's status names the last: `1 record skipped, the last record 1795654803804-0: map: the record isn't JSON it can read`. `keyby` passes such a record on with its key unchanged, and an enriching `kv_lookup` passes it on as it is. Every part of a filter's `AND` or `OR` is asked, so a record that doesn't pass and that a `json:` part couldn't read is counted whichever part failed. Skips are logged as warnings, at most every 30 s per job. The count is the current leader's: it starts again with a new leader, and a batch whose writes weren't logged counts its skips again when it runs again.
+
 ### `filter` — Expression-Based Filter
 
 Drops records that don't match a condition. Supported expressions:
@@ -386,6 +390,7 @@ A JSON condition matches only a record whose value is JSON with the field presen
 **Writing a condition:**
 - Values are written without quotes: `json:status=done`, not `json:status="done"`.
 - No spaces around the operator: `json:amount>100`, not `json:amount > 100`. The operator is `=`, never `==`.
+- `=` and `!=` compare two whole numbers exactly, so an id past 2^53 matches only itself; ordering, and any number with a fraction, compares as a 64-bit float. A number past a float's range can't be compared: the record is counted as skipped.
 - `AND` and `OR` are uppercase with a space on each side; a lowercase `and`/`or` is part of the text being matched.
 - Paths are `$.a.b` or `a.b`; arrays can't be indexed.
 - `=` against a string field compares text (`json:code=5` matches `"5"` and `5`); a boolean field matches only `true` or `false`.
@@ -456,7 +461,7 @@ Each element of the array at `$.order.items` becomes a separate downstream recor
 
 ### `aggregate` — Declarative Aggregation
 
-Accumulates numeric values extracted from JSON records. Records are grouped by key — chain a `keyby` operator before `aggregate`; without one, every record falls in one group with the empty key. Totals are kept in memory and start again from zero when the server restarts or the job moves to another node.
+Accumulates numeric values extracted from JSON records. Records are grouped by key — chain a `keyby` operator before `aggregate`; without one, every record falls in one group with the empty key. Totals are kept in the leader's memory and start again from zero when the server restarts or another node becomes the job's leader. A batch whose writes weren't logged runs again in the same term with the totals kept, so a running aggregate can count those records twice.
 
 **Functions:** `sum`, `count`, `avg`, `min`, `max`
 
@@ -663,7 +668,9 @@ sinks:
       value_field: value
 ```
 
-When the source is a time-series measurement, the sink writes the source point's value and tags as they are, under the field named by `value_field`; operators can filter points but not change the value.
+When the source is a time-series measurement, each point is written under the field named by `value_field`, with the source point's tags and time. With no operators the value is the point's own. With operators, it is the `value` of each record they emit: a `map` or an `aggregate` changes what is written, and a filter that drops a record writes nothing. A record whose `value` isn't a finite number is dropped by the time-series sink, counted and named in the job's status (``3 records dropped by a sink, the last by ts sink 'derived_temp': the operators' record has no finite number `value` ``); other sinks still take it. Only `value` is read: a record's `tags`, `field`, `timestamp_ms` or `measurement` doesn't change the point written. An aggregate emits on the point that completes it (every point when running, every Nth with a count window), at that point's time and into that point's series. With no `keyby` it sums across every series the source reads; for a total per series, key by a tag first (a `keyby` with `key_expression: "$.tags.host"`). Several records emitted for one point all land in that point's series at its time. A `kv_lookup` enrich with `enrich_field: value` leaves the point's own `value` first, which is the one read.
+
+Earlier releases wrote the source point's value whatever the operators emitted, so a job with a `map` or `aggregate` here now writes their output instead, and drops records whose `value` isn't a number.
 
 ### KV-Enriched Pipeline
 
