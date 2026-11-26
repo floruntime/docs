@@ -20,8 +20,8 @@ Client ──start──▸ validate ──success──▸ charge ──success
 | Concern | Without Flo Workflows | With Flo Workflows |
 |---------|----------------------|-------------------|
 | **State** | Your app manages a state machine in an external DB, guarding against crashes | Flo keeps the run's state and logs each run's start and its final result. See [Restarts and failover](#restarts-and-failover). |
-| **Retries** | Hand-written retry loops with ad-hoc backoff | Declarative `retry:` block with exponential, linear, constant, or jittered backoff |
-| **Routing** | Manual circuit breaking, health scoring, fallback chains | Inline **plans** with health-weighted selection, circuit breakers, and fallback values |
+| **Retries** | Hand-written retry loops | Declarative `retry:` block on any step or executor; `poll:` with backoff for `pending` outcomes |
+| **Routing** | Manual circuit breaking, health scoring, failover chains | Inline **plans** with health-weighted selection and circuit breakers |
 | **Human-in-the-loop** | Polling, webhooks, custom queues | `wait_for_signal` with typed signals, timeouts, and approval flows |
 | **Scheduling** | External cron daemon | Embedded `schedule:` block with 5-field cron or interval |
 | **Event-driven** | Wiring consumer groups to trigger logic | `trigger:` block listens on a stream and starts runs per event |
@@ -49,9 +49,6 @@ steps:
     run: "@actions/charge-payment"
     retry:
       max_attempts: 3
-      backoff: exponential
-      initial_delay_ms: 1000
-      max_delay_ms: 30000
     transitions:
       success: ship
       failure: flo.Failed
@@ -125,9 +122,8 @@ Executes a target and transitions based on the outcome:
 charge:
   run: "@actions/charge-payment"      # target
   input_mapping: '{"amount": "$.input.amount"}'  # optional JSONPath transform
-  retry:                               # optional retry policy
+  retry:                               # optional: retries, at once
     max_attempts: 3
-    backoff: exponential
   poll:                                # optional pending-outcome polling
     max_attempts: 10
     backoff: exponential
@@ -264,85 +260,52 @@ Any run step can have a `retry:` block:
 start:
   run: "@actions/flaky-service"
   retry:
-    max_attempts: 5                   # total attempts including first
-    backoff: exponential_jitter       # constant | linear | exponential | exponential_jitter
-    initial_delay_ms: 500             # delay before first retry
-    max_delay_ms: 30000               # cap on backoff delay
-    within_ms: 120000                 # total time budget (optional)
+    max_attempts: 5                   # retries after a failed run: up to 6 runs
   transitions:
     success: flo.Completed
     failure: flo.Failed
 ```
 
-When the step outcome is `failure` or `execution_failure` and retries remain, the engine re-executes the same step immediately (the retry counter increments). Retries reset when the step transitions to a different step.
+When the step outcome is `failure` or `execution_failure` and retries remain, the engine runs the same step again at once, with no delay, and the retry counter goes up. Retries reset when the step transitions to a different step. `max_attempts` counts retries, so a step runs at most `max_attempts + 1` times; it defaults to 3 and is at most 100. Each retry is a fresh action run, which may itself retry by its action's `--max-attempts` (attempts, the first included, at most 1000).
 
-### Backoff Strategies
+Delays between retries aren't supported yet: `backoff`, `initial_delay_ms`, `max_delay_ms` and `within_ms` are refused under `retry:` by name. A step's [`poll:`](#polling) keeps its delays.
 
-| Strategy | Delay formula |
-|----------|--------------|
-| `constant` | `initial_delay_ms` always |
-| `linear` | `initial_delay_ms × (attempt + 1)` |
-| `exponential` | `initial_delay_ms × 2^attempt`, capped at `max_delay_ms` |
-| `exponential_jitter` | Exponential + up to 25% random jitter |
+What bounds each kind of repeat:
+
+| Repeat | Counted by | Bound | Spacing |
+|--------|-----------|-------|---------|
+| A step's or executor's `retry` | `max_attempts`: retries after the first run | at most 100 | none: at once |
+| A step's `poll` on `pending` | `max_attempts`: polls after the first run | its value (default 10) | its backoff (`initial_delay_ms`, `base_delay_ms`, `max_delay_ms`) |
+| A call to an action that isn't registered | — | `[workflows] missing_action_wait_ms` (default 10 min) | at least 1 s apart |
+| An action run's own retries | `--max-attempts`: attempts, the first included | at most 1000 | when a worker takes it again |
 
 ---
 
 ## Inline Plans
 
-Plans let you define **multiple executors** for the same logical step — a failover chain with smart routing. Plans are defined inline in the workflow YAML under the `plans:` key.
+Plans let you define **multiple executors** for the same logical step: a failover chain. Plans are defined inline in the workflow YAML under the `plans:` key.
 
 ```yaml
 plans:
   payment:
     selection: health-weighted
-    
+
     executors:
       - name: stripe-primary
         run: "@actions/charge-stripe"
-        priority: 100
         retry:
           max_attempts: 3
-          backoff: exponential
-          initial_delay_ms: 1000
-          max_delay_ms: 30000
         breaker:
           failure_threshold: 5
-          cooldown_ms: 30000
-          half_open_max_calls: 3
-        rate_limit:
-          max_per_second: 100
-          max_per_minute: 5000
-        tracking:
-          mode: async
-          timeout_ms: 300000
+          cooldown_ms: 60000
 
       - name: adyen-fallback
         run: "@actions/charge-adyen"
-        priority: 50
         retry:
           max_attempts: 2
-          backoff: exponential_jitter
-          initial_delay_ms: 500
-          max_delay_ms: 10000
-
-    health:
-      window_ms: 300000
-      decay: 0.9
-      min_samples: 10
-
-    cache:
-      ttl_ms: 3600000
-      key: "charge:{input.customer_id}:{input.idempotency_key}"
-      invalidate_on: ["payment.refunded", "customer.deleted"]
-
-    fallback:
-      value: '{"status": "declined", "reason": "all_providers_unavailable"}'
-      condition: exhausted
-
-    errors:
-      retryable: ["timeout", "rate_limited", "temporary_failure"]
-      fatal: ["invalid_card", "fraud_detected", "insufficient_funds"]
 ```
+
+A plan takes `selection` and `executors`; an executor takes `name`, `run`, `retry` and `breaker`. Executors are tried in the order written: there is no `priority`. A plan's `health`, `cache`, `fallback` and `errors`, and an executor's `tracking`, `rate_limit` and `priority`, are refused as unknown keys: they were never applied.
 
 Reference the plan from a step:
 
@@ -358,10 +321,10 @@ start:
 
 | Strategy | Behavior |
 |----------|----------|
-| `static-order` | Always try executors in priority order (highest first) |
+| `static-order` | Always try executors in the order written |
 | `round-robin` | Rotate the starting executor across requests |
 | `random` | Random selection for even load distribution |
-| `health-weighted` | Prefer executors with higher health scores; requires `health:` config |
+| `health-weighted` | Prefer executors with higher health scores |
 
 ### Circuit Breakers
 
@@ -369,64 +332,35 @@ Each executor can have an independent circuit breaker:
 
 ```yaml
 breaker:
-  failure_threshold: 5       # consecutive failures before opening
-  cooldown_ms: 30000         # how long to stay open before half-open
-  half_open_max_calls: 3     # probe requests allowed in half-open state
+  failure_threshold: 5       # consecutive failures before opening (default 5)
+  cooldown_ms: 60000         # how long to stay open before half-open (default 60000)
 ```
 
 States:
-- **Closed** — Normal operation, requests flow through
-- **Open** — Executor is skipped (after `failure_threshold` consecutive failures)
-- **Half-open** — After `cooldown_ms`, allows `half_open_max_calls` probe requests. If probes succeed → closed. If probes fail → open again.
+- **Closed**: normal operation, calls go through.
+- **Open**: the executor is skipped, after `failure_threshold` consecutive failures.
+- **Half-open**: after `cooldown_ms`, every call goes through until a result arrives: a success closes the breaker, a failure opens it again.
 
 ```
 closed ──(N consecutive failures)──▸ open ──(cooldown expires)──▸ half_open
   ▲                                                                 │
-  └──────────(probe succeeds)───────────────────────────────────────┘
-  open ◂──────────(probe fails)─────────────────────────────────────┘
+  └──────────(a call succeeds)──────────────────────────────────────┘
+  open ◂──────────(a call fails)────────────────────────────────────┘
 ```
 
 When a circuit breaker is **open**, the engine emits a `plan_breaker_skip` history event and moves to the next executor without attempting the action. This means a failing executor is taken out of rotation within seconds rather than consuming retries on every request.
 
-### Rate Limiting
-
-```yaml
-rate_limit:
-  max_per_second: 100
-  max_per_minute: 5000
-  max_per_hour: 50000       # all three are optional
-```
-
-### Async Tracking
-
-Some executors (e.g., user-hosted HTTP actions) report their outcome asynchronously via webhook:
-
-```yaml
-tracking:
-  mode: async               # sync (default) | async
-  timeout_ms: 300000        # timeout for async outcome
-```
-
-When `mode: async`, the workflow parks in `waiting` until the action result arrives or the timeout expires.
-
 ### Health Tracking
 
-When `selection: health-weighted`, the engine tracks per-executor success rates and uses them to prefer healthier executors:
-
-```yaml
-health:
-  window_ms: 300000         # rolling window for health calculation
-  decay: 0.9                # exponential decay factor (0–1]
-  min_samples: 10           # minimum samples before health-weighted kicks in
-```
-
-Until `min_samples` is reached, the engine falls back to priority-based ordering.
+When `selection: health-weighted`, the engine tracks each executor's success rates since the server started and uses them to prefer healthier executors.
 
 **Health Score** (0.0–1.0) is computed as:
 
 ```
 score = (api_success_rate × 0.7) + (business_success_rate × 0.3)
 ```
+
+Nothing records business outcomes yet, so `business_success_rate` stays at 1.0 and the score moves only with the executor's call success rate.
 
 With circuit breaker penalties:
 - **Open breaker** → score × 0.1
@@ -451,44 +385,6 @@ Health metrics are tracked per executor and updated on every action completion (
 | `plan_executor_retry` | Retrying the same executor |
 | `plan_executor_exhausted` | Executor's retries exhausted, moving to next |
 | `plan_breaker_skip` | Skipped executor because circuit breaker is open |
-
-### Result Caching
-
-```yaml
-cache:
-  ttl_ms: 3600000           # cache TTL
-  key: "charge:{input.customer_id}:{input.idempotency_key}"
-  invalidate_on:
-    - payment.refunded
-    - customer.deleted
-```
-
-### Fallback Values
-
-When all executors fail, the plan can return a static fallback:
-
-```yaml
-fallback:
-  value: '{"status": "declined", "reason": "all_providers_unavailable"}'
-  condition: exhausted       # exhausted (all executors failed) | any_error
-```
-
-### Error Classification
-
-Classify error codes to control retry behavior:
-
-```yaml
-errors:
-  retryable:
-    - timeout
-    - rate_limited
-    - temporary_failure
-  fatal:
-    - invalid_card
-    - fraud_detected
-```
-
-Retryable errors trigger the executor's retry policy. Fatal errors skip retries and immediately try the next executor (or return failure).
 
 ---
 
@@ -952,7 +848,7 @@ Definitions and finished runs survive a restart. A run in progress doesn't resum
 
 ## Complete Example: Payment Processing
 
-This example demonstrates inline plans, health-weighted routing, circuit breakers, polling, and caching:
+This example demonstrates inline plans, health-weighted routing, circuit breakers and polling:
 
 ```yaml
 kind: Workflow
@@ -966,42 +862,15 @@ plans:
     executors:
       - name: stripe-primary
         run: "@actions/charge-stripe"
-        priority: 100
         retry:
           max_attempts: 3
-          backoff: exponential
-          initial_delay_ms: 1000
-          max_delay_ms: 30000
-          within_ms: 120000
         breaker:
           failure_threshold: 5
-          cooldown_ms: 30000
-          half_open_max_calls: 3
-        rate_limit:
-          max_per_second: 100
-        tracking:
-          mode: async
-          timeout_ms: 300000
+          cooldown_ms: 60000
       - name: adyen-fallback
         run: "@actions/charge-adyen"
-        priority: 50
         retry:
           max_attempts: 2
-          backoff: exponential_jitter
-    health:
-      window_ms: 300000
-      decay: 0.9
-      min_samples: 10
-    cache:
-      ttl_ms: 3600000
-      key: "charge:{input.customer_id}:{input.idempotency_key}"
-      invalidate_on: ["payment.refunded"]
-    fallback:
-      value: '{"status": "declined", "reason": "all_providers_unavailable"}'
-      condition: exhausted
-    errors:
-      retryable: ["timeout", "rate_limited"]
-      fatal: ["invalid_card", "fraud_detected"]
 
 start:
   run: "@plan/charge-payment"
@@ -1062,8 +931,6 @@ steps:
     run: "@actions/charge-payment"
     retry:
       max_attempts: 3
-      backoff: exponential
-      initial_delay_ms: 1000
     transitions:
       success: check_approval
       failure: PaymentFailed
