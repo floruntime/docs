@@ -322,9 +322,11 @@ start:
 | Strategy | Behavior |
 |----------|----------|
 | `static-order` | Always try executors in the order written |
-| `round-robin` | Rotate the starting executor across requests |
-| `random` | Random selection for even load distribution |
+| `round-robin` | Each pass starts one executor further along the list, then goes on in order, wrapping round |
+| `random` | Each pass tries the executors in a shuffled order |
 | `health-weighted` | Prefer executors with higher health scores |
+
+A pass is one step's run through the plan's executors. The order is fixed when the pass starts and kept with the run, so a pass resumed after a restart or a leader change goes on in the same order. Where the next pass starts is the leader's own count: when another node becomes leader, round-robin starts again at the first executor and random draws a fresh order. Every strategy consults each executor's circuit breaker before trying it.
 
 ### Circuit Breakers
 
@@ -348,7 +350,7 @@ closed ──(N consecutive failures)──▸ open ──(cooldown expires)─�
   open ◂──────────(a call fails)────────────────────────────────────┘
 ```
 
-When a circuit breaker is **open**, the engine emits a `plan_breaker_skip` history event and moves to the next executor without attempting the action. This means a failing executor is taken out of rotation within seconds rather than consuming retries on every request.
+When a circuit breaker is **open**, under any selection strategy, the engine emits a `plan_breaker_skip` history event and moves to the next executor without attempting the action. This means a failing executor is taken out of rotation within seconds rather than consuming retries on every request.
 
 ### Health Tracking
 
