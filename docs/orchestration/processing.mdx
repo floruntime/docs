@@ -163,8 +163,10 @@ sources:
 Each emitted record looks like:
 
 ```json
-{"measurement": "cpu_usage", "value": 72.5, "timestamp_ms": 1700000000000}
+{"measurement": "cpu_usage", "field": "value", "value": 72.5, "timestamp_ms": 1700000000000, "tags": {"host": "web-01"}}
 ```
+
+`tags` holds the point's full tag set, each value a string; a tag written without `=` has the empty string. Operators can filter or route on any of these, and stream and queue sinks receive the record as shown.
 
 `tags` names one series exactly: all of its tags, not a subset.
 
@@ -246,7 +248,7 @@ Given the input `{"hostname":"web-01","cpu_percent":72.5}`, the sink writes a po
 
 #### `value_field` Shorthand
 
-If the JSON payload contains a single number to use as the value, use `value_field` instead of a full `fields:` map. With a stream source it names the record's field to read, written as the point's `value` field; a payload that is just a number is used as it is. With a time-series source it names the field each point is written under instead (see below), and `tags:` and `fields:` are refused at submit, since a point keeps its own value and tags:
+If the JSON payload contains a single number to use as the value, use `value_field` instead of a full `fields:` map. With a stream source it names the record's field to read, written as the point's `value` field; a payload that is just a number is used as it is. With a time-series source it names the field each point is written under instead (see below), and `tags:` and `fields:` are refused at submit, since a point keeps its own tags:
 
 ```yaml
 sinks:
@@ -456,7 +458,7 @@ Each element of the array at `$.order.items` becomes a separate downstream recor
 
 ### `aggregate` — Declarative Aggregation
 
-Accumulates numeric values extracted from JSON records. Records are grouped by key — chain a `keyby` operator before `aggregate`; without one, every record falls in one group with the empty key. Totals are kept in memory and start again from zero when the server restarts or the job moves to another node.
+Accumulates numeric values extracted from JSON records. Records are grouped by key — chain a `keyby` operator before `aggregate`; without one, every record falls in one group with the empty key. Totals are kept in the leader's memory and start again from zero when the server restarts or another node becomes the job's leader.
 
 **Functions:** `sum`, `count`, `avg`, `min`, `max`
 
@@ -663,7 +665,9 @@ sinks:
       value_field: value
 ```
 
-When the source is a time-series measurement, the sink writes the source point's value and tags as they are, under the field named by `value_field`; operators can filter points but not change the value.
+When the source is a time-series measurement, each point is written under the field named by `value_field`, with the source point's tags and time. With no operators the value is the point's own. With operators, it is the `value` of each record they emit: a `map` or an `aggregate` changes what is written, and a filter that drops a record writes nothing. A record whose `value` isn't a finite number is dropped by the time-series sink, counted and named in the job's status (``3 records dropped by a sink, the last by ts sink 'derived_temp': the operators' record has no finite number `value` ``); other sinks still take it. Only `value` is read: a record's `tags`, `field`, `timestamp_ms` or `measurement` doesn't change the point written. An aggregate emits on the point that completes it (every point when running, every Nth with a count window), at that point's time.
+
+Earlier releases wrote the source point's value whatever the operators emitted, so a job with a `map` or `aggregate` here now writes their output instead, and drops records whose `value` isn't a number.
 
 ### KV-Enriched Pipeline
 
