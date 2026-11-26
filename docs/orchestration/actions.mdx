@@ -878,8 +878,7 @@ steps:
   charge:
     run: "@actions/charge-payment"
     retry:
-      max_attempts: 3
-      backoff: exponential
+      max_attempts: 3               # the step's retries, at once
     transitions:
       success: ship
       failure: flo.Failed
