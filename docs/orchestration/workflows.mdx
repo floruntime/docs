@@ -868,6 +868,51 @@ Two metrics show a shard held at its share: `flo_shard_memory_refusals_total` co
 
 ---
 
+## Run-History Quota
+
+Each namespace has a run-history quota: the most history its workflow and action runs may hold, over every shard. It is 10 GiB until you set one of its own. Each shard holds an even part of it, rounded up: on a 4-shard node, 2.5 GiB each. History is kept until you delete it, so the quota is what stops a namespace from filling a node's disk with it.
+
+Set it on a node, where the command goes to the admin socket and then to the leader:
+
+```bash
+flo namespace alter myapp --history-quota 20GiB    # its own
+flo namespace alter myapp --history-quota none     # no quota
+flo namespace alter myapp --history-quota default  # back to the server's
+```
+
+A quota is at least one run's reserve on every shard (see below), and a smaller one is refused.
+
+### At the quota
+
+Each live run reserves, when it starts, the most history it can still add once its namespace reaches its part: one step in flight, its end, and one signal that wakes it. On each shard, Flo refuses what would start more history than the part holds, and holds what already started:
+
+- **Starting a run**, workflow or action, is refused `limit`/`history_quota` (the CLI exits 3) when the namespace's history there, with every live run's reserve and its own, would pass the part. The message gives the shard's figures, as history+reserves of part: for example `limit: ns 7 history 2684354560+81920 of 2684354560 on shard 2`. A run whose own reserve is larger than the part is told so: deleting runs won't admit it, and a larger quota will.
+- **A schedule or a trigger** holds its starts, as at the memory share. Each held one logs a warning once a hold, from when it's first held until a start goes through, and `flo_workflow_duties_quota_held` counts them.
+- **A child workflow, or an action a step calls**, isn't started. The parent's step waits and asks again (after 5 s, doubling up to 10 minutes), with one `call_held_over_quota` event in its history however long it waits.
+- **A signal** is refused once the history has reached the part, unless it wakes a run waiting for its type. That first waking signal is taken. While the run's next step is held, it isn't waiting any more, so further signals to it are refused like any other.
+- **Runs already started** stop taking steps once the namespace's history on that shard reaches its part. Their steps wait, without failing, and go on once runs there are deleted or the quota is raised.
+
+What a held run still writes (a step already in flight, its end, a waking signal) comes out of its reserve. So a namespace's history can pass its part by up to its live runs' reserves, and no further.
+
+### Freeing room
+
+Delete ended runs: `flo workflow run-delete <run_id>` and `flo action run-delete <run_id>`. A live workflow run is refused `run_live`, so cancel it first. Ending a run frees its reserve but not its history, so cancelling alone frees little. Raising the quota frees room as soon as each shard takes its new part, within moments.
+
+`flo namespace info <name>` shows the quota and, per shard:
+
+| Column | |
+|--------|--|
+| `PART` | the shard's part of the quota, `none`, or `not bound` before the shard has it |
+| `USAGE` | the history stored there |
+| `IN FLIGHT` | that, with what's sent and not yet stored: what holds steps |
+| `RESERVED` | what its live runs may still add |
+| `HELD` | runs whose steps are held there; `-` from a node that doesn't lead the shard |
+| `ORPHANS` | deleted runs whose history couldn't be dropped, still counted in `USAGE` |
+
+`flo_shard_workflow_quota_held_runs` counts the runs held on each shard, and `flo_shard_quota_refusals_total` what each shard refused at a quota. The leader logs a line when a namespace's steps start being held at its quota on a shard, and when they go on, at most once a minute per namespace.
+
+---
+
 ## Validation
 
 Workflow definitions are validated on create. The validator checks:
